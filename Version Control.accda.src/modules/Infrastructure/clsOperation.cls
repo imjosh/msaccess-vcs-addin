@@ -28,28 +28,8 @@ Private Const HEARTBEAT_TIMEOUT_SECONDS As Integer = 60 * 10    ' (10 minutes)
 ' Periodically update this to Now() to manage timeouts.
 Public Heartbeat As Date
 Public OperationType As eOperationType
-Public ErrorLevel As eErrorLevel
 Public Result As eOperationResult
 Public Source As eOperationSource     ' Default: eosUserInterface (0)
-
-' Controls UI prompts during the operation. eimNormal (0) shows MsgBox2
-' dialogs; eimSilent (1) routes them to the log and returns the supplied
-' default. Set BEFORE calling Begin (or any time during the operation)
-' for unattended / automated callers (e.g. the regression test harness).
-' Sticky across operations -- like Source, callers that need a non-default
-' value are responsible for setting it; callers that need to restore the
-' prior value are responsible for caching and restoring it themselves.
-' Noninteractive scopes are the exception: PushInteractionScope saves the
-' prior mode and Finish restores it, including after failure or cancellation.
-Public InteractionMode As eInteractionMode
-
-' Policy used while InteractionMode is eimNonInteractive.
-Public DecisionPolicy As eDecisionPolicy
-
-' Set when a required prompt was not covered by DecisionPolicy.
-' Finish reports eorDecisionRequired and does not report success.
-Public DecisionBlocked As Boolean
-
 
 ' Use a private type to manage local variables
 Private Type udtThis
@@ -66,15 +46,11 @@ Private Type udtThis
 
     ' Other variables we are caching
     ErrorTrapping As Integer
-
-    ' JSON object list (no surrounding brackets) of prompts seen in this scope.
-    Journal As String
 End Type
 Private this As udtThis
 
-' Saved interaction scopes. Each item is mode, policy, blocked, pop-on-finish, journal
-' separated by vbVerticalTab. Not stored in the UDT because a Collection cannot live there.
-Private m_ScopeStack As Collection
+' Owns interaction mode, decision policy, blocked flag, decision journal and error level.
+Private m_Scope As clsInteractionScope
 
 
 '---------------------------------------------------------------------------------------
@@ -189,15 +165,7 @@ Public Function Finish(Optional intResult As eOperationResult)
             Dim dExtra As Dictionary
             Set dExtra = New Dictionary
             dExtra.Add "log_path", Log.LogFilePath
-            If Len(this.Journal) > 0 Then
-                On Error Resume Next
-                dExtra.Add "decisions", ParseJson(Me.DecisionsJson())
-                If Err.Number <> 0 Then
-                    Err.Clear
-                    dExtra.Add "decisions", Me.DecisionsJson()
-                End If
-                On Error GoTo 0
-            End If
+            If Scope.DecisionCount > 0 Then dExtra.Add "decisions", Scope.Decisions
 
             Select Case Me.Result
                 Case eorSuccess
@@ -218,8 +186,8 @@ Public Function Finish(Optional intResult As eOperationResult)
             End Select
         End If
 
-        ' Restore noninteractive mode after the callback has read the journal.
-        PopOwnedScopes
+        ' Restore interaction state after the callback has read the journal.
+        Scope.ReleaseOperationScopes
         modObjects.ReleaseObjects
         ' Only restore error trapping if we were in a running state.
         If blnWasRunning Then RestoreUserErrorTrapping
@@ -433,89 +401,142 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : Scope
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : The interaction scope object this operation delegates to.
+'---------------------------------------------------------------------------------------
+'
+Private Property Get Scope() As clsInteractionScope
+    If m_Scope Is Nothing Then Set m_Scope = New clsInteractionScope
+    Set Scope = m_Scope
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : InteractionMode
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Controls UI prompts during the operation. eimNormal (0) shows MsgBox2
+'           : dialogs; eimSilent (1) routes them to the log and returns the supplied
+'           : default; eimNonInteractive (2) answers them from DecisionPolicy.
+'           : Outside a noninteractive scope the mode is sticky, like Source; callers
+'           : that need to restore the prior value cache and restore it themselves.
+'           : Inside a noninteractive scope, a request for a weaker mode is ignored.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get InteractionMode() As eInteractionMode
+    InteractionMode = Scope.InteractionMode
+End Property
+
+Public Property Let InteractionMode(ByVal intMode As eInteractionMode)
+    Scope.InteractionMode = intMode
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DecisionPolicy
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Policy used while InteractionMode is eimNonInteractive.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get DecisionPolicy() As eDecisionPolicy
+    DecisionPolicy = Scope.DecisionPolicy
+End Property
+
+Public Property Let DecisionPolicy(ByVal intPolicy As eDecisionPolicy)
+    Scope.DecisionPolicy = intPolicy
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DecisionBlocked
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Set when a required prompt was not covered by DecisionPolicy.
+'           : Finish reports eorDecisionRequired and does not report success.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get DecisionBlocked() As Boolean
+    DecisionBlocked = Scope.Blocked
+End Property
+
+Public Property Let DecisionBlocked(ByVal blnBlocked As Boolean)
+    Scope.Blocked = blnBlocked
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ErrorLevel
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Highest error severity seen by this operation. Saved and restored by
+'           : interaction scopes.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get ErrorLevel() As eErrorLevel
+    ErrorLevel = Scope.ErrorLevel
+End Property
+
+Public Property Let ErrorLevel(ByVal intLevel As eErrorLevel)
+    Scope.ErrorLevel = intLevel
+End Property
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : PushInteractionScope
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Save the current interaction mode and apply a scoped replacement.
-'           : blnPopOnFinish restores the scope from Finish, including failure
-'           : and cancellation. The journal is cleared for the new scope.
+' Purpose   : Open an interaction scope and return its owner token. blnPopOnFinish
+'           : makes it operation-owned: Finish closes it, including after failure
+'           : and cancellation. Otherwise only CloseInteractionScope closes it.
 '---------------------------------------------------------------------------------------
 '
-Public Sub PushInteractionScope(ByVal intMode As eInteractionMode, _
+Public Function PushInteractionScope(ByVal intMode As eInteractionMode, _
     ByVal intPolicy As eDecisionPolicy, _
-    Optional ByVal blnPopOnFinish As Boolean = True)
-
-    EnsureScopeStack
-    m_ScopeStack.Add CStr(Me.InteractionMode) & vbVerticalTab & _
-        CStr(Me.DecisionPolicy) & vbVerticalTab & _
-        IIf(Me.DecisionBlocked, "1", "0") & vbVerticalTab & _
-        IIf(blnPopOnFinish, "1", "0") & vbVerticalTab & _
-        this.Journal
-    Me.InteractionMode = intMode
-    Me.DecisionPolicy = intPolicy
-    Me.DecisionBlocked = False
-    this.Journal = vbNullString
-
-End Sub
+    Optional ByVal blnPopOnFinish As Boolean = True) As Long
+    PushInteractionScope = Scope.OpenScope(intMode, intPolicy, blnPopOnFinish)
+End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : PopInteractionScope
+' Procedure : CloseInteractionScope
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Restore the interaction mode saved by the matching push.
+' Purpose   : Close the scope for this token, restoring the state saved when it
+'           : opened. An unknown or already closed token does nothing.
 '---------------------------------------------------------------------------------------
 '
-Public Sub PopInteractionScope()
-
-    Dim strItem As String
-    Dim varParts() As String
-    Dim strJournal As String
-    Dim lngIdx As Long
-
-    If m_ScopeStack Is Nothing Then Exit Sub
-    If m_ScopeStack.Count = 0 Then Exit Sub
-
-    strItem = m_ScopeStack(m_ScopeStack.Count)
-    m_ScopeStack.Remove m_ScopeStack.Count
-    varParts = Split(strItem, vbVerticalTab)
-    If UBound(varParts) < 3 Then Exit Sub
-
-    Me.InteractionMode = CLng(varParts(0))
-    Me.DecisionPolicy = CLng(varParts(1))
-    Me.DecisionBlocked = (varParts(2) = "1")
-    strJournal = vbNullString
-    If UBound(varParts) >= 4 Then strJournal = varParts(4)
-    For lngIdx = 5 To UBound(varParts)
-        strJournal = strJournal & vbVerticalTab & varParts(lngIdx)
-    Next lngIdx
-    this.Journal = strJournal
-
+Public Sub CloseInteractionScope(ByVal lngToken As Long)
+    Scope.CloseScope lngToken
 End Sub
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : PopOwnedScopes
+' Procedure : ResolvePrompt
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Pop every scope that asked to be restored when the operation finishes.
+' Purpose   : Answer a message box from the current policy and record the outcome.
 '---------------------------------------------------------------------------------------
 '
-Public Sub PopOwnedScopes()
+Public Function ResolvePrompt(ByVal intButtons As Long, ByVal strTitle As String, _
+    ByVal strMessage As String, ByRef strResolution As String) As VbMsgBoxResult
+    ResolvePrompt = Scope.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
+    If Scope.Blocked Then Me.Result = eorDecisionRequired
+End Function
 
-    Dim strTop As String
-    Dim varParts() As String
 
-    Do While Not m_ScopeStack Is Nothing
-        If m_ScopeStack.Count = 0 Then Exit Do
-        strTop = m_ScopeStack(m_ScopeStack.Count)
-        varParts = Split(strTop, vbVerticalTab)
-        If UBound(varParts) < 3 Then Exit Do
-        If varParts(3) <> "1" Then Exit Do
-        PopInteractionScope
-    Loop
-
-End Sub
+'---------------------------------------------------------------------------------------
+' Procedure : ResolveConflictAction
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Resolution for one conflict under the current policy.
+'---------------------------------------------------------------------------------------
+'
+Public Function ResolveConflictAction(ByVal intRequested As eResolveConflict) As eResolveConflict
+    ResolveConflictAction = Scope.ResolveConflictAction(intRequested)
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -530,24 +551,8 @@ Public Sub RecordDecision(ByVal strKind As String, ByVal strTitle As String, _
     ByVal strMessage As String, ByVal strResolution As String, _
     Optional ByVal strDetail As String)
 
-    Dim strItem As String
-
-    strItem = "{""kind"":""" & JsonEscape(strKind) & _
-        """,""title"":""" & JsonEscape(strTitle) & _
-        """,""message"":""" & JsonEscape(strMessage) & _
-        """,""resolution"":""" & JsonEscape(strResolution) & _
-        """,""detail"":""" & JsonEscape(strDetail) & """}"
-    If Len(this.Journal) = 0 Then
-        this.Journal = strItem
-    Else
-        this.Journal = this.Journal & "," & strItem
-    End If
-
-    If StrComp(strKind, "decision_required", vbTextCompare) = 0 Then
-        Me.DecisionBlocked = True
-        If Me.ErrorLevel < eelCritical Then Me.ErrorLevel = eelCritical
-        Me.Result = eorDecisionRequired
-    End If
+    Scope.RecordDecision strKind, strTitle, strMessage, strResolution, strDetail
+    If Scope.Blocked Then Me.Result = eorDecisionRequired
 
 End Sub
 
@@ -560,20 +565,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function DecisionsJson() As String
-    DecisionsJson = "[" & this.Journal & "]"
+    DecisionsJson = Scope.DecisionsJson()
 End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : EnsureScopeStack
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Create the scope stack on first use.
-'---------------------------------------------------------------------------------------
-'
-Private Sub EnsureScopeStack()
-    If m_ScopeStack Is Nothing Then Set m_ScopeStack = New Collection
-End Sub
 
 
 '---------------------------------------------------------------------------------------

@@ -49,20 +49,21 @@ End Function
 ' Procedure : BeginNonInteractive
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Push a noninteractive scope for one operation. Finish pops scopes
-'           : marked pop-on-finish. Call PopInteractionScope if the operation
-'           : never starts.
+' Purpose   : Open a noninteractive scope for one operation. Finish closes it. If the
+'           : operation never starts, pass the returned token to
+'           : Operation.CloseInteractionScope.
 '---------------------------------------------------------------------------------------
 '
-Public Function BeginNonInteractive(ByVal strPolicy As String) As Boolean
+Public Function BeginNonInteractive(ByVal strPolicy As String, Optional ByRef lngToken As Long) As Boolean
 
     Dim intPolicy As eDecisionPolicy
 
+    lngToken = 0
     If Not ParseDecisionPolicy(strPolicy, intPolicy) Then
         BeginNonInteractive = False
         Exit Function
     End If
-    Operation.PushInteractionScope eimNonInteractive, intPolicy, True
+    lngToken = Operation.PushInteractionScope(eimNonInteractive, intPolicy, True)
     BeginNonInteractive = True
 
 End Function
@@ -131,15 +132,22 @@ End Sub
 ' Author    : Josh
 ' Date      : 09/29/2026
 ' Purpose   : Map a decision policy to a conflict resolution.
+'           : intRequested is the action the conflict itself asks for.
+'           : prefer_source applies it, falling back to overwrite when none is set.
 '           : ercNone means the policy does not resolve the conflict (block).
 '           : prefer_database, skip, and decline keep the database object.
 '---------------------------------------------------------------------------------------
 '
-Public Function ConflictActionForPolicy(ByVal intPolicy As eDecisionPolicy) As eResolveConflict
+Public Function ConflictActionForPolicy(ByVal intPolicy As eDecisionPolicy, _
+    Optional ByVal intRequested As eResolveConflict = ercNone) As eResolveConflict
 
     Select Case intPolicy
         Case edpPreferSource
-            ConflictActionForPolicy = ercOverwrite
+            If intRequested = ercNone Then
+                ConflictActionForPolicy = ercOverwrite
+            Else
+                ConflictActionForPolicy = intRequested
+            End If
         Case edpPreferDatabase, edpSkip, edpDecline
             ConflictActionForPolicy = ercSkip
         Case Else

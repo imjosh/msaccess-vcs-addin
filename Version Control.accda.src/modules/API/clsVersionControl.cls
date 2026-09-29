@@ -18,6 +18,9 @@ Option Compare Database
 Option Explicit
 '@Folder("API")
 
+' Owner token of the scope opened by SetOperationPolicy. Zero when none is open.
+Private m_PolicyScope As Long
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : Show
@@ -163,15 +166,14 @@ End Sub
 '
 Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
 
-    Dim blnPushed As Boolean
+    Dim lngScope As Long
     Dim intBefore As eOperationState
 
     ' An explicit policy selects noninteractive mode for this merge only.
     ' Finish restores the previous mode. An empty policy keeps the interactive
     ' (or previously configured) behavior.
     If Len(strDecisionPolicy) > 0 Then
-        If Not BeginNonInteractive(strDecisionPolicy) Then Exit Sub
-        blnPushed = True
+        If Not BeginNonInteractive(strDecisionPolicy, lngScope) Then Exit Sub
     End If
     intBefore = Operation.Status
 
@@ -191,8 +193,8 @@ Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
 
     ' The merge continues on a timer after this returns. Drop the scope now
     ' only when that timer was not started.
-    If blnPushed Then
-        If Operation.Status = intBefore Then Operation.PopInteractionScope
+    If lngScope <> 0 Then
+        If Operation.Status = intBefore Then Operation.CloseInteractionScope lngScope
     End If
 
 End Sub
@@ -2066,7 +2068,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim strFilter As String
     Dim eimPriorMode As eInteractionMode
     Dim blnLogWasActive As Boolean
-    Dim blnPushed As Boolean
+    Dim lngScope As Long
     Dim blnFinished As Boolean
     Dim blnSilentSet As Boolean
     Dim strJsonPath As String
@@ -2078,11 +2080,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' Scope noninteractive mode to this run. Finish restores it. Early exits
     ' pop in CleanUp when Finish did not run.
     If Len(strDecisionPolicy) > 0 Then
-        If Not BeginNonInteractive(strDecisionPolicy) Then
+        If Not BeginNonInteractive(strDecisionPolicy, lngScope) Then
             ExecuteTests = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
             Exit Function
         End If
-        blnPushed = True
     End If
 
     If Not DatabaseFileOpen Then
@@ -2258,7 +2259,7 @@ CleanUp:
     If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
         ExecuteTests = DecisionRequiredJson()
     End If
-    If blnPushed And Not blnFinished Then Operation.PopInteractionScope
+    If Not blnFinished Then Operation.CloseInteractionScope lngScope
     Exit Function
 
 ErrHandler:
@@ -2660,7 +2661,9 @@ End Sub
 '
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
 
-    If BeginNonInteractive(strDecisionPolicy) Then
+    ' Replace a policy left over from an earlier call rather than nesting under it.
+    Operation.CloseInteractionScope m_PolicyScope
+    If BeginNonInteractive(strDecisionPolicy, m_PolicyScope) Then
         SetOperationPolicy = "{""success"":true,""policy"":""" & JsonEscape(LCase$(Trim$(strDecisionPolicy))) & """}"
     Else
         SetOperationPolicy = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
@@ -2673,11 +2676,13 @@ End Function
 ' Procedure : ClearOperationPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Pop one interaction scope. Safe when Finish already restored it.
+' Purpose   : Close the scope opened by SetOperationPolicy. Safe when Finish already
+'           : restored it, and safe to call twice.
 '---------------------------------------------------------------------------------------
 '
 Public Function ClearOperationPolicy() As String
-    Operation.PopInteractionScope
+    Operation.CloseInteractionScope m_PolicyScope
+    m_PolicyScope = 0
     ClearOperationPolicy = "{""success"":true}"
 End Function
 

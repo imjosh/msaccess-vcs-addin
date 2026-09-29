@@ -56,7 +56,6 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     Dim varLines(0 To 3) As String
     Dim intCursor As Integer
     Dim strResolution As String
-    Dim blnBlocked As Boolean
     Dim strMessage As String
 
     ' Turn off any hourglass
@@ -82,10 +81,10 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
         ' A confirmation is applied only for an explicit decline policy; otherwise
         ' it is recorded as decision_required and the non-destructive button is
         ' returned so the caller does not treat the prompt as approved.
-        ResolveNonInteractivePrompt intButtons, Operation.DecisionPolicy, MsgBox2, strResolution, blnBlocked
         strMessage = strBold
         If Len(strLine1) Then strMessage = strMessage & " " & strLine1
         If Len(strLine2) Then strMessage = strMessage & " " & strLine2
+        MsgBox2 = Operation.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
         With New clsConcat
             .AppendOnAdd = vbCrLf
             .Add "[**MessageBox Not Displayed**]"
@@ -96,15 +95,6 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
             .Add "Resolution: " & strResolution
             Log.Add .GetStr
         End With
-        If blnBlocked Then
-            Operation.RecordDecision "decision_required", strTitle, strMessage, strResolution, _
-                "buttons=" & CStr(intButtons And 7)
-        ElseIf strResolution = "acknowledged" Then
-            Operation.RecordDecision "acknowledged", strTitle, strMessage, strResolution, vbNullString
-        Else
-            Operation.RecordDecision "applied", strTitle, strMessage, strResolution, _
-                "result=" & CStr(MsgBox2)
-        End If
     Else
         ' Silent mode. Don't display any message, but log it instead.
         With New clsConcat
