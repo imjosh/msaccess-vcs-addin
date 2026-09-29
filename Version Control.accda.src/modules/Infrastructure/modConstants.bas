@@ -154,6 +154,7 @@ Public Enum eOperationResult
     eorFailed
     eorTimeout
     eorCanceled
+    eorDecisionRequired     ' Noninteractive operation stopped; a policy did not cover a prompt.
 End Enum
 
 ' Source of the current operation

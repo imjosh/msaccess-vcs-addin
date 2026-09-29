@@ -365,6 +365,7 @@ When the VCS test runner is active, `TestAssert` reports each result to the add-
 - **Immediate Window:** `?VCS.RunTests`
 - **Filtered:** `?VCS.RunTests("modTestEncoding", "-slow")`
 - **Ribbon:** Tools > Run Tests
+- **Noninteractive:** `VCS.RunFilteredTests "block"` suppresses the console and message boxes for that run and restores the previous mode afterward. See [docs/noninteractive-dialogs.md](../docs/noninteractive-dialogs.md).
 - **Re-run failures only:** The runner supports `RunFailed` after a completed run
 
 `RunTests` accepts an optional `ParamArray` of filter arguments. Each argument is resolved in priority order:

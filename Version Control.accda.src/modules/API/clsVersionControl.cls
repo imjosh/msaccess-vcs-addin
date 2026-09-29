@@ -161,7 +161,20 @@ End Sub
 ' Purpose   : Merge modified source files into the existing database.
 '---------------------------------------------------------------------------------------
 '
-Public Sub MergeBuild()
+Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
+
+    Dim blnPushed As Boolean
+    Dim intBefore As eOperationState
+
+    ' An explicit policy selects noninteractive mode for this merge only.
+    ' Finish restores the previous mode. An empty policy keeps the interactive
+    ' (or previously configured) behavior.
+    If Len(strDecisionPolicy) > 0 Then
+        If Not BeginNonInteractive(strDecisionPolicy) Then Exit Sub
+        blnPushed = True
+    End If
+    intBefore = Operation.Status
+
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
         ' See if merge build is available
@@ -175,6 +188,13 @@ Public Sub MergeBuild()
                 T("Please perform a full build or full export of this database first."), vbInformation
         End If
     End With
+
+    ' The merge continues on a timer after this returns. Drop the scope now
+    ' only when that timer was not started.
+    If blnPushed Then
+        If Operation.Status = intBefore Then Operation.PopInteractionScope
+    End If
+
 End Sub
 
 
@@ -2004,7 +2024,7 @@ End Function
 '           : and applies it automatically. If the option is empty, runs all tests.
 '---------------------------------------------------------------------------------------
 '
-Public Function RunFilteredTests() As String
+Public Function RunFilteredTests(Optional ByVal strDecisionPolicy As String) As String
 
     Dim strFilter As String
     Dim arrParts() As String
@@ -2013,13 +2033,13 @@ Public Function RunFilteredTests() As String
     strFilter = Trim$(Nz(Options.DefaultTestFilter, vbNullString))
 
     If Len(strFilter) = 0 Then
-        RunFilteredTests = ExecuteTests(Empty, False)
+        RunFilteredTests = ExecuteTests(Empty, False, strDecisionPolicy)
     Else
         arrParts = Split(strFilter, ",")
         For lngIdx = LBound(arrParts) To UBound(arrParts)
             arrParts(lngIdx) = Trim$(arrParts(lngIdx))
         Next lngIdx
-        RunFilteredTests = ExecuteTests(CVar(arrParts), True)
+        RunFilteredTests = ExecuteTests(CVar(arrParts), True, strDecisionPolicy)
     End If
 
 End Function
@@ -2033,7 +2053,8 @@ End Function
 '           : optionally applies filters, runs the suite, and returns a JSON summary.
 '---------------------------------------------------------------------------------------
 '
-Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As String
+Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
+    Optional ByVal strDecisionPolicy As String) As String
 
     Dim blnAllPassed As Boolean
     Dim lngPassed As Long
@@ -2045,12 +2066,33 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
     Dim strFilter As String
     Dim eimPriorMode As eInteractionMode
     Dim blnLogWasActive As Boolean
+    Dim blnPushed As Boolean
+    Dim blnFinished As Boolean
+    Dim blnSilentSet As Boolean
+    Dim strJsonPath As String
+    Dim blnCanceled As Boolean
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    ' Scope noninteractive mode to this run. Finish restores it. Early exits
+    ' pop in CleanUp when Finish did not run.
+    If Len(strDecisionPolicy) > 0 Then
+        If Not BeginNonInteractive(strDecisionPolicy) Then
+            ExecuteTests = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
+            Exit Function
+        End If
+        blnPushed = True
+    End If
 
     If Not DatabaseFileOpen Then
         MsgBox2 T("No Database Open"), _
             T("Please open a database file before running tests."), _
             , vbInformation
-        Exit Function
+        If Not Operation.DecisionBlocked Then
+            ExecuteTests = "{""success"":false,""error"":""No database is open.""}"
+        End If
+        GoTo CleanUp
     End If
 
     ' Ensure modTestAssert is present
@@ -2061,7 +2103,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
             vbYesNo + vbQuestion) Then
             InstallTestAssertModule
         Else
-            Exit Function
+            If Not Operation.DecisionBlocked Then
+                ExecuteTests = "{""success"":false,""error"":""modTestAssert is not installed.""}"
+            End If
+            GoTo CleanUp
         End If
     End If
 
@@ -2076,12 +2121,21 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
         End If
     End If
 
-    If Not Operation.Begin(eotTestRun) Then Exit Function
+    If Not Operation.Begin(eotTestRun) Then
+        If Not Operation.DecisionBlocked Then
+            ExecuteTests = "{""success"":false,""error"":""Another operation is already running.""}"
+        End If
+        GoTo CleanUp
+    End If
 
     ' Match the round-trip harness: log to file and suppress blocking MsgBox dialogs
     ' so import/build errors surface in the test console and TestRun_*.log instead.
-    eimPriorMode = Operation.InteractionMode
-    Operation.InteractionMode = eimSilent
+    ' A noninteractive policy stays in force; silent mode would approve defaults.
+    If Operation.InteractionMode <> eimNonInteractive Then
+        eimPriorMode = Operation.InteractionMode
+        Operation.InteractionMode = eimSilent
+        blnSilentSet = True
+    End If
     blnLogWasActive = Log.Active
     Log.Active = True
     Log.ClearErrorJournal
@@ -2121,9 +2175,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
         Log.Add T("No test subs found in the current project.")
         FinalizeTestConsole True
         Log.Active = blnLogWasActive
-        Operation.InteractionMode = eimPriorMode
+        If blnSilentSet Then Operation.InteractionMode = eimPriorMode
         Operation.Finish eorSuccess
-        Exit Function
+        blnFinished = True
+        GoTo CleanUp
     End If
 
     ' Apply filter if specified (resolves module, suite, procedure, and tag matches)
@@ -2133,9 +2188,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
             Log.Add T("No tests found matching filter: {0}", var0:=strFilter)
             FinalizeTestConsole True
             Log.Active = blnLogWasActive
-            Operation.InteractionMode = eimPriorMode
+            If blnSilentSet Then Operation.InteractionMode = eimPriorMode
             Operation.Finish eorSuccess
-            Exit Function
+            blnFinished = True
+            GoTo CleanUp
         End If
         Log.Add T("Found {0} sub(s) matching filter. Running...", var0:=colKeys.Count)
     Else
@@ -2153,12 +2209,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
     Else
         TestRunner.RunAll
     End If
-    Dim strJsonPath As String
     strJsonPath = TestRunner.SaveResults
 
     ' Detect cancellation (before computing summary, so "all passed" is not
     ' incorrectly reported when only a subset ran before the user canceled)
-    Dim blnCanceled As Boolean
     blnCanceled = (TestRunner.State = etrsCancelled)
 
     ' Summary
@@ -2180,12 +2234,37 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean) As 
 
     FinalizeTestConsole blnAllPassed, Log.LogFilePath, blnCanceled, strJsonPath
     ExecuteTests = TestRunner.GetResultsAsJson
+    If Operation.DecisionBlocked Then ExecuteTests = OverlayDecisionRequired(ExecuteTests)
 
     TestRunner.InvokeGlobalTestTeardown
 
     Log.Active = blnLogWasActive
-    Operation.InteractionMode = eimPriorMode
-    Operation.Finish IIf(blnCanceled, eorCanceled, IIf(blnAllPassed, eorSuccess, eorFailed))
+    If blnSilentSet Then Operation.InteractionMode = eimPriorMode
+    If Operation.DecisionBlocked Then
+        Operation.Finish eorDecisionRequired
+    ElseIf blnCanceled Then
+        Operation.Finish eorCanceled
+    ElseIf blnAllPassed Then
+        Operation.Finish eorSuccess
+    Else
+        Operation.Finish eorFailed
+    End If
+    blnFinished = True
+    GoTo CleanUp
+
+CleanUp:
+    On Error Resume Next
+    DoCmd.Hourglass False
+    If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
+        ExecuteTests = DecisionRequiredJson()
+    End If
+    If blnPushed And Not blnFinished Then Operation.PopInteractionScope
+    Exit Function
+
+ErrHandler:
+    ExecuteTests = "{""success"":false,""error"":""" & JsonEscape(Err.Description) & _
+        """,""errorNumber"":" & CStr(Err.Number) & "}"
+    Resume CleanUp
 
 End Function
 
@@ -2569,6 +2648,63 @@ End Sub
 Public Sub GoToLinkDownload()
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin/releases"
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetOperationPolicy
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Push a noninteractive decision policy for the next operation.
+'           : Finish pops it. Call ClearOperationPolicy if the operation never starts.
+'---------------------------------------------------------------------------------------
+'
+Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
+
+    If BeginNonInteractive(strDecisionPolicy) Then
+        SetOperationPolicy = "{""success"":true,""policy"":""" & JsonEscape(LCase$(Trim$(strDecisionPolicy))) & """}"
+    Else
+        SetOperationPolicy = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearOperationPolicy
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Pop one interaction scope. Safe when Finish already restored it.
+'---------------------------------------------------------------------------------------
+'
+Public Function ClearOperationPolicy() As String
+    Operation.PopInteractionScope
+    ClearOperationPolicy = "{""success"":true}"
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ListAddinDialogs
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : JSON list of open add-in forms. Requires a responsive Access instance.
+'---------------------------------------------------------------------------------------
+'
+Public Function ListAddinDialogs() As String
+    ListAddinDialogs = modDialogPolicy.ListAddinDialogs()
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DismissAddinDialog
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Close a finished add-in form, or cancel a running operation.
+'           : action is "close" or "cancel".
+'---------------------------------------------------------------------------------------
+'
+Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close") As String
+    DismissAddinDialog = modDialogPolicy.DismissAddinDialog(strName, strAction)
+End Function
 
 
 '---------------------------------------------------------------------------------------

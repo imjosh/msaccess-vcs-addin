@@ -79,7 +79,11 @@ Public Sub ResolveOrPrompt()
     ' Log detected conflicts with date details for diagnostics
     LogDetectedConflicts
 
-    If Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI Then
+    If Operation.InteractionMode = eimNonInteractive Then
+        ApplyNonInteractivePolicy
+    ElseIf Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI Then
+        ' Existing agent behavior when the caller did not opt into a decision
+        ' policy: source wins. Noninteractive callers pass a policy instead.
         For Each varKey In m_dItems.Keys
             Set cItem = m_dItems(varKey)
             If cItem.ActionType <> ercNone Then
@@ -95,6 +99,51 @@ Public Sub ResolveOrPrompt()
     Else
         ShowDialog
     End If
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ApplyNonInteractivePolicy
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Apply an explicit conflict policy, or block without opening the dialog
+'           : and without choosing overwrite.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ApplyNonInteractivePolicy()
+
+    Dim varKey As Variant
+    Dim cItem As clsConflictItem
+    Dim intAction As eResolveConflict
+    Dim strKeys As String
+
+    intAction = ConflictActionForPolicy(Operation.DecisionPolicy)
+    If intAction = ercNone Then
+        For Each varKey In m_dItems.Keys
+            Set cItem = m_dItems(varKey)
+            If Len(strKeys) > 0 Then strKeys = strKeys & ", "
+            strKeys = strKeys & cItem.ItemKey
+        Next varKey
+        Log.Add T("Merge blocked: {0} conflict(s) need a decision policy (prefer_source, prefer_database, or skip).", _
+            var0:=Me.Count), False
+        Operation.RecordDecision "decision_required", "Merge conflicts", _
+            Me.Count & " conflict(s): " & strKeys, "blocked", "policy=" & CStr(Operation.DecisionPolicy)
+        Me.ApproveResolutions = False
+        MCP.Log "Conflict decision required (" & Me.Count & ")."
+        Exit Sub
+    End If
+
+    For Each varKey In m_dItems.Keys
+        Set cItem = m_dItems(varKey)
+        cItem.Resolution = intAction
+    Next varKey
+    Me.ApproveResolutions = True
+    Log.Add T("Applied conflict policy to {0} conflict(s).", var0:=Me.Count), False
+    Operation.RecordDecision "applied", "Merge conflicts", _
+        Me.Count & " conflict(s)", IIf(intAction = ercOverwrite, "prefer_source", "keep_database"), _
+        "resolution=" & CStr(intAction)
+    MCP.Log "Applied conflict policy to " & Me.Count & " conflict(s)."
 
 End Sub
 

@@ -83,9 +83,11 @@ Public Sub ApplyTestConsoleLayout()
     m_dblInitialInsideWidth = dblDesignW
     m_dblInitialInsideHeight = dblDesignH
 
-    Me.Visible = True
-    DoEvents
-    Me.Repaint
+    If Not InteractionIsNonInteractive() Then
+        Me.Visible = True
+        DoEvents
+        Me.Repaint
+    End If
 
 End Sub
 
@@ -195,6 +197,15 @@ Private Function GetSourceFolder() As String
     ' If we aren't doing the current database, then prompt user to find a folder
     ' with source files to use for the build.
     If GetSourceFolder = vbNullString Then
+
+        If InteractionIsNonInteractive() Then
+            ' A folder picker cannot be answered by a decision policy.
+            Operation.RecordDecision "decision_required", "Select Source Folder", _
+                "No project export folder was found, and a folder picker cannot be shown.", _
+                "blocked", "file_dialog"
+            DoCmd.Hourglass False
+            Exit Function
+        End If
 
         ' Show a folder picker to select the file with source code.
         DoCmd.Hourglass False
@@ -322,6 +333,12 @@ End Sub
 '
 Private Function ConfirmCancel() As Boolean
     Dim eimPrior As eInteractionMode
+    ' Silent and noninteractive runs already asked the caller to cancel by
+    ' closing the window. Do not open a second confirmation.
+    If Operation.InteractionMode <> eimNormal Then
+        ConfirmCancel = True
+        Exit Function
+    End If
     eimPrior = Operation.InteractionMode
     Operation.InteractionMode = eimNormal
     ConfirmCancel = MsgBox2(T("Cancel Current Operation?"), _
@@ -416,7 +433,7 @@ Public Sub ResetForOperation()
     On Error GoTo 0
 
     Log.SetConsole Me.txtLog, GetProgressBar
-    Me.Visible = True
+    If Not InteractionIsNonInteractive() Then Me.Visible = True
 
 End Sub
 

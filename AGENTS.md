@@ -87,6 +87,8 @@ VCS.MergeBuild          ' Merge changes into existing database
 VCS.Options             ' Access project options
 ```
 
+Noninteractive callers pass a decision policy (`"block"`, `"decline"`, `"prefer_source"`, `"prefer_database"`, `"skip"`) to `MergeBuild` or `RunFilteredTests`. The scope is restored when the operation finishes. Unresolved prompts return `decision_required` instead of a dialog. See [docs/noninteractive-dialogs.md](docs/noninteractive-dialogs.md).
+
 ### Component Interface (`IDbComponent`)
 
 Every exportable object type implements this interface:

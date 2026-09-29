@@ -95,7 +95,11 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                     vbOK) = vbOK Then
 
                 ' Launch the GUI form (it was closed a moment ago)
-                DoCmd.OpenForm "frmVCSMain"
+                If InteractionIsNonInteractive() Then
+                    DoCmd.OpenForm "frmVCSMain", , , , , acHidden
+                Else
+                    DoCmd.OpenForm "frmVCSMain"
+                End If
                 Form_frmVCSMain.StartBuild blnFullBuild
                 Log.Error eelCritical, T("{0} aborted. Name mismatch.", var0:=strType), FunctionName
                 GoTo CleanUp
@@ -181,8 +185,12 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
         Perf.OperationEnd
     End If
 
-    ' Launch the GUI form
-    DoCmd.OpenForm "frmVCSMain"
+    ' Launch the GUI form. Noninteractive operations keep it hidden.
+    If InteractionIsNonInteractive() Then
+        DoCmd.OpenForm "frmVCSMain", , , , , acHidden
+    Else
+        DoCmd.OpenForm "frmVCSMain"
+    End If
     Form_frmVCSMain.StartBuild blnFullBuild
 
     ' Minimize the VBE window to prevent it from stealing focus
@@ -348,9 +356,14 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                 Log.Add T("Resolving source conflicts"), False
                 .Resolve
             Else
-                ' Cancel build/merge
+                ' Cancel build/merge, or stop because a conflict policy was required.
                 Log.Spacer
-                Log.Add T("Build Canceled")
+                If Operation.DecisionBlocked Then
+                    Log.Add T("Merge blocked: a conflict decision is required.")
+                    Operation.Result = eorDecisionRequired
+                Else
+                    Log.Add T("Build Canceled")
+                End If
                 Operation.ErrorLevel = eelCritical
                 GoTo CleanUp
             End If
@@ -736,11 +749,17 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
                     Log.Add T("Resolving source conflicts"), False
                     .Resolve
                 Else
-                    ' Cancel export
                     Log.Spacer
-                    Log.Add T("Import Canceled"), , , "Red", True
+                    If Operation.DecisionBlocked Then
+                        Log.Add T("Import blocked: a conflict decision is required."), , , "Red", True
+                        Operation.Result = eorDecisionRequired
+                        intResult = eorDecisionRequired
+                    Else
+                        ' Cancel export
+                        Log.Add T("Import Canceled"), , , "Red", True
+                        intResult = eorCanceled
+                    End If
                     Operation.ErrorLevel = eelCritical
-                    intResult = eorCanceled
                     GoTo CleanUp
                 End If
             End If
