@@ -692,6 +692,10 @@ Releases are created from the `master` branch. The add-in is self-installing - u
 - **Issue Tracker**: https://github.com/joyfullservice/msaccess-vcs-addin/issues
 - **Releases**: https://github.com/joyfullservice/msaccess-vcs-addin/releases
 
+## Active cross-repo work: dialog handling hardening
+
+Work on `feat/noninteractive-dialogs` is tracked in a local markdown tracker in the parent folder shared with the sibling repo `msaccess-vcs-mcp`: `../issues/INDEX.md` (issue files beside it) and the combined spec `../specs/dialog-handling-hardening.md`. Read the index, pick a `todo` issue whose blockers are `done`, and update its status in both the issue file and the index.
+
 ---
 
 *This file helps AI agents understand and work with the MSAccess VCS Add-in codebase. For exported database source file formats, see the AGENTS.md in the source folder.*
