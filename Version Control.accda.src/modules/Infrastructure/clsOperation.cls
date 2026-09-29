@@ -79,16 +79,16 @@ End Function
 '           : responsible for caching and restoring it themselves.
 '---------------------------------------------------------------------------------------
 '
-Public Function Begin(intType As eOperationType) As Boolean
+Public Function Begin(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk) As Boolean
     Select Case this.State
-        Case eosRunning
-            ' Another operation is already running.
-            MsgBox2 T("Another Operation Already Running"), _
-                T("Please complete the current operation before beginning a new one."), , vbExclamation
-        Case eosStaged
-            ' We are currently staged
-            MsgBox2 T("Another Operation Already Running"), _
-                T("Please complete the current operation before beginning a new one."), , vbExclamation
+        Case eosRunning, eosStaged
+            ' Another operation is already running (or staged for a timer restart).
+            ' A policy request comes from automation, so refuse without a dialog and
+            ' leave the running operation's interaction state untouched.
+            If intPolicy = edpAsk Then
+                MsgBox2 T("Another Operation Already Running"), _
+                    T("Please complete the current operation before beginning a new one."), , vbExclamation
+            End If
         Case eosReady
             ' Ready to go!
             Me.OperationType = intType
@@ -96,6 +96,9 @@ Public Function Begin(intType As eOperationType) As Boolean
             Me.Result = eorUnknown
             this.State = eosRunning
             this.StartTime = Now
+            ' The policy scope opens only now that the operation has begun. Finish
+            ' closes it, and UpdateRegistry saves it so Restore can reopen it.
+            If intPolicy <> edpAsk Then Scope.OpenScope eimNonInteractive, intPolicy, True
             SetErrorTrapping
             UpdateRegistry
             Me.Pulse
@@ -188,6 +191,7 @@ Public Function Finish(Optional intResult As eOperationResult)
 
         ' Restore interaction state after the callback has read the journal.
         Scope.ReleaseOperationScopes
+        UpdateRegistry
         modObjects.ReleaseObjects
         ' Only restore error trapping if we were in a running state.
         If blnWasRunning Then RestoreUserErrorTrapping
@@ -209,6 +213,7 @@ Public Property Get Status() As eOperationState
             ' Timeout exceeded from last heartbeat
             this.State = eosReady
             Me.Result = eorTimeout
+            Scope.ReleaseOperationScopes
             RestoreUserErrorTrapping
         End If
     End If
@@ -250,6 +255,8 @@ Private Sub UpdateRegistry()
         CheckSetting "State", this.State
         CheckSetting "AppHwnd", this.AppHwnd
         CheckSetting "ErrorTrapping", this.ErrorTrapping
+        CheckSetting "InteractionMode", Scope.InteractionMode
+        CheckSetting "DecisionPolicy", Scope.DecisionPolicy
     End If
 End Sub
 
@@ -300,10 +307,39 @@ Private Function RestoreFromRegistry() As Boolean
             this.State = ReadReg("State")
             this.AppHwnd = ReadReg("AppHwnd")
             this.ErrorTrapping = CInt(ReadReg("ErrorTrapping"))
+            RestoreScopeFromRegistry
             RestoreFromRegistry = True
         End If
     End If
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RestoreScopeFromRegistry
+' Date      : 09/29/2026
+' Purpose   : Put back the interaction mode and policy saved with an operation that is
+'           : still running or staged, so the second half of a timer-driven operation
+'           : runs under the same policy. A noninteractive policy the live scope already
+'           : holds is left alone. Otherwise it reopens as an operation-owned scope, so
+'           : Finish still releases it.
+'---------------------------------------------------------------------------------------
+'
+Private Sub RestoreScopeFromRegistry()
+
+    Dim intMode As eInteractionMode
+
+    If this.State = eosReady Then Exit Sub
+    intMode = Val(ReadReg("InteractionMode"))
+
+    If intMode = eimNonInteractive Then
+        If Not Scope.InNonInteractiveScope Then
+            Scope.OpenScope eimNonInteractive, Val(ReadReg("DecisionPolicy")), True
+        End If
+    Else
+        Scope.InteractionMode = intMode
+    End If
+
+End Sub
 
 
 '---------------------------------------------------------------------------------------

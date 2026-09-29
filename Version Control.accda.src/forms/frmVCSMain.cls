@@ -31,6 +31,10 @@ Public strCopyToClipboardPath As String
 ' Use this property to set the path to the source files (such as a build triggered from the API)
 Public strSourcePath As String
 
+' Set by an API caller that wants the build to run under a noninteractive decision
+' policy. Operation.Begin opens the scope; edpAsk (the default) leaves it interactive.
+Public intDecisionPolicy As eDecisionPolicy
+
 ' Design-time and test-console client dimensions (twips; match frmVCSMain.form Width).
 Private Const DESIGN_INSIDE_WIDTH As Long = 9360
 Private Const TEST_INSIDE_WIDTH As Long = 12300
@@ -103,6 +107,7 @@ Public Sub cmdBuild_Click()
 
     Dim intBuildType As eOperationType
     Dim strFolder As String
+    Dim blnBegun As Boolean
 
     ' Make sure we use the add-in to build the add-in.
     If CodeProject.FullName = CurrentProject.FullName Then
@@ -110,6 +115,17 @@ Public Sub cmdBuild_Click()
             "please install and use the Version Control add-in from the Add-in menu"), , vbExclamation
         DoCmd.Hourglass False
         Exit Sub
+    End If
+
+    ' Under a noninteractive policy, begin the operation first so the policy scope
+    ' also answers the prompts while resolving the source folder.
+    intBuildType = IIf(chkFullBuild, eotBuild, eotMerge)
+    If Me.intDecisionPolicy <> edpAsk Then
+        If Not Operation.Begin(intBuildType, Me.intDecisionPolicy) Then
+            DoCmd.Hourglass False
+            Exit Sub
+        End If
+        blnBegun = True
     End If
 
     ' Get source files folder
@@ -124,6 +140,7 @@ Public Sub cmdBuild_Click()
         If strFolder = vbNullString Then
             DoCmd.Close acForm, Me.Name
             DoCmd.Hourglass False
+            If blnBegun Then Operation.Finish eorCanceled
             Exit Sub
         End If
     End If
@@ -132,8 +149,8 @@ Public Sub cmdBuild_Click()
     ' (Use a timer so we can release the reference to this form before beginning the
     '  build process, just in case we need to import a form with the same name.)
     If strFolder <> vbNullString Then
-        intBuildType = IIf(chkFullBuild, eotBuild, eotMerge)
-        If Operation.Begin(intBuildType) Then
+        If Not blnBegun Then blnBegun = Operation.Begin(intBuildType)
+        If blnBegun Then
             Operation.Stage
             SetTimer "Build", strFolder, chkFullBuild
         Else

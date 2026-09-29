@@ -166,16 +166,17 @@ End Sub
 '
 Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
 
-    Dim lngScope As Long
-    Dim intBefore As eOperationState
+    Dim intPolicy As eDecisionPolicy
 
-    ' An explicit policy selects noninteractive mode for this merge only.
-    ' Finish restores the previous mode. An empty policy keeps the interactive
+    ' An explicit policy makes this merge noninteractive. The policy scope opens only
+    ' once Operation.Begin succeeds (inside cmdBuild_Click), and Finish closes it.
+    ' An unknown policy, or a policy request while another operation is running, is
+    ' refused before anything opens or changes. An empty policy keeps the interactive
     ' (or previously configured) behavior.
     If Len(strDecisionPolicy) > 0 Then
-        If Not BeginNonInteractive(strDecisionPolicy, lngScope) Then Exit Sub
+        If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then Exit Sub
+        If Operation.Status <> eosReady Then Exit Sub
     End If
-    intBefore = Operation.Status
 
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
@@ -183,19 +184,15 @@ Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
         If .chkFullBuild.Enabled Then
             ' Initiate the merge build
             .chkFullBuild = False
+            .intDecisionPolicy = intPolicy
             .cmdBuild_Click
-        Else
+            .intDecisionPolicy = edpAsk
+        ElseIf intPolicy = edpAsk Then
             MsgBox2 T("Merge Build Not Available"), _
                 T("A full build or full export must be performed before you can merge from source."), _
                 T("Please perform a full build or full export of this database first."), vbInformation
         End If
     End With
-
-    ' The merge continues on a timer after this returns. Drop the scope now
-    ' only when that timer was not started.
-    If lngScope <> 0 Then
-        If Operation.Status = intBefore Then Operation.CloseInteractionScope lngScope
-    End If
 
 End Sub
 
@@ -2068,8 +2065,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim strFilter As String
     Dim eimPriorMode As eInteractionMode
     Dim blnLogWasActive As Boolean
-    Dim lngScope As Long
-    Dim blnFinished As Boolean
+    Dim blnLogSet As Boolean
+    Dim blnBegun As Boolean
+    Dim intPolicy As eDecisionPolicy
+    Dim intResult As eOperationResult
     Dim blnSilentSet As Boolean
     Dim strJsonPath As String
     Dim blnCanceled As Boolean
@@ -2077,14 +2076,25 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     LogUnhandledErrors
     On Error GoTo ErrHandler
 
-    ' Scope noninteractive mode to this run. Finish restores it. Early exits
-    ' pop in CleanUp when Finish did not run.
     If Len(strDecisionPolicy) > 0 Then
-        If Not BeginNonInteractive(strDecisionPolicy, lngScope) Then
+        If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
             ExecuteTests = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
             Exit Function
         End If
     End If
+
+    ' Begin first. The policy scope opens as part of Begin, so a refused request
+    ' changes nothing, and the prompts below are answered by the policy.
+    If Not Operation.Begin(eotTestRun, intPolicy) Then
+        ExecuteTests = "{""success"":false,""error_pattern"":""operation_already_running"",""error"":""Another operation is already running.""}"
+        Exit Function
+    End If
+    blnBegun = True
+
+    ' Every exit past this point reaches CleanUp, which restores logging and silent
+    ' mode and finishes the operation with this result. Finish reports
+    ' decision_required instead when a prompt was blocked.
+    intResult = eorFailed
 
     If Not DatabaseFileOpen Then
         MsgBox2 T("No Database Open"), _
@@ -2107,6 +2117,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
             If Not Operation.DecisionBlocked Then
                 ExecuteTests = "{""success"":false,""error"":""modTestAssert is not installed.""}"
             End If
+            intResult = eorCanceled
             GoTo CleanUp
         End If
     End If
@@ -2122,13 +2133,6 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         End If
     End If
 
-    If Not Operation.Begin(eotTestRun) Then
-        If Not Operation.DecisionBlocked Then
-            ExecuteTests = "{""success"":false,""error"":""Another operation is already running.""}"
-        End If
-        GoTo CleanUp
-    End If
-
     ' Match the round-trip harness: log to file and suppress blocking MsgBox dialogs
     ' so import/build errors surface in the test console and TestRun_*.log instead.
     ' A noninteractive policy stays in force; silent mode would approve defaults.
@@ -2138,6 +2142,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         blnSilentSet = True
     End If
     blnLogWasActive = Log.Active
+    blnLogSet = True
     Log.Active = True
     Log.ClearErrorJournal
 
@@ -2175,10 +2180,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     If TestRunner.Tests.Count = 0 Then
         Log.Add T("No test subs found in the current project.")
         FinalizeTestConsole True
-        Log.Active = blnLogWasActive
-        If blnSilentSet Then Operation.InteractionMode = eimPriorMode
-        Operation.Finish eorSuccess
-        blnFinished = True
+        intResult = eorSuccess
         GoTo CleanUp
     End If
 
@@ -2188,10 +2190,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         If colKeys.Count = 0 Then
             Log.Add T("No tests found matching filter: {0}", var0:=strFilter)
             FinalizeTestConsole True
-            Log.Active = blnLogWasActive
-            If blnSilentSet Then Operation.InteractionMode = eimPriorMode
-            Operation.Finish eorSuccess
-            blnFinished = True
+            intResult = eorSuccess
             GoTo CleanUp
         End If
         Log.Add T("Found {0} sub(s) matching filter. Running...", var0:=colKeys.Count)
@@ -2239,18 +2238,11 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 
     TestRunner.InvokeGlobalTestTeardown
 
-    Log.Active = blnLogWasActive
-    If blnSilentSet Then Operation.InteractionMode = eimPriorMode
-    If Operation.DecisionBlocked Then
-        Operation.Finish eorDecisionRequired
-    ElseIf blnCanceled Then
-        Operation.Finish eorCanceled
+    If blnCanceled Then
+        intResult = eorCanceled
     ElseIf blnAllPassed Then
-        Operation.Finish eorSuccess
-    Else
-        Operation.Finish eorFailed
+        intResult = eorSuccess
     End If
-    blnFinished = True
     GoTo CleanUp
 
 CleanUp:
@@ -2259,7 +2251,11 @@ CleanUp:
     If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
         ExecuteTests = DecisionRequiredJson()
     End If
-    If Not blnFinished Then Operation.CloseInteractionScope lngScope
+    ' Restore what this run changed, then finish. Finish is a no-op if the operation
+    ' already finished, and reports decision_required if a prompt was blocked.
+    If blnLogSet Then Log.Active = blnLogWasActive
+    If blnSilentSet Then Operation.InteractionMode = eimPriorMode
+    If blnBegun Then Operation.Finish intResult
     Exit Function
 
 ErrHandler:
@@ -2660,6 +2656,13 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
+
+    ' A running or staged operation keeps the policy it began with. Refuse without
+    ' touching its scope, or the policy this call would replace.
+    If Operation.Status <> eosReady Then
+        SetOperationPolicy = "{""success"":false,""error_pattern"":""operation_already_running"",""error"":""Another operation is already running.""}"
+        Exit Function
+    End If
 
     ' Replace a policy left over from an earlier call rather than nesting under it.
     Operation.CloseInteractionScope m_PolicyScope
