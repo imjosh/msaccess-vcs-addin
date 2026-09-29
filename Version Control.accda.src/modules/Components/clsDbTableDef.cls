@@ -708,7 +708,7 @@ Private Function ImportLinkedTable(strFile As String) As Boolean
         ElseIf dState("Status") = csOK And Len(dState("Completed")) > 0 Then
             strConnect = dState("Completed")
         ElseIf Len(strConnect) = 0 Then
-            If Operation.InteractionMode = eimNormal And Options.UseEnvForConnections <> uecNever Then
+            If InteractionIsNormal And Options.UseEnvForConnections <> uecNever Then
                 strConnect = "ODBC;"
             Else
                 Log.Add "  " & T("Skipped {0} (missing .env key)", var0:=dItem("Name")), Options.ShowDebug

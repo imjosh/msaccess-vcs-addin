@@ -92,6 +92,35 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : InteractionIsNormal
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : True when the user is present and dialogs may be shown.
+'---------------------------------------------------------------------------------------
+'
+Public Function InteractionIsNormal() As Boolean
+    InteractionIsNormal = (Operation.InteractionMode = eimNormal)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ShowMainForm
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Open the main form. Every site that shows it goes through here so a
+'           : noninteractive operation keeps it hidden.
+'---------------------------------------------------------------------------------------
+'
+Public Sub ShowMainForm()
+    If InteractionIsNonInteractive() Then
+        DoCmd.OpenForm "frmVCSMain", , , , , acHidden
+    Else
+        DoCmd.OpenForm "frmVCSMain"
+    End If
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ResolveNonInteractivePrompt
 ' Author    : Josh
 ' Date      : 09/29/2026

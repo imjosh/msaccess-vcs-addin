@@ -254,7 +254,7 @@ End Property
 '---------------------------------------------------------------------------------------
 '
 Public Property Get OperationId() As String
-    OperationId = this.OperationId
+    If this.IsActive Then OperationId = this.OperationId
 End Property
 
 
@@ -267,18 +267,6 @@ End Property
 '
 Public Property Get IsActive() As Boolean
     IsActive = this.IsActive
-End Property
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : OperationId
-' Date      : 09/29/2026
-' Purpose   : The operation id the MCP server registered with the callback. Empty
-'           : when callbacks are not active.
-'---------------------------------------------------------------------------------------
-'
-Public Property Get OperationId() As String
-    If this.IsActive Then OperationId = this.OperationId
 End Property
 
 

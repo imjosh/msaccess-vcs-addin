@@ -104,7 +104,7 @@ Public Sub RestoreMainForm()
         ' Assume that the action buttons should be hidden
         frm.cmdClose.SetFocus
         frm.HideActionButtons
-        frm.Visible = True
+        If Not InteractionIsNonInteractive() Then frm.Visible = True
         DoEvents
     End With
 

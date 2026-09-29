@@ -79,7 +79,7 @@ Public Sub ResolveOrPrompt()
     ' Log detected conflicts with date details for diagnostics
     LogDetectedConflicts
 
-    If Operation.InteractionMode = eimNonInteractive Then
+    If InteractionIsNonInteractive Then
         ApplyNonInteractivePolicy
     ElseIf Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI Then
         ' Existing agent behavior when the caller did not opt into a decision
@@ -136,13 +136,13 @@ Private Sub ApplyNonInteractivePolicy()
 
     For Each varKey In m_dItems.Keys
         Set cItem = m_dItems(varKey)
-        cItem.Resolution = intAction
+        cItem.Resolution = ConflictActionForPolicy(Operation.DecisionPolicy, cItem.ActionType)
     Next varKey
     Me.ApproveResolutions = True
     Log.Add T("Applied conflict policy to {0} conflict(s).", var0:=Me.Count), False
     Operation.RecordDecision "applied", "Merge conflicts", _
-        Me.Count & " conflict(s)", IIf(intAction = ercOverwrite, "prefer_source", "keep_database"), _
-        "resolution=" & CStr(intAction)
+        Me.Count & " conflict(s)", IIf(Operation.DecisionPolicy = edpPreferSource, "prefer_source", "keep_database"), _
+        "policy=" & CStr(Operation.DecisionPolicy)
     MCP.Log "Applied conflict policy to " & Me.Count & " conflict(s)."
 
 End Sub

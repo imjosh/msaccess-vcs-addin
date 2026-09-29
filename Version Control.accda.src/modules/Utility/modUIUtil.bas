@@ -69,14 +69,14 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     varLines(3) = Replace(strTitle, "'", "''")
 
     ' Check interaction mode (lives on the Operation singleton)
-    If Operation.InteractionMode = eimNormal Then
+    If InteractionIsNormal Then
         ' Normal user interaction with MsgBox
         If varLines(3) = vbNullString Then varLines(3) = T("Version Control Add-in")
         strMsg = "MsgBox('" & varLines(0) & "@" & varLines(1) & "@" & varLines(2) & "@'," & intButtons & ",'" & varLines(3) & "','',0)"
         Perf.PauseTiming
         MsgBox2 = Eval(strMsg)
         Perf.ResumeTiming
-    ElseIf Operation.InteractionMode = eimNonInteractive Then
+    ElseIf InteractionIsNonInteractive Then
         ' No dialog. Informational OK prompts are logged and acknowledged.
         ' A confirmation is applied only for an explicit decline policy; otherwise
         ' it is recorded as decision_required and the non-destructive button is

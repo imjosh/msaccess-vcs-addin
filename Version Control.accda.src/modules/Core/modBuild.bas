@@ -95,11 +95,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                     vbOK) = vbOK Then
 
                 ' Launch the GUI form (it was closed a moment ago)
-                If InteractionIsNonInteractive() Then
-                    DoCmd.OpenForm "frmVCSMain", , , , , acHidden
-                Else
-                    DoCmd.OpenForm "frmVCSMain"
-                End If
+                ShowMainForm
                 Form_frmVCSMain.StartBuild blnFullBuild
                 Log.Error eelCritical, T("{0} aborted. Name mismatch.", var0:=strType), FunctionName
                 GoTo CleanUp
@@ -186,11 +182,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
     End If
 
     ' Launch the GUI form. Noninteractive operations keep it hidden.
-    If InteractionIsNonInteractive() Then
-        DoCmd.OpenForm "frmVCSMain", , , , , acHidden
-    Else
-        DoCmd.OpenForm "frmVCSMain"
-    End If
+    ShowMainForm
     Form_frmVCSMain.StartBuild blnFullBuild
 
     ' Minimize the VBE window to prevent it from stealing focus

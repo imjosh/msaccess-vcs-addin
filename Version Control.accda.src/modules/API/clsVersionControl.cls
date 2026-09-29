@@ -30,7 +30,7 @@ Private m_PolicyScope As Long
 '---------------------------------------------------------------------------------------
 '
 Public Sub Show()
-    DoCmd.OpenForm "frmVCSMain"
+    ShowMainForm
 End Sub
 
 
@@ -2169,7 +2169,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' Match the round-trip harness: log to file and suppress blocking MsgBox dialogs
     ' so import/build errors surface in the test console and TestRun_*.log instead.
     ' A noninteractive policy stays in force; silent mode would approve defaults.
-    If Operation.InteractionMode <> eimNonInteractive Then
+    If Not InteractionIsNonInteractive Then
         eimPriorMode = Operation.InteractionMode
         Operation.InteractionMode = eimSilent
         blnSilentSet = True
