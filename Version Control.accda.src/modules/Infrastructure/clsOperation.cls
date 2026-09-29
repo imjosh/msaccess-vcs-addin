@@ -335,7 +335,10 @@ Private Function RestoreFromRegistry() As Boolean
     If ReadReg("AppHwnd") = CStr(hWndAccessApp) Then
         ' Check for timeout
         If DateAdd("s", HEARTBEAT_TIMEOUT_SECONDS, CDate(Nz2(ReadReg("Heartbeat"), 0))) > Now Then
-            ' Load results
+            ' Load results. The heartbeat came from the same registry value the
+            ' timeout check above just accepted; without it Status would see a zero
+            ' heartbeat and report the restored operation as timed out.
+            Me.Heartbeat = CDate(ReadReg("Heartbeat"))
             Me.Result = ReadReg("Result")
             this.StartTime = ReadReg("StartTime")
             this.FinishTime = ReadReg("FinishTime")
