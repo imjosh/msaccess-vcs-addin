@@ -161,12 +161,16 @@ End Sub
 ' Procedure : MergeBuild
 ' Author    : Adam Waller
 ' Date      : 2/21/2023
-' Purpose   : Merge modified source files into the existing database.
+' Purpose   : Merge modified source files into the existing database. Returns a JSON
+'           : start result only: started, or refused with an error_pattern. The final
+'           : outcome always arrives through the completion callback. Calling this as a
+'           : statement ignores the result.
 '---------------------------------------------------------------------------------------
 '
-Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
+Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
 
     Dim intPolicy As eDecisionPolicy
+    Dim eosBefore As eOperationState
 
     ' An explicit policy makes this merge noninteractive. The policy scope opens only
     ' once Operation.Begin succeeds (inside cmdBuild_Click), and Finish closes it.
@@ -174,9 +178,18 @@ Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
     ' refused before anything opens or changes. An empty policy keeps the interactive
     ' (or previously configured) behavior.
     If Len(strDecisionPolicy) > 0 Then
-        If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then Exit Sub
-        If Operation.Status <> eosReady Then Exit Sub
+        If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
+            MergeBuild = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
+            Exit Function
+        End If
+        If Operation.Status <> eosReady Then
+            MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+            Exit Function
+        End If
     End If
+
+    eosBefore = Operation.Status
+    If eosBefore = eosReady Then Operation.Result = eorUnknown
 
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
@@ -187,14 +200,34 @@ Public Sub MergeBuild(Optional ByVal strDecisionPolicy As String)
             .intDecisionPolicy = intPolicy
             .cmdBuild_Click
             .intDecisionPolicy = edpAsk
-        ElseIf intPolicy = edpAsk Then
-            MsgBox2 T("Merge Build Not Available"), _
-                T("A full build or full export must be performed before you can merge from source."), _
-                T("Please perform a full build or full export of this database first."), vbInformation
+        Else
+            If intPolicy = edpAsk Then
+                MsgBox2 T("Merge Build Not Available"), _
+                    T("A full build or full export must be performed before you can merge from source."), _
+                    T("Please perform a full build or full export of this database first."), vbInformation
+            End If
+            MergeBuild = RefusalJson(ERR_MERGE_NOT_AVAILABLE, _
+                "A full build or full export must be performed before you can merge from source.")
+            Exit Function
         End If
     End With
 
-End Sub
+    ' The merge continues on a timer once it has begun (staged).
+    If eosBefore <> eosReady Then
+        ' Begin showed its own dialog. Post the refusal for an async caller.
+        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+    ElseIf Operation.Status = eosStaged Then
+        MergeBuild = StartedJson()
+    ElseIf Operation.Result = eorDecisionRequired Then
+        ' Stopped on a prompt before the timer started. Finish already posted the
+        ' callback, so return the decisions without posting again.
+        MergeBuild = DecisionRequiredJson(Operation.LastDecisions)
+    Else
+        ' Declined in the UI (or a guard in cmdBuild_Click). Nothing was started.
+        MergeBuild = RefusalJson(vbNullString, "The merge did not start.", False)
+    End If
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -2078,7 +2111,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 
     If Len(strDecisionPolicy) > 0 Then
         If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
-            ExecuteTests = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
+            ExecuteTests = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
             Exit Function
         End If
     End If
@@ -2086,7 +2119,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' Begin first. The policy scope opens as part of Begin, so a refused request
     ' changes nothing, and the prompts below are answered by the policy.
     If Not Operation.Begin(eotTestRun, intPolicy) Then
-        ExecuteTests = "{""success"":false,""error_pattern"":""operation_already_running"",""error"":""Another operation is already running.""}"
+        ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
         Exit Function
     End If
     blnBegun = True
@@ -2259,8 +2292,7 @@ CleanUp:
     Exit Function
 
 ErrHandler:
-    ExecuteTests = "{""success"":false,""error"":""" & JsonEscape(Err.Description) & _
-        """,""errorNumber"":" & CStr(Err.Number) & "}"
+    ExecuteTests = RuntimeErrorJson(Err.Description, Err.Number)
     Resume CleanUp
 
 End Function
@@ -2657,19 +2689,24 @@ End Sub
 '
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
 
+    Dim dResult As Dictionary
+
     ' A running or staged operation keeps the policy it began with. Refuse without
     ' touching its scope, or the policy this call would replace.
     If Operation.Status <> eosReady Then
-        SetOperationPolicy = "{""success"":false,""error_pattern"":""operation_already_running"",""error"":""Another operation is already running.""}"
+        SetOperationPolicy = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING, False)
         Exit Function
     End If
 
     ' Replace a policy left over from an earlier call rather than nesting under it.
     Operation.CloseInteractionScope m_PolicyScope
     If BeginNonInteractive(strDecisionPolicy, m_PolicyScope) Then
-        SetOperationPolicy = "{""success"":true,""policy"":""" & JsonEscape(LCase$(Trim$(strDecisionPolicy))) & """}"
+        Set dResult = New Dictionary
+        dResult.Add "success", True
+        dResult.Add "policy", LCase$(Trim$(strDecisionPolicy))
+        SetOperationPolicy = ConvertToJson(dResult)
     Else
-        SetOperationPolicy = "{""success"":false,""error_pattern"":""invalid_decision_policy"",""error"":""Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline.""}"
+        SetOperationPolicy = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False)
     End If
 
 End Function

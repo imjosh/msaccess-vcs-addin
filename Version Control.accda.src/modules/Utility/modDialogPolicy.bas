@@ -15,6 +15,16 @@ Option Private Module
 '@Folder("Utility")
 
 
+' Error patterns returned when a request is refused or stops for a decision.
+Public Const ERR_INVALID_DECISION_POLICY As String = "invalid_decision_policy"
+Public Const ERR_MERGE_NOT_AVAILABLE As String = "merge_not_available"
+Public Const ERR_OPERATION_ALREADY_RUNNING As String = "operation_already_running"
+Public Const ERR_DECISION_REQUIRED As String = "decision_required"
+
+Public Const MSG_OPERATION_RUNNING As String = "Another operation is already running."
+Private Const MSG_DECISION_REQUIRED As String = "A required decision was not covered by the decision policy."
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : ParseDecisionPolicy
 ' Author    : Josh
@@ -164,13 +174,31 @@ End Function
 ' Purpose   : Structured failure for an operation that stopped on an unresolved prompt.
 '---------------------------------------------------------------------------------------
 '
-Public Function DecisionRequiredJson() As String
+Public Function DecisionRequiredJson(Optional ByVal colDecisions As Collection) As String
+    DecisionRequiredJson = ConvertToJson(DecisionRequiredResult(colDecisions))
+End Function
 
-    DecisionRequiredJson = "{""success"":false," & _
-        """error_pattern"":""decision_required""," & _
-        """decision_required"":true," & _
-        """error"":""A required decision was not covered by the decision policy.""," & _
-        """decisions"":" & Operation.DecisionsJson() & "}"
+
+'---------------------------------------------------------------------------------------
+' Procedure : DecisionRequiredResult
+' Date      : 09/29/2026
+' Purpose   : The decision_required result as a dictionary, so callers can add fields
+'           : before encoding. Uses the running operation's decisions unless the
+'           : decisions of a finished operation are passed in.
+'---------------------------------------------------------------------------------------
+'
+Private Function DecisionRequiredResult(Optional ByVal colDecisions As Collection) As Dictionary
+
+    Dim dResult As Dictionary
+
+    If colDecisions Is Nothing Then Set colDecisions = Operation.Decisions
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "error_pattern", ERR_DECISION_REQUIRED
+    dResult.Add "decision_required", True
+    dResult.Add "error", MSG_DECISION_REQUIRED
+    dResult.Add "decisions", colDecisions
+    Set DecisionRequiredResult = dResult
 
 End Function
 
@@ -196,10 +224,10 @@ Public Function OverlayDecisionRequired(ByVal strJson As String) As String
 
     Set dParsed = ParseJson(strJson)
     dParsed("success") = False
-    dParsed("error_pattern") = "decision_required"
+    dParsed("error_pattern") = ERR_DECISION_REQUIRED
     dParsed("decision_required") = True
-    dParsed("error") = "A required decision was not covered by the decision policy."
-    Set dParsed("decisions") = ParseJson(Operation.DecisionsJson())
+    dParsed("error") = MSG_DECISION_REQUIRED
+    Set dParsed("decisions") = Operation.Decisions
     OverlayDecisionRequired = ConvertToJson(dParsed)
     Exit Function
 
@@ -210,26 +238,95 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : JsonEscape
-' Author    : Josh
+' Procedure : InvalidPolicyMessage
 ' Date      : 09/29/2026
-' Purpose   : Escape a string for inclusion in a hand-built JSON value.
+' Purpose   : The message for an unknown decision policy, listing the valid names.
 '---------------------------------------------------------------------------------------
 '
-Public Function JsonEscape(ByVal strValue As String) As String
+Public Function InvalidPolicyMessage() As String
+    InvalidPolicyMessage = "Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline."
+End Function
 
-    Dim strOut As String
 
-    strOut = strValue
-    strOut = Replace(strOut, "\", "\\")
-    strOut = Replace(strOut, """", "\""")
-    strOut = Replace(strOut, vbCrLf, "\n")
-    strOut = Replace(strOut, vbCr, "\n")
-    strOut = Replace(strOut, vbLf, "\n")
-    strOut = Replace(strOut, vbTab, "\t")
-    JsonEscape = strOut
+'---------------------------------------------------------------------------------------
+' Procedure : RefusalJson
+' Date      : 09/29/2026
+' Purpose   : Result for a request refused before it started. When blnPostCallback is
+'           : set and MCP is active, the same payload is also posted as the completion
+'           : callback, since an async caller only reads the callback.
+'---------------------------------------------------------------------------------------
+'
+Public Function RefusalJson(ByVal strPattern As String, ByVal strMessage As String, _
+    Optional ByVal blnPostCallback As Boolean = True) As String
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    If Len(strPattern) > 0 Then dResult.Add "error_pattern", strPattern
+    dResult.Add "error", strMessage
+    If blnPostCallback Then PostRefusal dResult, strMessage
+    RefusalJson = ConvertToJson(dResult)
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : StartedJson
+' Date      : 09/29/2026
+' Purpose   : Start result: the operation began. This is never a final result; the
+'           : outcome arrives through the completion callback. operation_id is the id
+'           : the MCP server registered, and is omitted when MCP is not active.
+'---------------------------------------------------------------------------------------
+'
+Public Function StartedJson() As String
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", True
+    dResult.Add "started", True
+    If Len(MCP.OperationId) > 0 Then dResult.Add "operation_id", MCP.OperationId
+    StartedJson = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RuntimeErrorJson
+' Date      : 09/29/2026
+' Purpose   : Result for a run that hit a runtime error. If a prompt was blocked,
+'           : decision_required is the primary result and carries the decisions, with
+'           : the runtime error alongside. Otherwise it is a plain failure.
+'---------------------------------------------------------------------------------------
+'
+Public Function RuntimeErrorJson(ByVal strDescription As String, ByVal lngNumber As Long) As String
+
+    Dim dResult As Dictionary
+
+    If Operation.DecisionBlocked Then
+        Set dResult = DecisionRequiredResult()
+        dResult.Add "runtime_error", strDescription
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", False
+        dResult.Add "error", strDescription
+    End If
+    dResult.Add "errorNumber", lngNumber
+    RuntimeErrorJson = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PostRefusal
+' Date      : 09/29/2026
+' Purpose   : Post a refusal to the MCP completion callback when MCP is active.
+'---------------------------------------------------------------------------------------
+'
+Private Sub PostRefusal(ByVal dResult As Dictionary, ByVal strMessage As String)
+    If MCP.IsActive Then MCP.PostCallback "error", -1, -1, strMessage, dResult
+End Sub
 
 
 '---------------------------------------------------------------------------------------

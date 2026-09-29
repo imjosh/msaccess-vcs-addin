@@ -125,3 +125,46 @@ Public Sub TestConflictActionForPolicy()
     TestAssert ConflictActionForPolicy(edpBlock) = ercNone, "block does not pick a resolution"
 
 End Sub
+
+
+Public Sub TestRefusalJsonShape()
+
+    Dim dResult As Dictionary
+
+    Set dResult = ParseJson(RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False))
+    TestAssert dResult("success") = False, "a refusal is not a success"
+    TestAssert dResult("error_pattern") = "invalid_decision_policy", "the refusal carries its error pattern"
+    TestAssert InStr(dResult("error"), "prefer_source") > 0, "the message lists the valid policy names"
+    TestAssert Not dResult.Exists("started"), "a refusal has no started marker"
+
+    Set dResult = ParseJson(RefusalJson(vbNullString, "not started", False))
+    TestAssert Not dResult.Exists("error_pattern"), "an empty pattern is left out"
+
+End Sub
+
+
+Public Sub TestStartedJsonIsNotAFinalResult()
+
+    Dim dResult As Dictionary
+
+    Set dResult = ParseJson(StartedJson())
+    TestAssert dResult("success") = True, "a start result reports success"
+    TestAssert dResult("started") = True, "a start result is marked started"
+    TestAssert Not dResult.Exists("error_pattern"), "a start result has no error pattern"
+    TestAssert Not dResult.Exists("decisions"), "a start result has no decisions"
+
+End Sub
+
+
+Public Sub TestRuntimeErrorJsonEncodesAnyText()
+
+    Dim dResult As Dictionary
+    Dim strText As String
+
+    strText = "bad ""quote"" \ back" & vbCrLf & "tab" & vbTab & "bell" & Chr$(7)
+    Set dResult = ParseJson(RuntimeErrorJson(strText, 5))
+    TestAssert dResult("success") = False, "a runtime error is not a success"
+    TestAssert dResult("error") = strText, "the error text survives encoding"
+    TestAssert dResult("errorNumber") = 5, "the error number is included"
+
+End Sub

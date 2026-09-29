@@ -52,6 +52,9 @@ Private this As udtThis
 ' Owns interaction mode, decision policy, blocked flag, decision journal and error level.
 Private m_Scope As clsInteractionScope
 
+' Journal of the operation that finished last (see LastDecisions).
+Private m_LastDecisions As Collection
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : Pulse
@@ -96,6 +99,7 @@ Public Function Begin(intType As eOperationType, Optional ByVal intPolicy As eDe
             Me.Result = eorUnknown
             this.State = eosRunning
             this.StartTime = Now
+            Set m_LastDecisions = Nothing
             ' The policy scope opens only now that the operation has begun. Finish
             ' closes it, and UpdateRegistry saves it so Restore can reopen it.
             If intPolicy <> edpAsk Then Scope.OpenScope eimNonInteractive, intPolicy, True
@@ -190,6 +194,7 @@ Public Function Finish(Optional intResult As eOperationResult)
         End If
 
         ' Restore interaction state after the callback has read the journal.
+        Set m_LastDecisions = Scope.Decisions
         Scope.ReleaseOperationScopes
         UpdateRegistry
         modObjects.ReleaseObjects
@@ -602,6 +607,31 @@ End Sub
 '
 Public Function DecisionsJson() As String
     DecisionsJson = Scope.DecisionsJson()
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : Decisions
+' Date      : 09/29/2026
+' Purpose   : Prompts recorded in the current scope, as a collection of dictionaries
+'           : for the JSON encoder.
+'---------------------------------------------------------------------------------------
+'
+Public Function Decisions() As Collection
+    Set Decisions = Scope.Decisions
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : LastDecisions
+' Date      : 09/29/2026
+' Purpose   : Prompts recorded by the operation that most recently finished. Finish
+'           : keeps them because releasing the operation's scope discards the journal.
+'           : Nothing until an operation has finished.
+'---------------------------------------------------------------------------------------
+'
+Public Function LastDecisions() As Collection
+    Set LastDecisions = m_LastDecisions
 End Function
 
 
