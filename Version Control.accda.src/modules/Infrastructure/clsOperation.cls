@@ -205,6 +205,36 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : IsActive
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : True while an export, build, merge, or test run has not finished.
+'---------------------------------------------------------------------------------------
+'
+Public Function IsActive() As Boolean
+    IsActive = (Me.Status = eosRunning Or Me.Status = eosStaged)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : StatusName
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Status as a string for JSON results: running, staged, or ready.
+'---------------------------------------------------------------------------------------
+'
+Public Function StatusName() As String
+
+    Select Case Me.Status
+        Case eosRunning: StatusName = "running"
+        Case eosStaged: StatusName = "staged"
+        Case Else: StatusName = "ready"
+    End Select
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : Status
 ' Author    : Adam Waller
 ' Date      : 5/9/2025

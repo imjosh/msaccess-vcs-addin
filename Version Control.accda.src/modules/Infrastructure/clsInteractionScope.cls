@@ -31,9 +31,6 @@ Option Explicit
 '@Folder("Infrastructure")
 
 
-' Low bits of a MsgBox button value hold the button style (vbOKOnly ... vbRetryCancel).
-Private Const BUTTON_STYLE_MASK As Long = 7
-
 Private Const KIND_DECISION_REQUIRED As String = "decision_required"
 Private Const KIND_ACKNOWLEDGED As String = "acknowledged"
 Private Const KIND_APPLIED As String = "applied"
@@ -326,7 +323,7 @@ Public Function ResolvePrompt(ByVal intButtons As Long, _
     ResolveNonInteractivePrompt intButtons, this.Policy, intResult, strResolution, blnBlocked
     If blnBlocked Then
         RecordDecision KIND_DECISION_REQUIRED, strTitle, strMessage, strResolution, _
-            "buttons=" & CStr(intButtons And BUTTON_STYLE_MASK)
+            "buttons=" & CStr(intButtons And MB_BUTTON_STYLE_MASK)
     ElseIf strResolution = RESOLUTION_ACKNOWLEDGED Then
         RecordDecision KIND_ACKNOWLEDGED, strTitle, strMessage, strResolution
     Else

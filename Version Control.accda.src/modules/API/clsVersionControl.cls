@@ -2735,7 +2735,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ListAddinDialogs() As String
-    ListAddinDialogs = modDialogPolicy.ListAddinDialogs()
+    ListAddinDialogs = modDialogInspect.ListAddinDialogs()
 End Function
 
 
@@ -2748,7 +2748,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close") As String
-    DismissAddinDialog = modDialogPolicy.DismissAddinDialog(strName, strAction)
+    DismissAddinDialog = modDialogInspect.DismissAddinDialog(strName, strAction)
 End Function
 
 

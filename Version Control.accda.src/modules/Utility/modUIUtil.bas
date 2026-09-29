@@ -57,6 +57,7 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     Dim intCursor As Integer
     Dim strResolution As String
     Dim strMessage As String
+    Dim strDetail As String
 
     ' Turn off any hourglass
     intCursor = Screen.MousePointer
@@ -68,7 +69,6 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     varLines(2) = Replace(strLine2, "'", "''")
     varLines(3) = Replace(strTitle, "'", "''")
 
-    ' Check interaction mode (lives on the Operation singleton)
     If InteractionIsNormal Then
         ' Normal user interaction with MsgBox
         If varLines(3) = vbNullString Then varLines(3) = T("Version Control Add-in")
@@ -85,28 +85,11 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
         If Len(strLine1) Then strMessage = strMessage & " " & strLine1
         If Len(strLine2) Then strMessage = strMessage & " " & strLine2
         MsgBox2 = Operation.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
-        With New clsConcat
-            .AppendOnAdd = vbCrLf
-            .Add "[**MessageBox Not Displayed**]"
-            If Len(strTitle) Then .Add "Title: " & strTitle
-            If Len(strBold) Then .Add strBold
-            If Len(strLine1) Then .Add strLine1
-            If Len(strLine2) Then .Add strLine2
-            .Add "Resolution: " & strResolution
-            Log.Add .GetStr
-        End With
+        LogSuppressedMessage strBold, strLine1, strLine2, strTitle, "Resolution: " & strResolution
     Else
         ' Silent mode. Don't display any message, but log it instead.
-        With New clsConcat
-            .AppendOnAdd = vbCrLf
-            .Add "[**MessageBox Not Displayed**]"
-            If Len(strTitle) Then .Add "Title: " & strTitle
-            If Len(strBold) Then .Add strBold
-            If Len(strLine1) Then .Add strLine1
-            If Len(strLine2) Then .Add strLine2
-            If intButtons <> vbOKOnly Then .Add "Buttons Flag: " & intButtons
-            Log.Add .GetStr
-        End With
+        If intButtons <> vbOKOnly Then strDetail = "Buttons Flag: " & intButtons
+        LogSuppressedMessage strBold, strLine1, strLine2, strTitle, strDetail
         ' Return default (unattended) result
         MsgBox2 = intDefaultResult
     End If
@@ -115,6 +98,30 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     If intCursor > 0 Then Screen.MousePointer = intCursor
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : LogSuppressedMessage
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Log a message box that was not displayed, with any extra detail line.
+'---------------------------------------------------------------------------------------
+'
+Private Sub LogSuppressedMessage(ByVal strBold As String, ByVal strLine1 As String, _
+    ByVal strLine2 As String, ByVal strTitle As String, ByVal strDetail As String)
+
+    With New clsConcat
+        .AppendOnAdd = vbCrLf
+        .Add "[**MessageBox Not Displayed**]"
+        If Len(strTitle) Then .Add "Title: " & strTitle
+        If Len(strBold) Then .Add strBold
+        If Len(strLine1) Then .Add strLine1
+        If Len(strLine2) Then .Add strLine2
+        If Len(strDetail) Then .Add strDetail
+        Log.Add .GetStr
+    End With
+
+End Sub
 
 
 '---------------------------------------------------------------------------------------

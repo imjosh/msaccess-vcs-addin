@@ -18,9 +18,12 @@ operation never starts, the caller pops the scope immediately.
 | --- | --- |
 | `block` | OK-only prompts are logged and acknowledged. Any other prompt or merge conflict returns `decision_required` and is not approved. |
 | `decline` | Confirmations answer No, Cancel, or Abort. Conflicts keep the database object. |
-| `prefer_source` | Conflicts are overwritten from source. Other confirmations stay `decision_required`. |
-| `prefer_database` | Conflicts keep the database object. |
-| `skip` | Conflicts skip the source file. |
+| `prefer_source` | Each conflict takes the action it asks for, and is overwritten from source when it asks for none. Other confirmations stay `decision_required`. |
+| `prefer_database` | Conflicts keep the database object. Same effect as `skip`. |
+| `skip` | Conflicts keep the database object and the source file is skipped. Same effect as `prefer_database`. |
+
+Conflict policies never answer a generic confirmation such as "Overwrite?".
+Only `decline` does, and it answers No, Cancel, or Abort.
 
 `eimSilent` is unchanged: it logs `MsgBox2` and returns the caller's default.
 Noninteractive mode does not use that default, because the default is
@@ -31,12 +34,30 @@ error level to critical, and makes `Finish` report `eorDecisionRequired`.
 The MCP callback is an error with `decision_required: true` and a `decisions`
 array. It is not `complete`.
 
+## Results
+
+`MergeBuild` and `RunFilteredTests` return a start result, not an outcome:
+`{"success":true,"started":true,"operation_id":...}`. The outcome arrives
+through the completion callback. A request that cannot start (unknown policy,
+another operation running, merge unavailable) returns
+`{"success":false,"error_pattern":...,"error":...}` and posts the same payload
+as an `error` callback. The patterns are `invalid_decision_policy`,
+`merge_not_available`, `operation_already_running`, and `decision_required`.
+A runtime error during a run that also blocked a prompt reports
+`decision_required` with the decisions and the error under `runtime_error`.
+
+`SetOperationPolicy` refuses with `operation_already_running` while an
+operation runs. `ClearOperationPolicy` is always safe to call.
+
 ## Dialogs this mode prevents
 
-- `MsgBox2` (the add-in's message boxes).
+- `MsgBox2` (the add-in's message boxes), including the printer-settings
+  import.
 - `frmVCSConflict` (merge conflicts).
 - The source-folder picker when the project folder is unknown.
-- `frmVCSMain` being left visible as a results window.
+- `frmVCSMain` being left visible as a results window. Every site that opens
+  it goes through `ShowMainForm`, which opens it hidden for a noninteractive
+  run.
 - A second cancel confirmation when a silent or noninteractive run's window
   is closed.
 
@@ -55,8 +76,11 @@ examples are in the MCP repository's `docs/DIALOGS.md`.
 - VBA break mode, which is reported separately from a dialog.
 - Trust-center prompts and "save changes?" confirms.
 
-`ListAddinDialogs` and `DismissAddinDialog` enumerate open `frmVCS*` forms
-when Access is responsive.
+`ListAddinDialogs` and `DismissAddinDialog` (module `modDialogInspect`,
+exposed as `VCS.ListAddinDialogs` and `VCS.DismissAddinDialog`) enumerate
+open `frmVCS*` forms when Access is responsive. Refusals use the patterns
+`not_addin_form`, `unsupported_action`, `operation_in_progress`, and
+`not_open`.
 
 - `action=close` closes a finished window and refuses while an operation is
   running.
