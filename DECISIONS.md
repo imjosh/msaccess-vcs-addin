@@ -83,6 +83,40 @@ contradictory guidance.
 
 ---
 
+## 2026-09-30 — Interaction scopes: owner tokens, opened after Begin, `skip` equals `prefer_database`
+
+**Trigger**: A review of the first noninteractive-policy commit (`cd22aa3`) found policy scopes leaking between operations: `Finish` could pop a scope it had not opened, a policy applied while another operation ran changed that operation, and a test module switching to silent mode could turn a `block` run into one that approved defaults. `prefer_database` and `skip` were documented as different but behaved the same.
+
+**Options explored**:
+- *Pop the top of the scope stack on `Finish`*: rejected. It closes whatever is on top, including a scope a caller opened. Scopes are closed by owner token instead, and closing a token restores the state saved when it opened and discards inner scopes. Closing an unknown token is a no-op. Each scope is operation-owned (`Finish` closes it) or caller-owned (a session policy from `SetOperationPolicy`, closed only by `ClearOperationPolicy` or a replacing set).
+- *Open the policy scope before `Operation.Begin`*: rejected. A refused begin (`operation_already_running`) would then leave a scope open and change the state of the operation that is running. The scope now opens as part of `TryBeginRoot`, so a refusal changes nothing, and its mode and policy ride in the registry-backed state through the Stage and Restore cycle of a timer-driven merge.
+- *Keep `skip` and `prefer_database` as two behaviours*: rejected. Nothing distinguishes them (both keep the database object and skip the source file), and documenting a difference that does not exist misleads callers. Both names stay accepted and the docs and enum comments say they are equivalent. Give them distinct behaviour only if a caller needs it.
+
+**Decision**: `clsInteractionScope` owns mode, policy, blocked flag, decision journal and saved error level, with open-by-token and close-by-token. While any enclosing scope is noninteractive, a request for silent mode leaves the mode noninteractive. `clsOperation` opens an operation-owned scope for each root that begins under a policy, so one root's blocked flag and decisions do not carry into the next.
+
+**What this rules out**: A "pop the top" operation. A policy scope that opens before the operation is granted. Two policy names with no behavioural difference between them being presented as different. Revisit `skip` and `prefer_database` if a caller needs to tell them apart.
+
+**Relevant files**: `Infrastructure/clsInteractionScope.cls`, `Infrastructure/clsOperation.cls`, `Utility/modDialogPolicy.bas`, `API/clsVersionControl.cls`, `docs/noninteractive-dialogs.md`, `.scratch/noninteractive-dialogs-hardening.md`.
+
+---
+
+## 2026-09-30 — The sync return of `MergeBuild` is a start result only
+
+**Trigger**: MCP assumed `MergeBuild` returns the merge's final result. The merge continues on a timer after `MergeBuild` returns, so the caller cannot have the outcome then.
+
+**Options explored**:
+- *Make `MergeBuild` synchronous and return the final outcome*: rejected. The merge is staged on a timer after `MergeBuild` returns, so the outcome does not exist yet. Making it synchronous is a redesign of the merge, out of scope for the hardening work.
+- *Return `success: true` once the merge is staged*: rejected. A caller would read it as a merged database, when the merge can still block on a prompt or fail.
+- *Send nothing to the callback for a refusal*: rejected. A caller waiting on the callback would wait for a completion that never comes.
+
+**Decision**: `MergeBuild` returns JSON that says only whether the merge started: `{"success":true,"started":true,"operation_id":...}`, or a refusal with an `error_pattern` (`invalid_decision_policy`, `merge_not_available`, `operation_already_running`, `decision_required`). A refusal is also posted to the completion callback when MCP is active, and the final outcome arrives only through the callback. Calling `MergeBuild` as a statement still works. `RunFilteredTests` is not a start result: it runs the tests before it returns, so its return is the final results JSON.
+
+**What this rules out**: Reading `success: true` from `MergeBuild` as a completed merge. A synchronous `MergeBuild`. Revisit if the merge stops being timer-driven.
+
+**Relevant files**: `API/clsVersionControl.cls` (`MergeBuild`, `RunFilteredTests`), `docs/noninteractive-dialogs.md`, MCP `docs/DIALOGS.md`.
+
+---
+
 ## 2026-09-16 — Defer a dual-runtime native export worker pending a focused speed probe
 
 **Trigger**: A historical full export took 451.29 s; its query profile attributed

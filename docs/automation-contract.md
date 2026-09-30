@@ -207,8 +207,9 @@ suspends the root on the same stack that started it and issues no continuation
 token; pauses nest, and only the outermost resume restores the root.
 
 **Effective interaction mode** belongs to the root and only ratchets tighter
-(`eimSilent` wins over `eimNormal`). While a root is active a looser mode is
-ignored, so nothing deeper in an operation can revoke silence a caller asked for;
+(`eimSilent` wins over `eimNormal`, and `eimNonInteractive`, opened by a decision
+policy, wins over both; see [noninteractive-dialogs.md](noninteractive-dialogs.md)).
+While a root is active a looser mode is ignored, so nothing deeper in an operation can revoke silence a caller asked for;
 between roots the value is only the default for the next root, so relaxing it is
 allowed. Completing a root resets it, which is why headless callers
 no longer restore it by hand. **`Attended`** is a root capability (`Not
