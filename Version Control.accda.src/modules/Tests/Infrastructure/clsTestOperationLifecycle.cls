@@ -97,6 +97,51 @@ Public Sub TestBeginWithPolicyRefusedWhileRunning()
 End Sub
 
 
+Public Sub TestRefusedNestedBeginPreservesSynchronousRoot()
+
+    Dim cOp As clsOperation
+    Dim strToken As String
+    Dim intMode As eInteractionMode
+    Dim intModeBefore As eInteractionMode
+    Dim dDone As Dictionary
+
+    ' Begin keeps the lease of its synchronous root on the instance. A refused Begin
+    ' must not replace it: releasing that lease abandons the root while its owner is
+    ' still executing.
+    Set cOp = NewUnattendedOperation
+    intModeBefore = cOp.InteractionMode
+    TestAssert cOp.Begin(eotExport, edpBlock), "the first Begin is granted"
+    strToken = cOp.CurrentRootToken
+    intMode = cOp.InteractionMode
+    TestAssert Len(strToken) > 0, "the root has a token"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the root runs under the block policy"
+
+    TestAssert Not cOp.Begin(eotMerge, edpBlock), "a nested Begin is refused"
+    TestAssert cOp.Status = eosRunning, "the refusal leaves the root running"
+    TestAssert cOp.CurrentRootToken = strToken, "the root keeps its identity"
+    TestAssert cOp.OperationType = eotExport, "the root keeps its type"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the root keeps its policy"
+    TestAssert cOp.InteractionMode = intMode, "the root keeps its interaction scope"
+    TestAssert cOp.LastCompletion Is Nothing, "the refusal emits no terminal callback"
+
+    ' A second refusal is as harmless as the first.
+    TestAssert Not cOp.Begin(eotOther), "an unscoped nested Begin is refused"
+    TestAssert cOp.Status = eosRunning, "the root is still running"
+    TestAssert cOp.LastCompletion Is Nothing, "still no terminal callback"
+
+    cOp.Finish eorSuccess
+    Set dDone = cOp.LastCompletion
+    TestAssert Not dDone Is Nothing, "the owner's Finish completes the root"
+    TestAssert cOp.Status = eosReady, "the operation is ready again"
+    TestAssert cOp.Result = eorSuccess, "the root keeps the owner's result"
+    TestAssert cOp.InteractionMode = intModeBefore, "the interaction scope is restored"
+    TestAssert cOp.Begin(eotOther), "a later Begin succeeds"
+    cOp.Finish eorSuccess
+    TestAssert Not cOp.LastCompletion Is dDone, "the later root completes on its own"
+
+End Sub
+
+
 Public Sub TestPolicyRequestRefusedWhileRunning()
 
     Dim cOp As clsOperation
