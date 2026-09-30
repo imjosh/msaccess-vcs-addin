@@ -1731,7 +1731,10 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
         VCSIndex.Save
     End If
 
-    If blnUserCanceled Then
+    If Operation.DecisionBlocked Then
+        ' A prompt no policy answered is not a plain failure or cancel.
+        intResult = eorDecisionRequired
+    ElseIf blnUserCanceled Then
         intResult = eorCanceled
     ElseIf blnCritical Or Operation.ErrorLevel >= eelError Then
         intResult = eorFailed
@@ -1750,7 +1753,11 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     End If
 
     Operation.Finish intResult
-    FinishScopedSync = ConvertToJson(dResult)
+    If intResult = eorDecisionRequired Then
+        FinishScopedSync = DecisionRequiredJson(Operation.LastDecisions)
+    Else
+        FinishScopedSync = ConvertToJson(dResult)
+    End If
 
 End Function
 
