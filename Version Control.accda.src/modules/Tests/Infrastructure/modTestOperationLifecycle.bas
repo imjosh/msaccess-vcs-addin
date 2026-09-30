@@ -244,6 +244,127 @@ Public Sub TestSecondDetachMustTransferLeaseNotComplete()
 End Sub
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : ContinueBuild
+' Date      : 09/30/2026
+' Purpose   : Stage a merge root as MergeBuild does, resume it as the build timer does,
+'           : let "Build" record intBuildResult at intLevel, then complete the resumed
+'           : lease the way RunBuildFromContinuation does. Returns the operation.
+'---------------------------------------------------------------------------------------
+'
+Private Function ContinueBuild(intBuildResult As eOperationResult, intLevel As eErrorLevel) As clsOperation
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim cResumed As clsRootOperationLease
+
+    Set cOp = NewOperation(True)
+    Set cRoot = cOp.TryBeginRoot(eotMerge, edpBlock)
+    Set cResumed = cOp.ResumeRoot(cRoot.DetachForContinuation())
+    cOp.Result = intBuildResult
+    cOp.ErrorLevel = intLevel
+    cResumed.Complete BuildContinuationResult(cOp)
+    Set ContinueBuild = cOp
+
+End Function
+
+
+Public Sub TestBuildContinuationKeepsTheBuildResult()
+
+    Dim cOp As clsOperation
+
+    ' The reproduction: Build rejected the target and imported nothing, but only
+    ' warnings were logged. The continuation used to complete that as success.
+    Set cOp = ContinueBuild(eorFailed, eelWarning)
+    TestAssert cOp.Result = eorFailed, "a rejected merge completes as failed"
+    TestAssert cOp.LastCompletion("type") = "error", "the terminal callback reports failure"
+
+    Set cOp = ContinueBuild(eorCanceled, eelNoError)
+    TestAssert cOp.Result = eorCanceled, "a cancelled build stays cancelled"
+    TestAssert cOp.LastCompletion("type") = "cancelled", "the terminal callback reports cancellation"
+
+    Set cOp = ContinueBuild(eorSuccess, eelWarning)
+    TestAssert cOp.Result = eorSuccess, "a successful merge with warnings still succeeds"
+    TestAssert cOp.LastCompletion("type") = "complete", "the terminal callback reports success"
+
+    Set cOp = ContinueBuild(eorSuccess, eelCritical)
+    TestAssert cOp.Result = eorFailed, "a critical error still fails a build that recorded success"
+
+    Set cOp = ContinueBuild(eorFailed, eelCritical)
+    TestAssert cOp.Result = eorFailed, "a critical failure stays a failure"
+
+    ' Build sets an explicit result on every path that reaches its end, so an unknown
+    ' result is never read as success.
+    Set cOp = ContinueBuild(eorUnknown, eelNoError)
+    TestAssert cOp.Result = eorFailed, "an unknown build result completes as failed"
+
+End Sub
+
+
+Public Sub TestBuildContinuationKeepsDecisionRequired()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim cResumed As clsRootOperationLease
+    Dim dDone As Dictionary
+
+    ' Build recorded failure after a prompt was blocked. decision_required stays the
+    ' primary outcome and keeps its decisions.
+    Set cOp = NewOperation(True)
+    Set cRoot = cOp.TryBeginRoot(eotMerge, edpBlock)
+    Set cResumed = cOp.ResumeRoot(cRoot.DetachForContinuation())
+    cOp.ResolvePrompt vbYesNo, "Confirm", "Proceed?"
+    cOp.Result = eorFailed
+    cResumed.Complete BuildContinuationResult(cOp)
+    Set dDone = cOp.LastCompletion
+    TestAssert cOp.Result = eorDecisionRequired, "decision_required wins over the build's failure"
+    TestAssert dDone("decision_required"), "the terminal callback carries decision_required"
+    TestAssert dDone("error_pattern") = ERR_DECISION_REQUIRED, "the terminal callback carries the pattern"
+    TestAssert dDone("decisions").Count = 1, "the terminal callback keeps the decision"
+
+    ' The same outcome recorded only on the build's result survives too.
+    Set cOp = ContinueBuild(eorDecisionRequired, eelNoError)
+    TestAssert cOp.Result = eorDecisionRequired, "an explicit decision_required result is kept"
+
+End Sub
+
+
+Public Sub TestBuildContinuationKeepsLeaseAndPolicyAcrossStaging()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim cResumed As clsRootOperationLease
+    Dim intPolicyBefore As eDecisionPolicy
+    Dim intModeBefore As eInteractionMode
+    Dim strToken As String
+
+    ' The staged root keeps its identity and policy until the continuation completes it,
+    ' and only completion restores the interaction state it opened.
+    Set cOp = NewOperation(True)
+    intPolicyBefore = cOp.DecisionPolicy
+    intModeBefore = cOp.InteractionMode
+    Set cRoot = cOp.TryBeginRoot(eotMerge, edpBlock)
+    strToken = cRoot.DetachForContinuation()
+    TestAssert cOp.Status = eosStaged, "the root is staged for the timer"
+    TestAssert cOp.CurrentRootToken = strToken, "the staged root keeps its token"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the staged root keeps its policy"
+    TestAssert cOp.InteractionMode = eimNonInteractive, "the staged root stays noninteractive"
+
+    Set cResumed = cOp.ResumeRoot(strToken)
+    TestAssert Not cResumed Is Nothing, "the continuation resumes the root"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the resumed root keeps its policy"
+    TestAssert cOp.OperationType = eotMerge, "the resumed root keeps its type"
+
+    cOp.Result = eorFailed
+    cResumed.Complete BuildContinuationResult(cOp)
+    TestAssert cOp.Status = eosReady, "completion finishes the root"
+    TestAssert cOp.DecisionPolicy = intPolicyBefore, "completion restores the policy"
+    TestAssert cOp.InteractionMode = intModeBefore, "completion restores the interaction mode"
+    TestAssert cOp.ResumeRoot(strToken) Is Nothing, "the completed root cannot be resumed"
+
+End Sub
+
+
 Public Sub TestPauseScopeDoesNotFinishRoot()
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease

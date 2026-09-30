@@ -40,7 +40,13 @@ array. It is not `complete`.
 
 `MergeBuild` returns a start result, not an outcome:
 `{"success":true,"started":true,"operation_id":...}`. The merge continues on a
-timer, and the outcome arrives through the completion callback.
+timer, and the outcome arrives through the completion callback. That callback
+reports what the build recorded: a merge that rejected its target (for example
+a source file name that does not match the open database) completes as an
+`error` even when no critical error was logged, and a cancelled or
+`decision_required` build keeps that outcome. A critical error fails a build
+that recorded success, and a build that recorded no outcome completes as an
+`error`, never as success.
 `RunFilteredTests` is synchronous: it runs the tests before it returns, and its
 return is the final results JSON. A request to either that cannot start
 (unknown policy, another operation running, merge unavailable) returns

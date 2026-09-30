@@ -1712,7 +1712,6 @@ Public Sub RunBuildFromContinuation(strRootToken As String, strSourceFolder As S
     Optional strAlternatePath As String, Optional blnResumed As Boolean = False)
 
     Dim cRoot As clsRootOperationLease
-    Dim blnSuccess As Boolean
 
     Set cRoot = Operation.ResumeRoot(strRootToken)
     If cRoot Is Nothing Then
@@ -1728,12 +1727,7 @@ Public Sub RunBuildFromContinuation(strRootToken As String, strSourceFolder As S
         cRoot.DetachForContinuation
         Exit Sub
     End If
-    blnSuccess = (Operation.ErrorLevel <> eelCritical)
-    If Not blnSuccess Or Operation.ErrorLevel = eelCritical Then
-        cRoot.Complete eorFailed
-    Else
-        cRoot.Complete eorSuccess
-    End If
+    cRoot.Complete BuildContinuationResult(Operation)
     Exit Sub
 
 ErrHandler:
@@ -1746,6 +1740,30 @@ ErrHandler:
     End If
 
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BuildContinuationResult
+' Date      : 09/30/2026
+' Purpose   : The result a build continuation completes its root with. Build records
+'           : its outcome in the operation's Result on every path that reaches its end,
+'           : so that outcome is kept: a merge that rejected its target fails even
+'           : though no critical error was logged. A critical error still fails a
+'           : build that recorded success. An unknown result means Build never reached
+'           : its end, so it fails rather than reporting success Build did not record.
+'           : A blocked prompt still wins over all of these when the root finishes.
+'---------------------------------------------------------------------------------------
+'
+Public Function BuildContinuationResult(cOp As clsOperation) As eOperationResult
+    Select Case cOp.Result
+        Case eorSuccess
+            BuildContinuationResult = IIf(cOp.ErrorLevel = eelCritical, eorFailed, eorSuccess)
+        Case eorUnknown
+            BuildContinuationResult = eorFailed
+        Case Else
+            BuildContinuationResult = cOp.Result
+    End Select
+End Function
 
 
 '---------------------------------------------------------------------------------------
