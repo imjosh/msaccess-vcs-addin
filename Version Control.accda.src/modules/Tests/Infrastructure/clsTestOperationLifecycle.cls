@@ -17,9 +17,10 @@ Attribute VB_Exposed = False
 '           : operations that run under it and closes only when the caller clears it.
 '           : Every test that needs a running operation uses a private
 '           : instance, so no result depends on where the host run started. The session
-'           : operation is only read, by the clearing test. Start, restore and exit paths
-'           : of MergeBuild and RunFilteredTests need a free operation and are covered by
-'           : the scripted pass in X01.
+'           : operation is only read, by the clearing test and the invalid test-run
+'           : policy test. Start, restore and exit paths of MergeBuild and
+'           : RunFilteredTests need a free operation and are covered by scripted passes
+'           : (X01; A18 for a test run's options loading).
 '---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
@@ -266,6 +267,31 @@ Public Sub TestInvalidSessionPolicyLeavesThePolicyInForce()
     TestAssert cOp.InteractionMode = eimNonInteractive, "the refusal leaves the operation noninteractive"
     ClearSessionPolicy cOp
     TestAssert cOp.DecisionPolicy = intPolicy, "one clear still removes it"
+
+End Sub
+
+
+Public Sub TestInvalidTestRunPolicyRefusedBeforeLoadingOptions()
+
+    Dim cSaved As clsOptions
+    Dim intStatus As eOperationState
+    Dim blnLoaded As Boolean
+    Dim strJson As String
+
+    ' Loading the options can log an error that opens a message box, so an unknown
+    ' policy is refused before RunFilteredTests reads its default filter. Nothing
+    ' starts, so the session operation is only read.
+    If OptionsLoaded Then Set cSaved = Options
+    intStatus = Operation.Status
+    Set Options = Nothing
+    strJson = VCS.RunFilteredTests("no-such-policy")
+    blnLoaded = OptionsLoaded
+    Set Options = cSaved
+
+    TestAssert InStr(strJson, ERR_INVALID_DECISION_POLICY) > 0, "an unknown name is refused"
+    TestAssert Not blnLoaded, "the refusal does not load the options"
+    TestAssert Operation.Status = intStatus, "the refusal leaves the operation's status alone"
+    TestAssert LiveStateUnchanged(), "the refusal leaves the interaction state alone"
 
 End Sub
 

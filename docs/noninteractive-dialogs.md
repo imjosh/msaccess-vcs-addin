@@ -124,6 +124,11 @@ and export resources alone.
   policy scope opens with the root, so until then `Log.Error` only logs
   (`MCPCallBeforeRoot`). `MCPDebugLog` writes through `TryAppendToFile`,
   which drops a failed line without logging it.
+- An options-loading error in `RunFilteredTests`, such as conflict markers in
+  `vcs-options.json`. It reads `DefaultTestFilter` only after it has validated
+  the policy and begun its root, so the policy acknowledges the error's box and
+  the error goes to the run's log. An unknown policy or a refused root returns
+  before the options load.
 - `frmVCSConflict` (merge conflicts).
 - The source-folder picker when the project folder is unknown.
 - `frmVCSMain` being left visible as a results window. Every site that opens
