@@ -21,6 +21,9 @@ Option Explicit
 
 Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 
+' Test seam for ImportByType / ExportByType; see FaultAfterBegin.
+Private m_lngFaultAfterBegin As Long
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : Show
@@ -1335,7 +1338,7 @@ ExportCleanUp:
     Exit Function
 
 ErrHandler:
-    ExportObject = SingleObjectErrHandler("ExportObject", blnBegun)
+    ExportObject = ApiOperationErrHandler("ExportObject", blnBegun)
 
 End Function
 
@@ -1478,21 +1481,23 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Exit Function
 
 ErrHandler:
-    ImportObject = SingleObjectErrHandler("ImportObject", blnBegun)
+    ImportObject = ApiOperationErrHandler("ImportObject", blnBegun)
 
 End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : SingleObjectErrHandler
+' Procedure : ApiOperationErrHandler
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : Shared ErrHandler for ImportObject and ExportObject. When the call began
-'           : its operation, the error goes into that operation's log, the log is saved
-'           : while the Log singleton still holds it, and the operation is finished.
+' Purpose   : Shared ErrHandler for ImportObject, ExportObject, ImportByType and
+'           : ExportByType. blnBegun is True only once the call's own Begin succeeded.
+'           : Then the error goes into that operation's log, the log is saved while the
+'           : Log singleton still holds it, and the operation is finished. Before that,
+'           : any running root is another caller's, so nothing of it is touched.
 '---------------------------------------------------------------------------------------
 '
-Private Function SingleObjectErrHandler(strProcedure As String, blnBegun As Boolean) As String
+Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Boolean) As String
 
     Dim lngNumber As Long
     Dim strDescription As String
@@ -1506,6 +1511,7 @@ Private Function SingleObjectErrHandler(strProcedure As String, blnBegun As Bool
     On Error Resume Next
 
     If blnBegun Then
+        ReleaseTableDataSortExport
         If Log.Active Then
             Log.Error eelError, T("Unexpected error {0}: {1}", var0:=lngNumber, var1:=strDescription), _
                 ModuleName(Me) & "." & strProcedure
@@ -1517,7 +1523,7 @@ Private Function SingleObjectErrHandler(strProcedure As String, blnBegun As Bool
         Set cOp = Operation
     End If
 
-    SingleObjectErrHandler = FailSingleObjectOperation(cOp, strLogPath, lngNumber, strDescription)
+    ApiOperationErrHandler = FailSingleObjectOperation(cOp, strLogPath, lngNumber, strDescription)
 
 End Function
 
@@ -1548,6 +1554,7 @@ Public Function ExportByType(ByVal varTypes As Variant, _
     Dim dResult As Dictionary
     Dim colContainers As Collection
     Dim strError As String
+    Dim blnBegun As Boolean
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -1582,14 +1589,16 @@ Public Function ExportByType(ByVal varTypes As Variant, _
         ExportByType = ConvertToJson(dResult)
         Exit Function
     End If
+    blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Export")
+    If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
     modExport.ExportScoped colContainers, blnFullExport
     ExportByType = FinishScopedSync(dResult, colContainers, True)
     Exit Function
 
 ErrHandler:
-    ExportByType = ScopedSyncErrHandler(dResult)
+    ExportByType = ApiOperationErrHandler("ExportByType", blnBegun)
 
 End Function
 
@@ -1622,6 +1631,7 @@ Public Function ImportByType(ByVal varTypes As Variant, _
     Dim dResult As Dictionary
     Dim colContainers As Collection
     Dim strError As String
+    Dim blnBegun As Boolean
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -1656,16 +1666,34 @@ Public Function ImportByType(ByVal varTypes As Variant, _
         ImportByType = ConvertToJson(dResult)
         Exit Function
     End If
+    blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Import")
+    If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
     modBuild.MergeScoped colContainers, blnFullImport
     ImportByType = FinishScopedSync(dResult, colContainers, False)
     Exit Function
 
 ErrHandler:
-    ImportByType = ScopedSyncErrHandler(dResult)
+    ImportByType = ApiOperationErrHandler("ImportByType", blnBegun)
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FaultAfterBegin
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : An error number that ImportByType and ExportByType raise once they have
+'           : begun their own operation and started its log. The work itself swallows
+'           : its errors, so this is the only way to reach their error path after
+'           : acquisition. Friend scope keeps it off the COM and CallByName API, and
+'           : VCS returns a new instance per call, so it cannot outlive a check.
+'---------------------------------------------------------------------------------------
+'
+Friend Property Let FaultAfterBegin(ByVal lngNumber As Long)
+    m_lngFaultAfterBegin = lngNumber
+End Property
 
 
 '---------------------------------------------------------------------------------------
@@ -1778,29 +1806,6 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Else
         FinishScopedSync = ConvertToJson(dResult)
     End If
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : ScopedSyncErrHandler
-' Purpose   : Ensure scoped sync operations always finish the Operation on error.
-'---------------------------------------------------------------------------------------
-'
-Private Function ScopedSyncErrHandler(dResult As Dictionary) As String
-
-    If Operation.Status = eosRunning Then
-        Perf.EndTiming
-        ReleaseTableDataSortExport
-        Log.Active = False
-        Operation.Finish eorFailed
-    End If
-
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    ScopedSyncErrHandler = ConvertToJson(dResult)
 
 End Function
 

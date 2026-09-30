@@ -431,6 +431,32 @@ Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
 End Sub
 
 
+Public Sub TestApiErrorAfterOwnFinishDoesNotFinishAgain()
+
+    Dim cOp As clsOperation
+    Dim dDone As Dictionary
+    Dim strJson As String
+
+    ' An error raised in ImportByType or ExportByType after FinishScopedSync already
+    ' finished the call's own root. The root completes once, with its own result.
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotExport), "the export begins"
+    cOp.Finish eorSuccess
+    Set dDone = cOp.LastCompletion
+
+    strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Export_1.log", 6, "Overflow")
+    TestAssert cOp.LastCompletion Is dDone, "no second completion is emitted"
+    TestAssert cOp.Result = eorSuccess, "the finished root keeps its result"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the session policy is still in force"
+    TestAssert InStr(strJson, """success"":false") > 0, "the result is not a success"
+    TestAssert InStr(strJson, """error"":""Overflow""") > 0, "the result carries the error"
+    TestAssert InStr(strJson, """errorNumber"":6") > 0, "the result carries the error number"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
 Public Sub TestSessionPolicySetAndClearedInSeparateCalls()
 
     Dim cOp As clsOperation

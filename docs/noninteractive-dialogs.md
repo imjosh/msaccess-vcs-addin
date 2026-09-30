@@ -104,6 +104,12 @@ the policy blocked during either call returns `decision_required` with the
 decisions, like the multi-object calls, and a raised error after it goes
 under `runtime_error`.
 
+`ImportByType` and `ExportByType` share that error path. A raised error
+returns the original `error` and `errorNumber`, and finishes only a root
+the call itself began. An error before its `Begin` succeeded, such as an
+overflowing type value, leaves another caller's running root, policy, log
+and export resources alone.
+
 ## Dialogs this mode prevents
 
 - `MsgBox2` (the add-in's message boxes), including the printer-settings
