@@ -172,6 +172,18 @@ End Property
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : ClearLastResultsPath
+' Date      : 09/30/2026
+' Purpose   : Forget the previous run's results file. clsOperation calls this when a
+'           : test-run root begins, so a run that fails before Scan cannot report it.
+'---------------------------------------------------------------------------------------
+'
+Public Sub ClearLastResultsPath()
+    this.LastResultsPath = vbNullString
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : Scan
 ' Author    : Adam Waller
 ' Date      : 5/7/2026

@@ -3190,6 +3190,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim intResult As eOperationResult
     Dim cRoot As clsRootOperationLease
     Dim cTrapping As clsVbeErrorTrappingScope
+    Dim strError As String
+    Dim lngError As Long
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -3401,7 +3403,11 @@ CleanUp:
     Exit Function
 
 ErrHandler:
-    ExecuteTests = RuntimeErrorJson(Err.Description, Err.Number)
+    strError = Err.Description
+    lngError = Err.Number
+    ' An async caller reads only the completion callback, so the root keeps the error.
+    If Not cRoot Is Nothing Then cRoot.RecordRuntimeError strError, lngError
+    ExecuteTests = RuntimeErrorJson(strError, lngError)
     Resume CleanUp
 
 End Function

@@ -455,6 +455,75 @@ Public Sub TestSessionPolicyBelongsToItsOperation()
 End Sub
 
 
+Public Sub TestRuntimeErrorRidesOnTerminalCallback()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim dDone As Dictionary
+
+    ' An async caller reads only the callback, so the error text has to be on it.
+    Set cOp = NewUnattendedOperation
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    cRoot.RecordRuntimeError "Division by zero", 11
+    cRoot.Complete eorFailed
+
+    Set dDone = cOp.LastCompletion
+    TestAssert dDone("type") = "error", "a runtime error finishes as an error callback"
+    TestAssert dDone("message") = "Division by zero", "the message is the error text"
+    TestAssert dDone("runtime_error") = "Division by zero", "the callback carries runtime_error"
+    TestAssert dDone("errorNumber") = 11, "the callback carries the error number"
+    TestAssert Not dDone.Exists("decision_required"), "no prompt was blocked"
+
+End Sub
+
+
+Public Sub TestRuntimeErrorAfterBlockedPromptRidesOnDecisionCallback()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim dDone As Dictionary
+
+    ' The decision is primary; the runtime error rides along, as in the sync result.
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    cOp.ResolvePrompt vbYesNo, "Confirm", "Overwrite?"
+    cRoot.RecordRuntimeError "Object variable not set", 91
+    cRoot.Complete eorFailed
+
+    Set dDone = cOp.LastCompletion
+    TestAssert dDone("decision_required") = True, "the callback is decision_required"
+    TestAssert dDone("error_pattern") = ERR_DECISION_REQUIRED, "the pattern is decision_required"
+    TestAssert dDone.Exists("decisions"), "the callback lists the blocked prompt"
+    TestAssert dDone("runtime_error") = "Object variable not set", "the error is kept as runtime_error"
+    TestAssert dDone("errorNumber") = 91, "the callback carries the error number"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
+Public Sub TestRuntimeErrorBelongsToItsRoot()
+
+    Dim cOp As clsOperation
+    Dim cFirst As clsRootOperationLease
+    Dim cSecond As clsRootOperationLease
+
+    ' Neither the next root nor a lease that no longer holds the root can carry it over.
+    Set cOp = NewUnattendedOperation
+    Set cFirst = cOp.TryBeginRoot(eotOther)
+    cFirst.RecordRuntimeError "Division by zero", 11
+    cFirst.Complete eorFailed
+
+    Set cSecond = cOp.TryBeginRoot(eotOther)
+    cFirst.RecordRuntimeError "Stale lease", 5
+    cSecond.Complete eorSuccess
+    TestAssert cOp.LastCompletion("type") = "complete", "the next root succeeds"
+    TestAssert Not cOp.LastCompletion.Exists("runtime_error"), "no runtime_error on the next root"
+    TestAssert Not cOp.LastCompletion.Exists("errorNumber"), "no error number on the next root"
+
+End Sub
+
+
 ' One SetOperationPolicy or ClearOperationPolicy request: no state survives the call
 ' except what the operation itself keeps.
 Private Sub SetPolicyInOneCall(ByVal cOp As clsOperation, ByVal strPolicy As String)

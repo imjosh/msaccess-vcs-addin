@@ -49,6 +49,10 @@ as an `error` callback. The patterns are `invalid_decision_policy`,
 `merge_not_available`, `operation_already_running`, and `decision_required`.
 A runtime error during a run that also blocked a prompt reports
 `decision_required` with the decisions and the error under `runtime_error`.
+The terminal callback carries the same `runtime_error` and `errorNumber`, since
+an async caller never reads the return value; without a blocked prompt the
+callback is an `error` whose message is the error text. A test-run callback
+names `results_path` only when this run saved results.
 
 `SetOperationPolicy` sets a session policy. It stays in force across
 operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,
