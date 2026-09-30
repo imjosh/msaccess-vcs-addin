@@ -1625,9 +1625,10 @@ End Function
 ' Procedure : FailSingleObjectOperation
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : The error-handler result for an API ImportObject or ExportObject. Finishes
-'           : cOp as failed, so a raised error does not leave the root, its log and its
-'           : interaction scope open for the next call. Pass Nothing when the call had
+' Purpose   : The error-handler result for an API ImportObject, ExportObject,
+'           : ImportByType or ExportByType. Finishes cOp as failed, so a raised error
+'           : does not leave the root, its log and its interaction scope open for the
+'           : next call. Pass Nothing when the call had
 '           : not begun its operation yet: the running root, if any, is someone else's.
 '           : If a prompt was blocked, decision_required is the primary result and the
 '           : error goes alongside as runtime_error, as for a test run.
