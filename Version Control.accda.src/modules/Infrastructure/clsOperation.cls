@@ -531,12 +531,8 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     If m_Root.Completed Then Exit Sub
     If m_Root.State = eosReady And Len(m_Root.Token) = 0 Then Exit Sub
 
-    If Me.DecisionBlocked Then
-        ' An unresolved prompt is not a successful or merely cancelled run.
-        Me.Result = eorDecisionRequired
-    ElseIf intResult > eorUnknown Then
-        Me.Result = intResult
-    End If
+    ' An unresolved prompt is not a successful or merely cancelled run.
+    If Not ApplyBlockedResult() And intResult > eorUnknown Then Me.Result = intResult
     blnWasRunning = (m_Root.State = eosRunning)
 
     m_Root.Completed = True
@@ -832,7 +828,7 @@ End Sub
 Public Function ResolvePrompt(ByVal intButtons As Long, ByVal strTitle As String, _
     ByVal strMessage As String, ByRef strResolution As String) As VbMsgBoxResult
     ResolvePrompt = Scope.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
-    If Scope.Blocked Then Me.Result = eorDecisionRequired
+    ApplyBlockedResult
 End Function
 
 
@@ -861,9 +857,27 @@ Public Sub RecordDecision(ByVal strKind As String, ByVal strTitle As String, _
     Optional ByVal strDetail As String)
 
     Scope.RecordDecision strKind, strTitle, strMessage, strResolution, strDetail
-    If Scope.Blocked Then Me.Result = eorDecisionRequired
+    ApplyBlockedResult
 
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ApplyBlockedResult
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : The one place a blocked prompt becomes eorDecisionRequired. Called when a
+'           : prompt is recorded, because closing a nested scope restores the outer
+'           : scope's blocked flag and would otherwise lose the block, and again by
+'           : Finish. Returns True when the operation is blocked.
+'---------------------------------------------------------------------------------------
+'
+Private Function ApplyBlockedResult() As Boolean
+    If Scope.Blocked Then
+        Me.Result = eorDecisionRequired
+        ApplyBlockedResult = True
+    End If
+End Function
 
 
 '---------------------------------------------------------------------------------------

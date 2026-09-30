@@ -200,21 +200,17 @@ Public Sub ResolveNonInteractivePrompt(ByVal intButtons As Long, _
     Dim intStyle As Long
 
     intStyle = intButtons And MB_BUTTON_STYLE_MASK
+
+    ' The defaults answer an OK-only prompt: acknowledged, nothing blocked.
     blnBlocked = False
     strResolution = DECISION_ACKNOWLEDGED
     intResult = vbOK
-
-    If intStyle = vbOKOnly Then
-        intResult = vbOK
-        strResolution = DECISION_ACKNOWLEDGED
-        Exit Sub
-    End If
+    If intStyle = vbOKOnly Then Exit Sub
 
     intResult = NonDestructiveResult(intStyle)
 
     If intPolicy = edpDecline Then
         strResolution = DECISION_DECLINED
-        blnBlocked = False
         Exit Sub
     End If
 

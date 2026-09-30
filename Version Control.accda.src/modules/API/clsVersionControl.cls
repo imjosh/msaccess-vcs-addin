@@ -172,8 +172,9 @@ End Sub
 Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
 
     Dim intPolicy As eDecisionPolicy
-    Dim eosBefore As eOperationState
+    Dim intStatusBefore As eOperationState
     Dim strNotAvailable As String
+    Dim cPolicyOverride As clsFormPolicyOverride
 
     ' An explicit policy makes this merge noninteractive. The policy scope opens only
     ' once the root is granted (TryBeginRoot inside cmdBuild_Click), and Finish closes it.
@@ -181,18 +182,16 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
     ' refused before anything opens or changes. An empty policy keeps the interactive
     ' (or previously configured) behavior.
     If Len(strDecisionPolicy) > 0 Then
-        If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
-            MergeBuild = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
-            Exit Function
-        End If
+        MergeBuild = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+        If Len(MergeBuild) > 0 Then Exit Function
         If Operation.Status <> eosReady Then
             MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
             Exit Function
         End If
     End If
 
-    eosBefore = Operation.Status
-    If eosBefore = eosReady Then Operation.Result = eorUnknown
+    intStatusBefore = Operation.Status
+    If intStatusBefore = eosReady Then Operation.Result = eorUnknown
 
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
@@ -200,9 +199,11 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
         If .chkFullBuild.Enabled Then
             ' Initiate the merge build
             .chkFullBuild = False
-            .intDecisionPolicy = intPolicy
+            ' The override puts the form's policy back even if cmdBuild_Click raises.
+            Set cPolicyOverride = New clsFormPolicyOverride
+            cPolicyOverride.Init Form_frmVCSMain, intPolicy
             .cmdBuild_Click
-            .intDecisionPolicy = edpAsk
+            cPolicyOverride.Restore
         Else
             strNotAvailable = T("A full build or full export must be performed before you can merge from source.")
             If intPolicy = edpAsk Then
@@ -215,7 +216,7 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
     End With
 
     ' The merge continues on a timer once it has begun (staged).
-    If eosBefore <> eosReady Then
+    If intStatusBefore <> eosReady Then
         ' Begin showed its own dialog. Post the refusal for an async caller.
         MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
     ElseIf Operation.Status = eosStaged Then
@@ -3175,10 +3176,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     On Error GoTo ErrHandler
 
     If Len(strDecisionPolicy) > 0 Then
-        If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
-            ExecuteTests = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
-            Exit Function
-        End If
+        ExecuteTests = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+        If Len(ExecuteTests) > 0 Then Exit Function
     End If
 
     ' An automation session has no one to click Run in the web runner and no
@@ -3206,70 +3205,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         End If
     End If
 
-    If Not DatabaseFileOpen Then
-        If Not blnHeadless Then
-            MsgBox2 T("No Database Open"), _
-                T("Please open a database file before running tests."), _
-                , vbInformation
-        End If
-        If Not Operation.DecisionBlocked Then
-            ExecuteTests = "{""success"":false,""error"":""No database is open.""}"
-        End If
-        GoTo CleanUp
-    End If
-
-    ' A test run needs two projects: the installed add-in, loaded as a library, hosts
-    ' the runner singleton and the TestAssert every assertion routes through, while the
-    ' code under test is whatever CurrentVBProject holds. Opening the installed copy as
-    ' the current database collapses both roles onto one file -- scanning then finds the
-    ' library's own components, and InstallTestAssertModule below would write a module
-    ' into a VBA project that is currently executing, which resets it mid-run. Refuse
-    ' before either can happen; the development copy in the repository is the host.
-    If CurrentDbIsInstalledAddIn Then
-        If blnHeadless Then
-            ExecuteTests = "{""success"":false,""error"":""Refusing to run tests in the installed add-in. " & _
-                "Open the development copy of the add-in and run them there.""}"
-        Else
-            MsgBox2 T("Wrong Database for Tests"), _
-                T("Tests cannot be run in the installed add-in, which is only meant to " & _
-                  "be loaded as a library."), _
-                T("Open the development copy of the add-in and run the tests there."), _
-                vbExclamation
-        End If
-        GoTo CleanUp
-    End If
-
-    ' Ensure modTestAssert is present. A headless run installs it silently (an
-    ' automation session has no one to answer a prompt, and no decision policy
-    ' approves a generic confirmation).
-    If Not TestAssertModuleExists Then
-        If blnHeadless Then
-            InstallTestAssertModule
-        ElseIf vbYes = MsgBox2(T("Test Helper Not Found"), _
-            T("The modTestAssert module was not found in the current project."), _
-            T("Would you like to install it now?"), _
-            vbYesNo + vbQuestion) Then
-            InstallTestAssertModule
-        Else
-            If Not Operation.DecisionBlocked Then
-                ExecuteTests = "{""success"":false,""error"":""modTestAssert is not installed.""}"
-            End If
-            intResult = eorCanceled
-            GoTo CleanUp
-        End If
-    End If
-
-    ' Offer to migrate if no module (other than modTestAssert) uses TestAssert yet
-    ' (skipped in headless mode)
-    If Not TestAssertInUse And Not blnHeadless Then
-        If vbYes = MsgBox2(T("TestAssert Not In Use"), _
-            T("No test modules are using TestAssert yet. Would you like to migrate " & _
-              "Debug.Assert calls to TestAssert in your test modules?"), _
-            T("You can always do this manually later."), _
-            vbYesNo + vbQuestion) Then
-            MigrateDebugAssert
-        End If
-    End If
+    If Not TestRunPreflight(blnHeadless, ExecuteTests, intResult) Then GoTo CleanUp
 
     blnLogWasActive = Log.Active
     blnLogSet = True
@@ -3428,7 +3364,6 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ElseIf blnAllPassed Then
         intResult = eorSuccess
     End If
-    GoTo CleanUp
 
 CleanUp:
     On Error Resume Next
@@ -3449,6 +3384,108 @@ CleanUp:
 ErrHandler:
     ExecuteTests = RuntimeErrorJson(Err.Description, Err.Number)
     Resume CleanUp
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ParsePolicyOrRefuse
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Parse a decision policy name. Returns an empty string and sets intPolicy
+'           : when the name is known, otherwise the invalid_decision_policy refusal.
+'---------------------------------------------------------------------------------------
+'
+Private Function ParsePolicyOrRefuse(ByVal strDecisionPolicy As String, _
+    ByRef intPolicy As eDecisionPolicy) As String
+
+    If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
+        ParsePolicyOrRefuse = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestRunPreflight
+' Author    : Adam Waller
+' Date      : 5/21/2026
+' Purpose   : Checks and prompts before a test run starts, so ExecuteTests only has to
+'           : decide what to do with the answer. Returns True when the run may proceed.
+'           : When it may not, strRefusal holds the JSON to return (empty when a blocked
+'           : prompt supplies it, or the person was shown a message instead) and
+'           : intResult is the result to finish the operation with.
+'---------------------------------------------------------------------------------------
+'
+Private Function TestRunPreflight(ByVal blnHeadless As Boolean, ByRef strRefusal As String, _
+    ByRef intResult As eOperationResult) As Boolean
+
+    If Not DatabaseFileOpen Then
+        If Not blnHeadless Then
+            MsgBox2 T("No Database Open"), _
+                T("Please open a database file before running tests."), _
+                , vbInformation
+        End If
+        If Not Operation.DecisionBlocked Then
+            strRefusal = "{""success"":false,""error"":""No database is open.""}"
+        End If
+        Exit Function
+    End If
+
+    ' A test run needs two projects: the installed add-in, loaded as a library, hosts
+    ' the runner singleton and the TestAssert every assertion routes through, while the
+    ' code under test is whatever CurrentVBProject holds. Opening the installed copy as
+    ' the current database collapses both roles onto one file -- scanning then finds the
+    ' library's own components, and InstallTestAssertModule below would write a module
+    ' into a VBA project that is currently executing, which resets it mid-run. Refuse
+    ' before either can happen; the development copy in the repository is the host.
+    If CurrentDbIsInstalledAddIn Then
+        If blnHeadless Then
+            strRefusal = "{""success"":false,""error"":""Refusing to run tests in the installed add-in. " & _
+                "Open the development copy of the add-in and run them there.""}"
+        Else
+            MsgBox2 T("Wrong Database for Tests"), _
+                T("Tests cannot be run in the installed add-in, which is only meant to " & _
+                  "be loaded as a library."), _
+                T("Open the development copy of the add-in and run the tests there."), _
+                vbExclamation
+        End If
+        Exit Function
+    End If
+
+    ' Ensure modTestAssert is present. A headless run installs it silently (an
+    ' automation session has no one to answer a prompt, and no decision policy
+    ' approves a generic confirmation).
+    If Not TestAssertModuleExists Then
+        If blnHeadless Then
+            InstallTestAssertModule
+        ElseIf vbYes = MsgBox2(T("Test Helper Not Found"), _
+            T("The modTestAssert module was not found in the current project."), _
+            T("Would you like to install it now?"), _
+            vbYesNo + vbQuestion) Then
+            InstallTestAssertModule
+        Else
+            If Not Operation.DecisionBlocked Then
+                strRefusal = "{""success"":false,""error"":""modTestAssert is not installed.""}"
+            End If
+            intResult = eorCanceled
+            Exit Function
+        End If
+    End If
+
+    ' Offer to migrate if no module (other than modTestAssert) uses TestAssert yet
+    ' (skipped in headless mode)
+    If Not TestAssertInUse And Not blnHeadless Then
+        If vbYes = MsgBox2(T("TestAssert Not In Use"), _
+            T("No test modules are using TestAssert yet. Would you like to migrate " & _
+              "Debug.Assert calls to TestAssert in your test modules?"), _
+            T("You can always do this manually later."), _
+            vbYesNo + vbQuestion) Then
+            MigrateDebugAssert
+        End If
+    End If
+
+    TestRunPreflight = True
 
 End Function
 
@@ -3886,7 +3923,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub SetInteractionMode(ByVal intMode As Long)
-    Operation.InteractionMode = intMode
+    modAPI.SetInteractionMode intMode
 End Sub
 
 
