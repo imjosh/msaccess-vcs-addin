@@ -18,9 +18,6 @@ Option Compare Database
 Option Explicit
 '@Folder("API")
 
-' Owner token of the scope opened by SetOperationPolicy. Zero when none is open.
-Private m_PolicyScope As Long
-
 
 Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 
@@ -3930,7 +3927,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
-    SetOperationPolicy = SetSessionPolicy(Operation, strDecisionPolicy, m_PolicyScope)
+    SetOperationPolicy = SetSessionPolicy(Operation, strDecisionPolicy)
 End Function
 
 
@@ -3943,7 +3940,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ClearOperationPolicy() As String
-    ClearOperationPolicy = ClearSessionPolicy(Operation, m_PolicyScope)
+    ClearOperationPolicy = ClearSessionPolicy(Operation)
 End Function
 
 
