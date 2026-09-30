@@ -134,7 +134,7 @@ Private Sub RunExport(Optional intFilter As eContainerFilter = ecfAllObjects, Op
         End If
         ' Set full export checkbox if requested
         If blnFullExport Then .chkFullExport = True
-        .Visible = True
+        SetMainFormVisible Form_frmVCSMain
         .cmdExport_Click
         If Operation.ErrorLevel < eelError Then .AutoClose
     End With

@@ -477,7 +477,7 @@ Public Sub ResetForOperation()
     On Error GoTo 0
 
     Log.SetConsole Me.txtLog, GetProgressBar
-    If Not InteractionIsNonInteractive() Then Me.Visible = True
+    SetMainFormVisible Me
 
 End Sub
 

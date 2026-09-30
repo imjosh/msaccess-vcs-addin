@@ -273,6 +273,19 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : SetMainFormVisible
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Show the open main form for an attended run, and keep it hidden for a
+'           : noninteractive one, including a form that was already visible.
+'---------------------------------------------------------------------------------------
+'
+Public Sub SetMainFormVisible(ByVal frmMain As Form_frmVCSMain)
+    frmMain.Visible = Not InteractionIsNonInteractive()
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ResolveNonInteractivePrompt
 ' Author    : Josh
 ' Date      : 09/29/2026
