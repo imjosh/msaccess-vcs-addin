@@ -207,6 +207,24 @@ Public Sub TestSetSessionPolicyReplacesRatherThanNests()
 End Sub
 
 
+Public Sub TestInvalidSessionPolicyLeavesThePolicyInForce()
+
+    Dim cOp As clsOperation
+    Dim intPolicy As eDecisionPolicy
+
+    Set cOp = NewUnattendedOperation
+    intPolicy = cOp.DecisionPolicy
+    SetSessionPolicy cOp, "block"
+    TestAssert InStr(SetSessionPolicy(cOp, "no-such-policy"), ERR_INVALID_DECISION_POLICY) > 0, _
+        "an unknown name is refused"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the refusal leaves the earlier policy in force"
+    TestAssert cOp.InteractionMode = eimNonInteractive, "the refusal leaves the operation noninteractive"
+    ClearSessionPolicy cOp
+    TestAssert cOp.DecisionPolicy = intPolicy, "one clear still removes it"
+
+End Sub
+
+
 Public Sub TestEachOperationUnderASessionPolicyStartsUnblocked()
 
     Dim cOp As clsOperation

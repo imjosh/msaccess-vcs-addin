@@ -137,12 +137,15 @@ Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As S
     SetSessionPolicy = PolicyRequestRefusal(cOp)
     If Len(SetSessionPolicy) > 0 Then Exit Function
 
-    ' Replace a policy left over from an earlier call rather than nesting under it.
-    cOp.CloseSessionScope
+    ' Refuse an unknown name before touching the scope: a refusal changes nothing, so
+    ' the policy already in force stays in force.
     If Not ParseDecisionPolicy(strPolicy, intPolicy) Then
         SetSessionPolicy = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False)
         Exit Function
     End If
+
+    ' OpenSessionScope replaces a policy left over from an earlier call rather than
+    ' nesting under it.
     cOp.OpenSessionScope intPolicy
 
     Set dResult = New Dictionary
