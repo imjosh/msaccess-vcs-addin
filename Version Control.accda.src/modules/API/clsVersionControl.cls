@@ -1142,7 +1142,8 @@ End Sub
 '           : Accepts any type string recognized by ResolveComponentType (singular,
 '           : plural, or alias forms). For core Access objects the name is required;
 '           : for single-file component types the name is ignored.
-'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}
+'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}, or
+'           : decision_required with "decisions" when the policy blocked a prompt.
 '           : Public method for external API access (e.g., via MCP tools).
 '---------------------------------------------------------------------------------------
 '
@@ -1329,17 +1330,8 @@ ExportCleanUp:
 
     End Select
 
-    ' Build result if not already set by an error path above
-    If Not dResult.Exists("success") Then
-        dResult.Add "success", (Operation.ErrorLevel < eelError)
-        If Operation.ErrorLevel >= eelError Then
-            dResult.Add "error", "Export completed with errors. Check the log for details."
-        End If
-        dResult.Add "logPath", Log.SavedLogFilePath
-    End If
-
-    Operation.Finish
-    ExportObject = ConvertToJson(dResult)
+    ' Finishing the operation releases the Log singleton, so read the log path first.
+    ExportObject = FinishSingleObjectExport(Operation, Log.SavedLogFilePath, dResult)
     Exit Function
 
 ErrHandler:
@@ -1356,7 +1348,8 @@ End Function
 '           : Accepts any type string recognized by ResolveComponentType (singular,
 '           : plural, or alias forms). For single-file component types the name is
 '           : ignored and the entire category is imported.
-'           : Returns JSON: {"success":true/false, "error":"..."}
+'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}, or
+'           : decision_required with "decisions" when the policy blocked a prompt.
 '           : Public method for external API access (e.g., via MCP tools).
 '---------------------------------------------------------------------------------------
 '

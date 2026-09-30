@@ -324,7 +324,7 @@ End Function
 '           : decisions of a finished operation are passed in.
 '---------------------------------------------------------------------------------------
 '
-Private Function DecisionRequiredResult(Optional ByVal colDecisions As Collection) As Dictionary
+Public Function DecisionRequiredResult(Optional ByVal colDecisions As Collection) As Dictionary
 
     Dim dResult As Dictionary
 
