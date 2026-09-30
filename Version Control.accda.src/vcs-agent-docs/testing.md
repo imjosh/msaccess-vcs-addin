@@ -21,11 +21,12 @@ Option Private Module
 
 Public Sub TestDoubleInput()
     TestAssert MyFunction(42) = 84, "MyFunction should double input"
+    TestAssert MyFunction(0) = 0, "Zero input returns zero"
 End Sub
 ```
 
-The optional second `TestAssert` argument names the assertion, which matters
-inside loops and shared helpers.
+The second `TestAssert` argument is optional context that identifies which
+assertion failed, which matters inside loops and shared helpers.
 
 A module counts as a test module if it carries `'@Folder("...Tests...")` (in
 projects using `@Folder` at all) or its name contains `Test`. Within it, only
@@ -38,9 +39,8 @@ method gets a fresh instance, so `Class_Initialize` runs before it and
 test modules `modTest*` or `clsTest*`, and mark standard ones
 `Option Private Module`.
 
-An unhandled error in a standard-module test stops in the VBA debugger and the run
-never finishes (the runner calls it via `Application.Run`, which ignores Error
-Trapping). Class tests report ERROR instead; use one, or handle the error.
+An unhandled error in a standard-module test stops in the debugger and the run never
+finishes (`Application.Run` ignores Error Trapping). Class tests report ERROR instead.
 
 ## Prompts during a run
 
@@ -58,8 +58,8 @@ installed before this feature will not have the flag.
 
 ## Running tests
 
-Run `?VCS.RunTests` from the Immediate Window, or **Tools > Run Tests** on the
-ribbon; after a run it can re-run only the failures.
+Run `?VCS.RunTests` from the Immediate Window, or use **Tools > Run Tests** on the
+ribbon. After a completed run the runner can re-run only the failures.
 
 `RunTests` takes an optional `ParamArray` of filters. Each argument resolves in
 priority order: exact module name, then suite or `@Folder` value (matching the full
@@ -78,10 +78,10 @@ exclusions starts from all tests.
 
 ## Tagging
 
-`'@Tag("name")` annotations categorize tests (case-insensitive). A module-level tag
-sits in the first ~30 lines, before any procedure, and covers every test in it. A
-procedure-level tag sits at the top of the procedure body, before any executable
-line including `Dim`. The two sets merge.
+`'@Tag("name")` annotations categorize tests and are case-insensitive. A
+module-level tag sits in the first ~30 lines, before any procedure, and applies to
+every test in the module. A procedure-level tag sits at the very top of the
+procedure body, before any executable line including `Dim`. The two sets merge.
 
 ## Global suite hooks
 
