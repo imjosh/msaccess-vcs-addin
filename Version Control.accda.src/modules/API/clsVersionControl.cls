@@ -173,6 +173,7 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
 
     Dim intPolicy As eDecisionPolicy
     Dim eosBefore As eOperationState
+    Dim strNotAvailable As String
 
     ' An explicit policy makes this merge noninteractive. The policy scope opens only
     ' once the root is granted (TryBeginRoot inside cmdBuild_Click), and Finish closes it.
@@ -185,7 +186,7 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
             Exit Function
         End If
         If Operation.Status <> eosReady Then
-            MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+            MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
             Exit Function
         End If
     End If
@@ -203,13 +204,12 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
             .cmdBuild_Click
             .intDecisionPolicy = edpAsk
         Else
+            strNotAvailable = T("A full build or full export must be performed before you can merge from source.")
             If intPolicy = edpAsk Then
-                MsgBox2 T("Merge Build Not Available"), _
-                    T("A full build or full export must be performed before you can merge from source."), _
+                MsgBox2 T("Merge Build Not Available"), strNotAvailable, _
                     T("Please perform a full build or full export of this database first."), vbInformation
             End If
-            MergeBuild = RefusalJson(ERR_MERGE_NOT_AVAILABLE, _
-                "A full build or full export must be performed before you can merge from source.")
+            MergeBuild = RefusalJson(ERR_MERGE_NOT_AVAILABLE, strNotAvailable)
             Exit Function
         End If
     End With
@@ -217,7 +217,7 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
     ' The merge continues on a timer once it has begun (staged).
     If eosBefore <> eosReady Then
         ' Begin showed its own dialog. Post the refusal for an async caller.
-        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
     ElseIf Operation.Status = eosStaged Then
         MergeBuild = StartedJson()
     ElseIf Operation.Result = eorDecisionRequired Then
@@ -226,7 +226,7 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
         MergeBuild = DecisionRequiredJson(Operation.LastDecisions)
     Else
         ' Declined in the UI (or a guard in cmdBuild_Click). Nothing was started.
-        MergeBuild = RefusalJson(vbNullString, "The merge did not start.", False)
+        MergeBuild = RefusalJson(vbNullString, T("The merge did not start."), False)
     End If
 
 End Function
@@ -3201,7 +3201,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         If blnHeadless Then Operation.ForceUnattended = True
         Set cRoot = Operation.TryBeginRoot(eotTestRun, intPolicy)
         If cRoot Is Nothing Then
-            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
             GoTo CleanUp
         End If
     End If
@@ -3303,7 +3303,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         If blnHeadless Then Operation.ForceUnattended = True
         Set cRoot = Operation.TryBeginRoot(eotTestRun)
         If cRoot Is Nothing Then
-            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
             GoTo CleanUp
         End If
     End If
@@ -3905,7 +3905,7 @@ Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
     ' A running or staged operation keeps the policy it began with. Refuse without
     ' touching its scope, or the policy this call would replace.
     If Operation.Status <> eosReady Then
-        SetOperationPolicy = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING, False)
+        SetOperationPolicy = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
         Exit Function
     End If
 

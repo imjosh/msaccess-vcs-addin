@@ -21,8 +21,6 @@ Public Const ERR_MERGE_NOT_AVAILABLE As String = "merge_not_available"
 Public Const ERR_OPERATION_ALREADY_RUNNING As String = "operation_already_running"
 Public Const ERR_DECISION_REQUIRED As String = "decision_required"
 
-Public Const MSG_OPERATION_RUNNING As String = "Another operation is already running."
-Private Const MSG_DECISION_REQUIRED As String = "A required decision was not covered by the decision policy."
 
 ' The low bits of a MsgBox style select the button set (vbOKOnly to vbRetryCancel).
 Public Const MB_BUTTON_STYLE_MASK As Long = 7
@@ -228,7 +226,7 @@ Private Function DecisionRequiredResult(Optional ByVal colDecisions As Collectio
     dResult.Add "success", False
     dResult.Add "error_pattern", ERR_DECISION_REQUIRED
     dResult.Add "decision_required", True
-    dResult.Add "error", MSG_DECISION_REQUIRED
+    dResult.Add "error", DecisionRequiredMessage()
     dResult.Add "decisions", colDecisions
     Set DecisionRequiredResult = dResult
 
@@ -247,6 +245,7 @@ Public Function OverlayDecisionRequired(ByVal strJson As String) As String
 
     Dim dParsed As Object
 
+    LogUnhandledErrors
     On Error GoTo Fallback
 
     If Len(strJson) = 0 Then
@@ -258,7 +257,7 @@ Public Function OverlayDecisionRequired(ByVal strJson As String) As String
     dParsed("success") = False
     dParsed("error_pattern") = ERR_DECISION_REQUIRED
     dParsed("decision_required") = True
-    dParsed("error") = MSG_DECISION_REQUIRED
+    dParsed("error") = DecisionRequiredMessage()
     Set dParsed("decisions") = Operation.Decisions
     OverlayDecisionRequired = ConvertToJson(dParsed)
     Exit Function
@@ -276,7 +275,31 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function InvalidPolicyMessage() As String
-    InvalidPolicyMessage = "Unknown decision policy. Use block, prefer_source, prefer_database, skip, or decline."
+    ' The policy names are wire values, so they stay out of the translated sentence.
+    InvalidPolicyMessage = T("Unknown decision policy. Use {0}.", _
+        var0:="block, prefer_source, prefer_database, skip, or decline")
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : OperationRunningMessage
+' Date      : 09/29/2026
+' Purpose   : The message for a request refused because another operation is running.
+'---------------------------------------------------------------------------------------
+'
+Public Function OperationRunningMessage() As String
+    OperationRunningMessage = T("Another operation is already running.")
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DecisionRequiredMessage
+' Date      : 09/29/2026
+' Purpose   : The message for an operation that stopped on an unanswered prompt.
+'---------------------------------------------------------------------------------------
+'
+Private Function DecisionRequiredMessage() As String
+    DecisionRequiredMessage = T("A required decision was not covered by the decision policy.")
 End Function
 
 
