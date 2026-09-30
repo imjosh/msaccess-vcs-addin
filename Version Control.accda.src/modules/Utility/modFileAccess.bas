@@ -451,6 +451,54 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : WriteFileVerified
+' Author    : Josh
+' Date      : 9/30/2026
+' Purpose   : Write a file like WriteFile, then check that it exists. WriteFile logs a
+'           : failed write instead of raising, so the caller cannot tell. Returns False
+'           : with strError set to the error WriteFile logged, or to a description of
+'           : the missing folder or file when nothing was logged.
+'---------------------------------------------------------------------------------------
+'
+Public Function WriteFileVerified(strText As String, strPath As String, ByRef strError As String) As Boolean
+
+    Dim strFolder As String
+    Dim lngJournal As Long
+    Dim colLogged As Collection
+    Dim dEntry As Dictionary
+
+    strError = vbNullString
+    strFolder = FSO.GetParentFolderName(strPath)
+    lngJournal = Log.ErrorJournalCount
+
+    ' A file where the folder should be counts as an existing folder to VerifyPath,
+    ' so check for the folder itself before writing.
+    VerifyPath strFolder & PathSep
+    If FSO.FolderExists(strFolder) Then WriteFile strText, strPath
+
+    If FSO.FileExists(strPath) Then
+        WriteFileVerified = True
+        Exit Function
+    End If
+
+    Set colLogged = Log.GetErrorJournalSince(lngJournal)
+    If colLogged.Count > 0 Then
+        ' Keep the last logged error, without its "ERROR: " prefix.
+        Set dEntry = colLogged(colLogged.Count)
+        strError = Replace(CStr(dEntry("message")), "ERROR: ", vbNullString, 1, 1)
+        If Len(CStr(dEntry("errDescription"))) > 0 Then
+            strError = strError & " (" & dEntry("errDescription") & ")"
+        End If
+    ElseIf Not FSO.FolderExists(strFolder) Then
+        strError = T("Could not create the folder: {0}", var0:=strFolder)
+    Else
+        strError = T("The file was not written: {0}", var0:=strPath)
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : WriteFileNoBom
 ' Author    : Adam Waller
 ' Date      : 11/7/2024

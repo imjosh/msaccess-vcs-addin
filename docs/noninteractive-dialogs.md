@@ -52,7 +52,9 @@ A runtime error during a run that also blocked a prompt reports
 The terminal callback carries the same `runtime_error` and `errorNumber`, since
 an async caller never reads the return value; without a blocked prompt the
 callback is an `error` whose message is the error text. A test-run callback
-names `results_path` only when this run saved results.
+names `results_path` only when this run saved results. When the run finished but
+the results file could not be written, the callback carries `results_error`
+(the logged write error) instead.
 
 `SetOperationPolicy` sets a session policy. It stays in force across
 operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,

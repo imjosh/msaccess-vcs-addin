@@ -67,6 +67,7 @@ Private Type udtTestRunner
     LastRunDurationMs As Long
     LastRunKeys As Collection
     LastResultsPath As String
+    ResultsSaveError As String
     McpDots As String
     LastMcpDotFlush As Currency
 End Type
@@ -172,14 +173,28 @@ End Property
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : ResultsSaveError
+' Date      : 09/30/2026
+' Purpose   : The logged error text when the most recent SaveResults could not write
+'           : its file. Empty when the file was written or no save has happened.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get ResultsSaveError() As String
+    ResultsSaveError = this.ResultsSaveError
+End Property
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ClearLastResultsPath
 ' Date      : 09/30/2026
-' Purpose   : Forget the previous run's results file. clsOperation calls this when a
-'           : test-run root begins, so a run that fails before Scan cannot report it.
+' Purpose   : Forget the previous run's results file and save error. clsOperation
+'           : calls this when a test-run root begins, so a run that fails before Scan
+'           : cannot report them.
 '---------------------------------------------------------------------------------------
 '
 Public Sub ClearLastResultsPath()
     this.LastResultsPath = vbNullString
+    this.ResultsSaveError = vbNullString
 End Sub
 
 
@@ -194,6 +209,7 @@ End Sub
 Public Sub Scan()
 
     this.LastResultsPath = vbNullString
+    this.ResultsSaveError = vbNullString
     this.State = etrsScanning
     ScanDiscover
     this.State = etrsReady
@@ -975,7 +991,9 @@ End Function
 ' Author    : Adam Waller
 ' Date      : 5/7/2026
 ' Purpose   : Write test results to a timestamped JSON file in the logs folder.
-'           : Retention follows Options.MaxLogFiles via Log.CleanupOldLogs.
+'           : Retention follows Options.MaxLogFiles via Log.CleanupOldLogs. When the
+'           : file cannot be written, LastResultsPath stays empty, ResultsSaveError
+'           : keeps the error text, and the return value is empty.
 '---------------------------------------------------------------------------------------
 '
 Public Function SaveResults() As String
@@ -984,17 +1002,19 @@ Public Function SaveResults() As String
     Dim strFile As String
 
     strFolder = Options.GetExportFolder & "logs" & PathSep
-    VerifyPath strFolder
     strFile = strFolder & "TestResults_" & _
         Format$(Now, "yyyymmdd\_hhnnss") & "_" & _
         Format$(Timer * 1000 Mod 1000, "000") & ".json"
 
+    this.LastResultsPath = vbNullString
     modTestRunnerDiag.DiagBegin "save.results"
-    WriteFile GetResultsAsJson, strFile
-    this.LastResultsPath = strFile
-    SaveResults = strFile
-
-    Log.CleanupOldLogs strFolder, "TestResults_*.json", Options.MaxLogFiles
+    If WriteFileVerified(GetResultsAsJson, strFile, this.ResultsSaveError) Then
+        this.LastResultsPath = strFile
+        SaveResults = strFile
+        Log.CleanupOldLogs strFolder, "TestResults_*.json", Options.MaxLogFiles
+    Else
+        Log.Add this.ResultsSaveError, False, , "orange"
+    End If
     modTestRunnerDiag.DiagEnd "save.results"
 
 End Function

@@ -601,6 +601,10 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
         If Len(TestRunner.LastResultsPath) > 0 Then
             dExtra.Add "results_path", TestRunner.LastResultsPath
         End If
+        ' A run that finished but could not save its results file says why.
+        If Len(TestRunner.ResultsSaveError) > 0 Then
+            dExtra.Add "results_error", TestRunner.ResultsSaveError
+        End If
     End If
     ' The error text is otherwise only in the sync return, which an async caller
     ' never reads.

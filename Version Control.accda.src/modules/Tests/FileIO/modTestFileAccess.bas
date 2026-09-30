@@ -338,3 +338,49 @@ Private Function LocalPathAsAdminShareUnc(ByVal strPath As String) As String
     End If
 
 End Function
+
+
+Public Sub TestWriteFileVerifiedReportsSuccess()
+
+    Dim strFolder As String
+    Dim strPath As String
+    Dim strError As String
+
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_verified_ok")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strPath = strFolder & "\sub\results.json"
+
+    strError = "left over"
+    TestAssert WriteFileVerified("{}", strPath, strError), "a good write reports success"
+    TestAssert Len(strError) = 0, "and clears any earlier error text"
+    TestAssert FSO.FileExists(strPath), "the file exists, with its folder created"
+
+    FSO.DeleteFolder strFolder, True
+
+End Sub
+
+
+Public Sub TestWriteFileVerifiedNamesFolderItCannotCreate()
+
+    Dim strFolder As String
+    Dim strBlocker As String
+    Dim strError As String
+    Dim lngJournal As Long
+
+    ' The X07 layout: a file where the logs folder should be. Nothing can be written, so
+    ' the caller must be told, with text that names the folder.
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_verified_fail")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strBlocker = strFolder & "\logs"
+    WriteFile "not a folder", strBlocker
+    lngJournal = Log.ErrorJournalCount
+
+    TestAssert Not WriteFileVerified("{}", strBlocker & "\TestResults.json", strError), _
+        "a write under a file reports failure"
+    TestAssert InStr(strError, strBlocker) > 0, "the error names the folder"
+    TestAssert Log.ErrorJournalCount = lngJournal, "no error was logged for it"
+    TestAssert ReadFile(strBlocker) = "not a folder" & vbCrLf, "the blocking file is untouched"
+
+    FSO.DeleteFolder strFolder, True
+
+End Sub
