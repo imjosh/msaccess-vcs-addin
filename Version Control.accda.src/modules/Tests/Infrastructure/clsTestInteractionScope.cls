@@ -30,7 +30,7 @@ Public Sub TestNewScopeStartsNormalWithNoDecisions()
     TestAssert cScope.DecisionPolicy = edpAsk, "a new scope asks"
     TestAssert Not cScope.Blocked, "a new scope is not blocked"
     TestAssert cScope.DecisionCount = 0, "a new scope has no decisions"
-    TestAssert cScope.DecisionsJson = "[]", "no decisions is an empty JSON array"
+    TestAssert ConvertToJson(cScope.Decisions) = "[]", "no decisions is an empty JSON array"
     TestAssert Not cScope.InNonInteractiveScope, "no scope is open"
 
 End Sub
@@ -295,7 +295,7 @@ Public Sub TestNestedBlockedPromptDoesNotPoisonOuterScope()
     Dim lngInner As Long
 
     lngOuter = cScope.OpenScope(eimNonInteractive, edpBlock)
-    cScope.RecordDecision "acknowledged", "Outer", "note", "acknowledged"
+    cScope.RecordDecision NewDecision("acknowledged", "Outer", "note", "acknowledged")
     lngInner = cScope.OpenScope(eimNonInteractive, edpBlock)
     cScope.ResolvePrompt vbYesNo, "Inner", "Delete everything?"
     TestAssert cScope.Blocked, "the inner scope is blocked"
@@ -317,14 +317,14 @@ Public Sub TestOkOnlyIsAcknowledgedUnderEveryPolicy()
     Dim varPolicy As Variant
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
-    Dim strResolution As String
+    Dim cOutcome As clsPromptOutcome
 
     varPolicies = AllPolicies
     For Each varPolicy In varPolicies
         lngToken = cScope.OpenScope(eimNonInteractive, varPolicy)
-        TestAssert cScope.ResolvePrompt(vbOKOnly + vbInformation, "Info", "Done", strResolution) = vbOK, _
-            PolicyLabel(varPolicy) & ": OK-only returns OK"
-        TestAssert strResolution = "acknowledged", PolicyLabel(varPolicy) & ": OK-only is acknowledged"
+        Set cOutcome = cScope.ResolvePrompt(vbOKOnly + vbInformation, "Info", "Done")
+        TestAssert cOutcome.Result = vbOK, PolicyLabel(varPolicy) & ": OK-only returns OK"
+        TestAssert cOutcome.Resolution = "acknowledged", PolicyLabel(varPolicy) & ": OK-only is acknowledged"
         TestAssert Not cScope.Blocked, PolicyLabel(varPolicy) & ": OK-only never blocks"
         cScope.CloseScope lngToken
     Next varPolicy
@@ -334,39 +334,45 @@ End Sub
 
 Public Sub TestEveryPolicyAgainstEveryConfirmationStyle()
 
+    ' The expected answers are the policy table in docs/noninteractive-dialogs.md, written
+    ' out as data rather than derived from the code under test. block, prefer_source,
+    ' prefer_database and skip leave a confirmation as decision_required and blocked:
+    ' conflict policies never answer a generic confirmation. Only decline answers it.
+    ' Whatever the policy, the button returned is the refusing one for the style:
+    ' Cancel, Abort or No.
     Dim varPolicies As Variant
-    Dim varPolicy As Variant
+    Dim varResolutions As Variant
+    Dim varBlocked As Variant
     Dim varStyles As Variant
-    Dim varStyle As Variant
+    Dim varRefusals As Variant
+    Dim lngPolicy As Long
+    Dim lngStyle As Long
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
-    Dim strResolution As String
-    Dim intResult As VbMsgBoxResult
+    Dim cOutcome As clsPromptOutcome
     Dim strLabel As String
 
-    varPolicies = AllPolicies
+    varPolicies = Array(edpBlock, edpPreferSource, edpPreferDatabase, edpSkip, edpDecline)
+    varResolutions = Array("decision_required", "decision_required", "decision_required", "decision_required", "declined")
+    varBlocked = Array(True, True, True, True, False)
     varStyles = Array(vbOKCancel, vbAbortRetryIgnore, vbYesNoCancel, vbYesNo, vbRetryCancel)
+    varRefusals = Array(vbCancel, vbAbort, vbNo, vbNo, vbCancel)
 
-    For Each varPolicy In varPolicies
-        For Each varStyle In varStyles
-            strLabel = PolicyLabel(varPolicy) & " x style " & CStr(varStyle)
-            lngToken = cScope.OpenScope(eimNonInteractive, varPolicy)
+    For lngPolicy = 0 To UBound(varPolicies)
+        For lngStyle = 0 To UBound(varStyles)
+            strLabel = PolicyLabel(varPolicies(lngPolicy)) & " x style " & CStr(varStyles(lngStyle))
+            lngToken = cScope.OpenScope(eimNonInteractive, varPolicies(lngPolicy))
 
-            intResult = cScope.ResolvePrompt(varStyle + vbQuestion, "Confirm", "Proceed?", strResolution)
-            TestAssert intResult = RefusingButton(varStyle), strLabel & ": answers with the non-destructive button"
+            Set cOutcome = cScope.ResolvePrompt(varStyles(lngStyle) + vbQuestion, "Confirm", "Proceed?")
+            TestAssert cOutcome.Result = varRefusals(lngStyle), strLabel & ": answers with the refusing button"
+            TestAssert cOutcome.Resolution = varResolutions(lngPolicy), strLabel & ": resolution matches the documented table"
+            TestAssert cOutcome.Blocked = varBlocked(lngPolicy), strLabel & ": outcome blocked flag matches the documented table"
+            TestAssert cScope.Blocked = varBlocked(lngPolicy), strLabel & ": scope blocked flag matches the documented table"
             TestAssert cScope.DecisionCount = 1, strLabel & ": records the prompt"
 
-            If varPolicy = edpDecline Then
-                TestAssert strResolution = "declined", strLabel & ": decline answers the prompt"
-                TestAssert Not cScope.Blocked, strLabel & ": decline does not block"
-            Else
-                TestAssert strResolution = "decision_required", strLabel & ": prompt needs a decision"
-                TestAssert cScope.Blocked, strLabel & ": prompt blocks"
-            End If
-
             cScope.CloseScope lngToken
-        Next varStyle
-    Next varPolicy
+        Next lngStyle
+    Next lngPolicy
 
 End Sub
 
@@ -381,23 +387,23 @@ Public Sub TestConflictActionForEachPolicyAndRequestedAction()
     For Each varRequested In Array(ercNone, ercSkip, ercOverwrite, ercDelete)
         lngToken = cScope.OpenScope(eimNonInteractive, edpPreferSource)
         If varRequested = ercNone Then
-            TestAssert cScope.ResolveConflictAction(varRequested) = ercOverwrite, _
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercOverwrite, _
                 "prefer_source overwrites when the conflict asks for nothing"
         Else
-            TestAssert cScope.ResolveConflictAction(varRequested) = varRequested, _
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = varRequested, _
                 "prefer_source applies the conflict's own action (" & CStr(varRequested) & ")"
         End If
         cScope.CloseScope lngToken
 
         For Each varPolicy In Array(edpPreferDatabase, edpSkip, edpDecline)
             lngToken = cScope.OpenScope(eimNonInteractive, varPolicy)
-            TestAssert cScope.ResolveConflictAction(varRequested) = ercSkip, _
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercSkip, _
                 PolicyLabel(varPolicy) & " keeps the database object (" & CStr(varRequested) & ")"
             cScope.CloseScope lngToken
         Next varPolicy
 
         lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
-        TestAssert cScope.ResolveConflictAction(varRequested) = ercNone, _
+        TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercNone, _
             "block does not resolve a conflict (" & CStr(varRequested) & ")"
         cScope.CloseScope lngToken
     Next varRequested
@@ -412,13 +418,13 @@ Public Sub TestDecisionRequiredIsRecordedAndBlocks()
     Dim colDecisions As Collection
 
     lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
-    cScope.RecordDecision "decision_required", "Select Source Folder", "No folder", "blocked", "picker"
+    cScope.RecordDecision NewDecision("decision_required", "Select Source Folder", "No folder", "blocked", "picker")
 
     TestAssert cScope.Blocked, "decision_required blocks the scope"
     TestAssert cScope.ErrorLevel = eelCritical, "decision_required raises the error level to critical"
     TestAssert cScope.DecisionCount = 1, "the decision is recorded"
 
-    Set colDecisions = ParseJson(cScope.DecisionsJson)
+    Set colDecisions = ParseJson(ConvertToJson(cScope.Decisions))
     TestAssert colDecisions(1)("kind") = "decision_required", "kind is reported"
     TestAssert colDecisions(1)("title") = "Select Source Folder", "title is reported"
     TestAssert colDecisions(1)("message") = "No folder", "message is reported"
@@ -438,8 +444,8 @@ Public Sub TestOtherDecisionKindsDoNotBlock()
     Dim lngToken As Long
 
     lngToken = cScope.OpenScope(eimNonInteractive, edpDecline)
-    cScope.RecordDecision "acknowledged", "Info", "Done", "acknowledged"
-    cScope.RecordDecision "applied", "Merge conflicts", "2 conflict(s)", "keep_database"
+    cScope.RecordDecision NewDecision("acknowledged", "Info", "Done", "acknowledged")
+    cScope.RecordDecision NewDecision("applied", "Merge conflicts", "2 conflict(s)", "keep_database")
 
     TestAssert Not cScope.Blocked, "acknowledged and applied do not block"
     TestAssert cScope.ErrorLevel = eelNoError, "acknowledged and applied leave the error level alone"
@@ -465,8 +471,8 @@ Public Sub TestDecisionsJsonIsValidForControlCharacters()
         Chr$(0) & Chr$(1) & Chr$(8) & Chr$(12) & Chr$(31) & Chr$(127) & "/ unicode " & ChrW$(233) & ChrW$(8364)
 
     lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
-    cScope.RecordDecision "decision_required", strTitle, strMessage, "blocked", strMessage
-    strJson = cScope.DecisionsJson
+    cScope.RecordDecision NewDecision("decision_required", strTitle, strMessage, "blocked", strMessage)
+    strJson = ConvertToJson(cScope.Decisions)
     cScope.CloseScope lngToken
 
     For lngIdx = 1 To Len(strJson)
@@ -493,7 +499,7 @@ Public Sub TestPromptDecisionTextRoundTripsThroughJson()
 
     lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
     cScope.ResolvePrompt vbYesNo, "Confirm" & vbLf, strMessage
-    Set colDecisions = ParseJson(cScope.DecisionsJson)
+    Set colDecisions = ParseJson(ConvertToJson(cScope.Decisions))
     cScope.CloseScope lngToken
 
     TestAssert colDecisions(1)("message") = strMessage, "a blocked prompt's text round-trips"
@@ -558,24 +564,6 @@ Private Function PolicyLabel(ByVal intPolicy As eDecisionPolicy) As String
         Case edpSkip: PolicyLabel = "skip"
         Case edpDecline: PolicyLabel = "decline"
         Case Else: PolicyLabel = "policy " & CStr(intPolicy)
-    End Select
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : RefusingButton
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : The button that refuses a prompt of this style: No, Cancel, or Abort.
-'---------------------------------------------------------------------------------------
-'
-Private Function RefusingButton(ByVal intStyle As Long) As VbMsgBoxResult
-
-    Select Case intStyle
-        Case vbYesNo, vbYesNoCancel: RefusingButton = vbNo
-        Case vbAbortRetryIgnore: RefusingButton = vbAbort
-        Case Else: RefusingButton = vbCancel
     End Select
 
 End Function

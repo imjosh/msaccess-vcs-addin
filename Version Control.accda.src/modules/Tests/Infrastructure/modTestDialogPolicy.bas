@@ -33,85 +33,120 @@ Public Sub TestParseDecisionPolicyNames()
 End Sub
 
 
+Public Sub TestPolicyNamesRoundTripThroughTheTable()
+
+    Dim intPolicy As eDecisionPolicy
+    Dim varName As Variant
+
+    For Each varName In Array("block", "prefer_source", "prefer_database", "skip", "decline")
+        TestAssert ParseDecisionPolicy(CStr(varName), intPolicy), varName & " parses"
+        TestAssert DecisionPolicyName(intPolicy) = varName, varName & " names itself"
+    Next varName
+    TestAssert Len(DecisionPolicyName(edpAsk)) = 0, "edpAsk is not a named policy"
+    TestAssert InStr(InvalidPolicyMessage(), "block, prefer_source, prefer_database, skip, or decline") > 0, _
+        "the invalid-policy message lists every name in table order"
+    TestAssert ConflictResolutionName(edpPreferSource) = "prefer_source", "prefer_source reports its own name"
+    TestAssert ConflictResolutionName(edpSkip) = "keep_database", "other policies keep the database object"
+
+End Sub
+
+
+Public Sub TestDecisionWireValuesAreUnchanged()
+
+    ' Pinned to literals on purpose: these strings are the wire contract.
+    TestAssert DECISION_REQUIRED = "decision_required", "decision_required"
+    TestAssert ERR_DECISION_REQUIRED = "decision_required", "the error pattern shares it"
+    TestAssert DECISION_ACKNOWLEDGED = "acknowledged", "acknowledged"
+    TestAssert DECISION_APPLIED = "applied", "applied"
+    TestAssert DECISION_DECLINED = "declined", "declined"
+    TestAssert DECISION_BLOCKED = "blocked", "blocked"
+    TestAssert DECISION_KEEP_DATABASE = "keep_database", "keep_database"
+
+End Sub
+
+
+Public Sub TestNewDecisionCarriesEveryField()
+
+    Dim cRecord As clsDecisionRecord
+
+    Set cRecord = NewDecision("applied", "Title", "Message", "keep_database", "detail")
+    TestAssert cRecord.Kind = "applied", "the kind is carried"
+    TestAssert cRecord.Title = "Title", "the title is carried"
+    TestAssert cRecord.Message = "Message", "the message is carried"
+    TestAssert cRecord.Resolution = "keep_database", "the resolution is carried"
+    TestAssert cRecord.Detail = "detail", "the detail is carried"
+    TestAssert NewDecision("acknowledged", "T", "M", "acknowledged").Detail = vbNullString, "the detail is optional"
+
+End Sub
+
+
 Public Sub TestOkOnlyPromptIsAcknowledged()
 
-    Dim intResult As VbMsgBoxResult
-    Dim strResolution As String
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt vbOKOnly + vbInformation, edpBlock, intResult, strResolution, blnBlocked
-    TestAssert Not blnBlocked, "an OK-only message is not a decision"
-    TestAssert intResult = vbOK, "OK-only returns OK"
-    TestAssert strResolution = "acknowledged", "OK-only is acknowledged"
+    Set cOutcome = ResolveNonInteractivePrompt(vbOKOnly + vbInformation, edpBlock)
+    TestAssert Not cOutcome.Blocked, "an OK-only message is not a decision"
+    TestAssert cOutcome.Result = vbOK, "OK-only returns OK"
+    TestAssert cOutcome.Resolution = "acknowledged", "OK-only is acknowledged"
 
 End Sub
 
 
 Public Sub TestBlockYesNoDoesNotApprove()
 
-    Dim intResult As VbMsgBoxResult
-    Dim strResolution As String
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt vbYesNo + vbQuestion, edpBlock, intResult, strResolution, blnBlocked
-    TestAssert blnBlocked, "Yes/No without an accept policy is blocked"
-    TestAssert intResult = vbNo, "the non-destructive answer is No"
-    TestAssert intResult <> vbYes, "block does not approve"
-    TestAssert strResolution = "decision_required", "resolution is decision_required"
+    Set cOutcome = ResolveNonInteractivePrompt(vbYesNo + vbQuestion, edpBlock)
+    TestAssert cOutcome.Blocked, "Yes/No without an accept policy is blocked"
+    TestAssert cOutcome.Result = vbNo, "the non-destructive answer is No"
+    TestAssert cOutcome.Result <> vbYes, "block does not approve"
+    TestAssert cOutcome.Resolution = "decision_required", "resolution is decision_required"
 
 End Sub
 
 
 Public Sub TestBlockOkCancelDoesNotApprove()
 
-    Dim intResult As VbMsgBoxResult
-    Dim strResolution As String
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt vbOKCancel + vbExclamation, edpBlock, intResult, strResolution, blnBlocked
-    TestAssert blnBlocked, "OK/Cancel is a decision"
-    TestAssert intResult = vbCancel, "block returns Cancel"
-    TestAssert intResult <> vbOK, "block does not click OK"
+    Set cOutcome = ResolveNonInteractivePrompt(vbOKCancel + vbExclamation, edpBlock)
+    TestAssert cOutcome.Blocked, "OK/Cancel is a decision"
+    TestAssert cOutcome.Result = vbCancel, "block returns Cancel"
+    TestAssert cOutcome.Result <> vbOK, "block does not click OK"
 
 End Sub
 
 
 Public Sub TestDeclineYesNoIsApplied()
 
-    Dim intResult As VbMsgBoxResult
-    Dim strResolution As String
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt vbYesNo, edpDecline, intResult, strResolution, blnBlocked
-    TestAssert Not blnBlocked, "decline is an explicit answer"
-    TestAssert intResult = vbNo, "decline answers No"
-    TestAssert strResolution = "declined", "resolution is declined"
+    Set cOutcome = ResolveNonInteractivePrompt(vbYesNo, edpDecline)
+    TestAssert Not cOutcome.Blocked, "decline is an explicit answer"
+    TestAssert cOutcome.Result = vbNo, "decline answers No"
+    TestAssert cOutcome.Resolution = "declined", "resolution is declined"
 
 End Sub
 
 
 Public Sub TestConflictPolicyDoesNotAnswerGenericPrompt()
 
-    Dim intResult As VbMsgBoxResult
-    Dim strResolution As String
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt vbYesNo, edpPreferSource, intResult, strResolution, blnBlocked
-    TestAssert blnBlocked, "prefer_source does not answer a generic confirmation"
-    TestAssert intResult = vbNo, "generic confirmation stays unapproved"
+    Set cOutcome = ResolveNonInteractivePrompt(vbYesNo, edpPreferSource)
+    TestAssert cOutcome.Blocked, "prefer_source does not answer a generic confirmation"
+    TestAssert cOutcome.Result = vbNo, "generic confirmation stays unapproved"
 
 End Sub
 
 
 Public Sub TestAbortRetryDeclineStops()
 
-    Dim intResult As VbMsgBoxResult
-    Dim strResolution As String
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt vbAbortRetryIgnore, edpDecline, intResult, strResolution, blnBlocked
-    TestAssert Not blnBlocked, "decline covers Abort/Retry/Ignore"
-    TestAssert intResult = vbAbort, "decline aborts rather than retrying"
+    Set cOutcome = ResolveNonInteractivePrompt(vbAbortRetryIgnore, edpDecline)
+    TestAssert Not cOutcome.Blocked, "decline covers Abort/Retry/Ignore"
+    TestAssert cOutcome.Result = vbAbort, "decline aborts rather than retrying"
 
 End Sub
 
@@ -160,9 +195,15 @@ Public Sub TestRuntimeErrorJsonEncodesAnyText()
 
     Dim dResult As Dictionary
     Dim strText As String
+    Dim blnBlocked As Boolean
 
+    ' RuntimeErrorJson reads the session operation's blocked flag. Clear it for
+    ' the call so the result does not depend on the host run, then restore it.
+    blnBlocked = Operation.DecisionBlocked
+    Operation.DecisionBlocked = False
     strText = "bad ""quote"" \ back" & vbCrLf & "tab" & vbTab & "bell" & Chr$(7)
     Set dResult = ParseJson(RuntimeErrorJson(strText, 5))
+    Operation.DecisionBlocked = blnBlocked
     TestAssert dResult("success") = False, "a runtime error is not a success"
     TestAssert dResult("error") = strText, "the error text survives encoding"
     TestAssert dResult("errorNumber") = 5, "the error number is included"

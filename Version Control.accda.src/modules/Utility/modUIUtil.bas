@@ -80,6 +80,7 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     Dim varLines(0 To 3) As String
     Dim intCursor As Integer
     Dim strResolution As String
+    Dim cOutcome As clsPromptOutcome
     Dim strMessage As String
     Dim strDetail As String
     Dim blnShowDialog As Boolean
@@ -111,11 +112,13 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
         strMessage = strBold
         If Len(strLine1) Then strMessage = strMessage & " " & strLine1
         If Len(strLine2) Then strMessage = strMessage & " " & strLine2
-        MsgBox2 = Operation.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
-        LogSuppressedMessage strBold, strLine1, strLine2, strTitle, "Resolution: " & strResolution
+        Set cOutcome = Operation.ResolvePrompt(intButtons, strTitle, strMessage)
+        MsgBox2 = cOutcome.Result
+        strResolution = cOutcome.Resolution
+        LogSuppressedMessage strBold, strLine1, strLine2, strTitle, T("Resolution: {0}", var0:=strResolution)
     Else
         ' Silent mode. Don't display any message, but log it instead.
-        If intButtons <> vbOKOnly Then strDetail = "Buttons Flag: " & intButtons
+        If intButtons <> vbOKOnly Then strDetail = T("Buttons Flag: {0}", var0:=intButtons)
         LogSuppressedMessage strBold, strLine1, strLine2, strTitle, strDetail
         ' Return default (unattended) result
         MsgBox2 = intDefaultResult
@@ -139,8 +142,8 @@ Private Sub LogSuppressedMessage(ByVal strBold As String, ByVal strLine1 As Stri
 
     With New clsConcat
         .AppendOnAdd = vbCrLf
-        .Add "[**MessageBox Not Displayed**]"
-        If Len(strTitle) Then .Add "Title: " & strTitle
+        .Add T("[**MessageBox Not Displayed**]")
+        If Len(strTitle) Then .Add T("Title: {0}", var0:=strTitle)
         If Len(strBold) Then .Add strBold
         If Len(strLine1) Then .Add strLine1
         If Len(strLine2) Then .Add strLine2

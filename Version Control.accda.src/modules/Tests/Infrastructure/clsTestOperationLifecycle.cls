@@ -13,9 +13,11 @@ Attribute VB_Exposed = False
 ' Date      : 09/29/2026
 ' Purpose   : Wiring tests for policy requests against a running operation: a policy request
 '           : made while an operation runs is refused without changing that operation's
-'           : interaction state. The Begin test uses a private instance; the API test uses
-'           : the session operation, whose state depends on where the run was started. Start, restore and exit paths of MergeBuild and RunFilteredTests
-'           : need a free operation and are covered by the scripted pass in X01.
+'           : interaction state. Every test that needs a running operation uses a private
+'           : instance, so no result depends on where the host run started. The session
+'           : operation is only read, by the clearing test. Start, restore and exit paths
+'           : of MergeBuild and RunFilteredTests need a free operation and are covered by
+'           : the scripted pass in X01.
 '---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
@@ -85,25 +87,43 @@ Public Sub TestBeginWithPolicyRefusedWhileRunning()
 End Sub
 
 
-Public Sub TestSetOperationPolicyRefusedWhileRunning()
+Public Sub TestPolicyRequestRefusedWhileRunning()
 
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
     Dim strJson As String
+    Dim intModeBefore As eInteractionMode
+    Dim intPolicyBefore As eDecisionPolicy
 
-    ' The API class acts on this project's session operation. A run started from this
-    ' project (ribbon or Immediate Window) leaves a root running there; a run started
-    ' through the MCP hosts its root in the installed add-in, so this project's operation
-    ' may be ready. Exercise whichever branch the host provides.
-    If Operation.Status <> eosReady Then
-        strJson = VCS.SetOperationPolicy("block")
-        TestAssert InStr(strJson, """success"":false") > 0, "setting a policy while an operation runs fails"
-        TestAssert InStr(strJson, "operation_already_running") > 0, "the refusal names operation_already_running"
-        TestAssert LiveStateUnchanged, "the refused policy did not touch the running operation"
-    Else
-        strJson = VCS.SetOperationPolicy("block")
-        TestAssert InStr(strJson, """success"":true") > 0, "a ready operation accepts a policy"
-        VCS.ClearOperationPolicy
-        TestAssert LiveStateUnchanged, "clearing the accepted policy restores the interaction state"
-    End If
+    ' SetOperationPolicy asks PolicyRequestRefusal about the session operation. A private
+    ' instance stands in for it, so the running state is set up here and never depends on
+    ' where the host run started.
+    Set cOp = New clsOperation
+    cOp.ForceUnattended = True
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    TestAssert Not cRoot Is Nothing, "the root is granted"
+    intModeBefore = cOp.InteractionMode
+    intPolicyBefore = cOp.DecisionPolicy
+
+    strJson = PolicyRequestRefusal(cOp)
+    TestAssert InStr(strJson, """success"":false") > 0, "setting a policy while an operation runs fails"
+    TestAssert InStr(strJson, "operation_already_running") > 0, "the refusal names operation_already_running"
+    TestAssert (cOp.InteractionMode = intModeBefore) And (cOp.DecisionPolicy = intPolicyBefore), _
+        "the refused request did not touch the running operation"
+
+    cRoot.Complete eorSuccess
+
+End Sub
+
+
+Public Sub TestPolicyRequestAcceptedWhenReady()
+
+    Dim cOp As clsOperation
+
+    Set cOp = New clsOperation
+    cOp.ForceUnattended = True
+    TestAssert cOp.Status = eosReady, "a new operation is ready"
+    TestAssert Len(PolicyRequestRefusal(cOp)) = 0, "a ready operation is not refused"
 
 End Sub
 

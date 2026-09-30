@@ -482,7 +482,6 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                 Log.Spacer
                 If Operation.DecisionBlocked Then
                     Log.Add T("Merge blocked: a conflict decision is required.")
-                    Operation.Result = eorDecisionRequired
                 Else
                     Log.Add T("Build Canceled")
                 End If
@@ -1387,7 +1386,6 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
                     Log.Spacer
                     If Operation.DecisionBlocked Then
                         Log.Add T("Import blocked: a conflict decision is required."), , , "Red", True
-                        Operation.Result = eorDecisionRequired
                         intResult = eorDecisionRequired
                     Else
                         ' Cancel export

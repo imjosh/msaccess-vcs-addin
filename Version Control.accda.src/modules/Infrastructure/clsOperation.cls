@@ -531,12 +531,8 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     If m_Root.Completed Then Exit Sub
     If m_Root.State = eosReady And Len(m_Root.Token) = 0 Then Exit Sub
 
-    If Me.DecisionBlocked Then
-        ' An unresolved prompt is not a successful or merely cancelled run.
-        Me.Result = eorDecisionRequired
-    ElseIf intResult > eorUnknown Then
-        Me.Result = intResult
-    End If
+    ' An unresolved prompt is not a successful or merely cancelled run.
+    If Not ApplyBlockedResult() And intResult > eorUnknown Then Me.Result = intResult
     blnWasRunning = (m_Root.State = eosRunning)
 
     m_Root.Completed = True
@@ -576,7 +572,7 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
                 MCP.PostCallback "error", -1, -1, "Operation timed out", dExtra
             Case eorDecisionRequired
                 dExtra.Add "decision_required", True
-                dExtra.Add "error_pattern", "decision_required"
+                dExtra.Add "error_pattern", ERR_DECISION_REQUIRED
                 MCP.PostCallback "error", -1, -1, "Decision required", dExtra
             Case Else
                 MCP.PostCallback "complete", 100, 100, "Operation completed", dExtra
@@ -734,7 +730,15 @@ End Sub
 ' Procedure : Scope
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : The interaction scope object this operation delegates to.
+' Purpose   : The interaction scope object this operation delegates to. Callers use
+'           : the members below rather than the scope, which stays private so the
+'           : scope can change without touching them. The property-style members
+'           : that only forward (DecisionPolicy, DecisionBlocked, ErrorLevel,
+'           : PushInteractionScope, CloseInteractionScope, Decisions) are the
+'           : operation's contract: the export, build and merge code reads and sets
+'           : them on Operation, and the API class and modDialogPolicy open and close
+'           : scopes through it. The members that did nothing else, such as
+'           : ResolveConflictAction, were removed.
 '---------------------------------------------------------------------------------------
 '
 Private Property Get Scope() As clsInteractionScope
@@ -830,21 +834,9 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function ResolvePrompt(ByVal intButtons As Long, ByVal strTitle As String, _
-    ByVal strMessage As String, ByRef strResolution As String) As VbMsgBoxResult
-    ResolvePrompt = Scope.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
-    If Scope.Blocked Then Me.Result = eorDecisionRequired
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : ResolveConflictAction
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Resolution for one conflict under the current policy.
-'---------------------------------------------------------------------------------------
-'
-Public Function ResolveConflictAction(ByVal intRequested As eResolveConflict) As eResolveConflict
-    ResolveConflictAction = Scope.ResolveConflictAction(intRequested)
+    ByVal strMessage As String) As clsPromptOutcome
+    Set ResolvePrompt = Scope.ResolvePrompt(intButtons, strTitle, strMessage)
+    ApplyBlockedResult
 End Function
 
 
@@ -856,25 +848,29 @@ End Function
 '           : and prevents Finish from reporting success.
 '---------------------------------------------------------------------------------------
 '
-Public Sub RecordDecision(ByVal strKind As String, ByVal strTitle As String, _
-    ByVal strMessage As String, ByVal strResolution As String, _
-    Optional ByVal strDetail As String)
+Public Sub RecordDecision(ByVal cRecord As clsDecisionRecord)
 
-    Scope.RecordDecision strKind, strTitle, strMessage, strResolution, strDetail
-    If Scope.Blocked Then Me.Result = eorDecisionRequired
+    Scope.RecordDecision cRecord
+    ApplyBlockedResult
 
 End Sub
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : DecisionsJson
+' Procedure : ApplyBlockedResult
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : JSON array of prompts recorded in the current scope.
+' Purpose   : The one place a blocked prompt becomes eorDecisionRequired. Called when a
+'           : prompt is recorded, because closing a nested scope restores the outer
+'           : scope's blocked flag and would otherwise lose the block, and again by
+'           : Finish. Returns True when the operation is blocked.
 '---------------------------------------------------------------------------------------
 '
-Public Function DecisionsJson() As String
-    DecisionsJson = Scope.DecisionsJson()
+Private Function ApplyBlockedResult() As Boolean
+    If Scope.Blocked Then
+        Me.Result = eorDecisionRequired
+        ApplyBlockedResult = True
+    End If
 End Function
 
 

@@ -116,11 +116,13 @@ Private Sub ApplyNonInteractivePolicy()
 
     Dim varKey As Variant
     Dim cItem As clsConflictItem
-    Dim intAction As eResolveConflict
+    Dim intPolicy As eDecisionPolicy
     Dim strKeys As String
 
-    intAction = ConflictActionForPolicy(Operation.DecisionPolicy)
-    If intAction = ercNone Then
+    ' The policy, not the operation, answers each conflict, so read it once and map
+    ' it with ConflictActionForPolicy everywhere below.
+    intPolicy = Operation.DecisionPolicy
+    If ConflictActionForPolicy(intPolicy) = ercNone Then
         For Each varKey In m_dItems.Keys
             Set cItem = m_dItems(varKey)
             If Len(strKeys) > 0 Then strKeys = strKeys & ", "
@@ -128,8 +130,8 @@ Private Sub ApplyNonInteractivePolicy()
         Next varKey
         Log.Add T("Merge blocked: {0} conflict(s) need a decision policy (prefer_source, prefer_database, or skip).", _
             var0:=Me.Count), False
-        Operation.RecordDecision "decision_required", "Merge conflicts", _
-            Me.Count & " conflict(s): " & strKeys, "blocked", "policy=" & CStr(Operation.DecisionPolicy)
+        Operation.RecordDecision NewDecision(DECISION_REQUIRED, "Merge conflicts", _
+            Me.Count & " conflict(s): " & strKeys, DECISION_BLOCKED, "policy=" & CStr(intPolicy))
         Me.ApproveResolutions = False
         MCP.Log "Conflict decision required (" & Me.Count & ")."
         Exit Sub
@@ -137,13 +139,13 @@ Private Sub ApplyNonInteractivePolicy()
 
     For Each varKey In m_dItems.Keys
         Set cItem = m_dItems(varKey)
-        cItem.Resolution = ConflictActionForPolicy(Operation.DecisionPolicy, cItem.ActionType)
+        cItem.Resolution = ConflictActionForPolicy(intPolicy, cItem.ActionType)
     Next varKey
     Me.ApproveResolutions = True
     Log.Add T("Applied conflict policy to {0} conflict(s).", var0:=Me.Count), False
-    Operation.RecordDecision "applied", "Merge conflicts", _
-        Me.Count & " conflict(s)", IIf(Operation.DecisionPolicy = edpPreferSource, "prefer_source", "keep_database"), _
-        "policy=" & CStr(Operation.DecisionPolicy)
+    Operation.RecordDecision NewDecision(DECISION_APPLIED, "Merge conflicts", _
+        Me.Count & " conflict(s)", ConflictResolutionName(intPolicy), _
+        "policy=" & CStr(intPolicy))
     MCP.Log "Applied conflict policy to " & Me.Count & " conflict(s)."
 
 End Sub
