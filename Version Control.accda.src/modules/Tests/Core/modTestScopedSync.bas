@@ -129,10 +129,16 @@ Public Function ScopedSyncOwnershipCheck() As String
         Exit Function
     End If
 
+    ' The session policy the MCP sets around each call. It acknowledges the logged
+    ' error's message box, and an owned error has to leave it in force.
+    VCS.SetOperationPolicy "block"
+    intMode = Operation.InteractionMode
+    intPolicy = Operation.DecisionPolicy
+
     ' An error before the call's own Begin, while another caller holds the root.
-    Operation.ForceUnattended = True
     Set cRoot = Operation.TryBeginRoot(eotOther)
     If cRoot Is Nothing Then
+        VCS.ClearOperationPolicy
         ScopedSyncOwnershipCheck = "Not run: the holding root was refused."
         Exit Function
     End If
@@ -149,9 +155,6 @@ Public Function ScopedSyncOwnershipCheck() As String
 
     ' An error after the call's own Begin. Export refuses the running database, so
     ' only import can begin here; both share the error handler.
-    intMode = Operation.InteractionMode
-    intPolicy = Operation.DecisionPolicy
-    Operation.ForceUnattended = True
     Set cVcs = New clsVersionControl
     cVcs.FaultAfterBegin = 5
     Set dResult = ParseJson(cVcs.ImportByType("queries"))
@@ -161,10 +164,11 @@ Public Function ScopedSyncOwnershipCheck() As String
     Check strFailed, Len(CStr(dResult("logPath"))) > 0, "the owned error names the saved log"
     Check strFailed, Operation.Status <> eosRunning, "the owned root is finished"
     Check strFailed, Operation.Result = eorFailed, "the owned root finishes as failed"
-    Check strFailed, Operation.InteractionMode = intMode, "the interaction mode is restored"
-    Check strFailed, Operation.DecisionPolicy = intPolicy, "the decision policy is restored"
+    Check strFailed, Operation.InteractionMode = intMode, "the session interaction mode is back"
+    Check strFailed, Operation.DecisionPolicy = intPolicy, "the session policy is back in force"
     Check strFailed, Operation.Begin(eotOther), "the next call can begin"
     Operation.Finish eorSuccess
+    VCS.ClearOperationPolicy
 
     If Len(strFailed) = 0 Then strFailed = "OK"
     ScopedSyncOwnershipCheck = strFailed
