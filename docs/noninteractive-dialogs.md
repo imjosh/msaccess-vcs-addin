@@ -58,8 +58,11 @@ operation runs. `ClearOperationPolicy` is always safe to call.
 - `frmVCSMain` being left visible as a results window. Every site that opens
   it goes through `ShowMainForm`, which opens it hidden for a noninteractive
   run.
-- A second cancel confirmation when a silent or noninteractive run's window
-  is closed.
+- A second cancel confirmation when a noninteractive run's window is closed.
+  Silent mode does not skip it; `MsgBox2` answers it with the caller's default.
+- The one-time offers that headless test runs skip: `modTestAssert` is
+  installed silently, and the "migrate `Debug.Assert`" offer is not shown, so
+  it is never recorded as `decision_required`.
 
 ## Dialogs this mode does not prevent
 
