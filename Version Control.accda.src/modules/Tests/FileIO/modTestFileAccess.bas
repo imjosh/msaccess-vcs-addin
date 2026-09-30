@@ -168,6 +168,11 @@ Public Sub TestTryAppendToFileAppendsLines()
     Dim strFolder As String
     Dim strPath As String
     Dim strText As String
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
 
     strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_test")
     If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
@@ -179,7 +184,16 @@ Public Sub TestTryAppendToFileAppendsLines()
     TestAssert strText = "one" & vbCrLf & "two" & vbCrLf, "lines appended in order"
     TestAssert InStr(strText, ChrW$(&HFEFF)) = 0, "no BOM in the middle of the file"
 
-    FSO.DeleteFolder strFolder, True
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestTryAppendToFileAppendsLines", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 
 End Sub
 
@@ -192,6 +206,11 @@ Public Sub TestTryAppendToFileFailsQuietly()
     Dim lngErrors As Long
     Dim eLevel As eErrorLevel
     Dim blnWritten As Boolean
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
 
     ' A file where the log folder should be: the A17 repro. The write must fail
     ' without logging an error, which is what opened a message box.
@@ -211,7 +230,16 @@ Public Sub TestTryAppendToFileFailsQuietly()
     TestAssert Operation.ErrorLevel = eLevel, "operation error level unchanged"
     TestAssert ReadFile(strBlocker) = "not a folder" & vbCrLf, "the blocking file is untouched"
 
-    FSO.DeleteFolder strFolder, True
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestTryAppendToFileFailsQuietly", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 
 End Sub
 
@@ -345,6 +373,11 @@ Public Sub TestWriteFileVerifiedReportsSuccess()
     Dim strFolder As String
     Dim strPath As String
     Dim strError As String
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
 
     strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_verified_ok")
     If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
@@ -355,7 +388,16 @@ Public Sub TestWriteFileVerifiedReportsSuccess()
     TestAssert Len(strError) = 0, "and clears any earlier error text"
     TestAssert FSO.FileExists(strPath), "the file exists, with its folder created"
 
-    FSO.DeleteFolder strFolder, True
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestWriteFileVerifiedReportsSuccess", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 
 End Sub
 
@@ -366,6 +408,11 @@ Public Sub TestWriteFileVerifiedNamesFolderItCannotCreate()
     Dim strBlocker As String
     Dim strError As String
     Dim lngJournal As Long
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
 
     ' The X07 layout: a file where the logs folder should be. Nothing can be written, so
     ' the caller must be told, with text that names the folder.
@@ -381,6 +428,41 @@ Public Sub TestWriteFileVerifiedNamesFolderItCannotCreate()
     TestAssert Log.ErrorJournalCount = lngJournal, "no error was logged for it"
     TestAssert ReadFile(strBlocker) = "not a folder" & vbCrLf, "the blocking file is untouched"
 
-    FSO.DeleteFolder strFolder, True
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestWriteFileVerifiedNamesFolderItCannotCreate", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+' Removes a test-owned temp folder. Returns the error text when it cannot be removed, so
+' the caller can report it without losing an earlier error. Never raises.
+Private Function RemoveTestFolder(ByVal strFolder As String) As String
+
+    On Error Resume Next
+    Err.Clear
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    End If
+    If Err.Number <> 0 Then RemoveTestFolder = "error " & Err.Number & ": " & Err.Description
+    Err.Clear
+
+End Function
+
+
+' Reports errors captured by a test's handler and its cleanup as contextual failures.
+Private Sub ReportFileTestErrors(ByVal strTest As String, ByVal lngErr As Long, _
+    ByVal strErr As String, ByVal strCleanUp As String)
+
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, strTest & ": unexpected error " & lngErr & ": " & strErr
+    If Len(strCleanUp) > 0 Then TestAssert False, strTest & ": temp folder cleanup failed, " & strCleanUp
 
 End Sub
