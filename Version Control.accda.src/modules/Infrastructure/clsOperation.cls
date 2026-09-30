@@ -109,8 +109,15 @@ End Function
 '
 Public Function Begin(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk) As Boolean
 
-    Set m_cSyncLease = TryBeginRoot(intType, intPolicy)
-    Begin = (Not m_cSyncLease Is Nothing)
+    Dim cLease As clsRootOperationLease
+
+    ' Acquire into a local. A refused Begin returns Nothing, and storing that would
+    ' release the lease of the root that is already running here, abandoning it.
+    Set cLease = TryBeginRoot(intType, intPolicy)
+    If cLease Is Nothing Then Exit Function
+
+    Set m_cSyncLease = cLease
+    Begin = True
 
 End Function
 
