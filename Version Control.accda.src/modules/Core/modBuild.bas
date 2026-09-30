@@ -1581,6 +1581,35 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : FailSingleObjectOperation
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The error-handler result for an API ImportObject or ExportObject. Finishes
+'           : cOp as failed, so a raised error does not leave the root, its log and its
+'           : interaction scope open for the next call. Pass Nothing when the call had
+'           : not begun its operation yet: the running root, if any, is someone else's.
+'---------------------------------------------------------------------------------------
+'
+Public Function FailSingleObjectOperation(cOp As clsOperation, strLogPath As String, _
+    lngNumber As Long, strDescription As String) As String
+
+    Dim dResult As Dictionary
+
+    If Not cOp Is Nothing Then
+        If cOp.Status = eosRunning Then cOp.Finish eorFailed
+    End If
+
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "error", strDescription
+    dResult.Add "errorNumber", lngNumber
+    If Len(strLogPath) > 0 Then dResult.Add "logPath", strLogPath
+    FailSingleObjectOperation = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : SingleObjectImportError
 ' Author    : Josh
 ' Date      : 09/30/2026

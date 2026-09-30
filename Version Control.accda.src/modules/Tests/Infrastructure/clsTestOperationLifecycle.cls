@@ -283,6 +283,51 @@ Public Sub TestRefusedSingleObjectImportFailsUnderSessionPolicy()
 End Sub
 
 
+Public Sub TestSingleObjectErrorFinishesItsOperation()
+
+    Dim cOp As clsOperation
+    Dim strJson As String
+
+    ' An error raised inside ImportObject or ExportObject after Begin. The next call
+    ' could not begin while the root stays open, and the session policy set around this
+    ' one must be back in force, not the operation's scope.
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotMerge), "the import begins"
+
+    strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set")
+    TestAssert cOp.Status = eosReady, "the raised error finishes the operation"
+    TestAssert cOp.Result = eorFailed, "the operation finishes as failed"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the session policy is back in force"
+    TestAssert InStr(strJson, """success"":false") > 0, "the result is not a success"
+    TestAssert InStr(strJson, "Object variable not set") > 0, "the result carries the error"
+    TestAssert InStr(strJson, """errorNumber"":91") > 0, "the result carries the error number"
+    TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
+    TestAssert cOp.Begin(eotMerge), "the next call can begin"
+    cOp.Finish eorSuccess
+    ClearSessionPolicy cOp
+
+End Sub
+
+
+Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim strJson As String
+
+    ' An error before the call's own Begin: the running root belongs to someone else.
+    Set cOp = NewUnattendedOperation
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    strJson = FailSingleObjectOperation(Nothing, vbNullString, 5, "Invalid procedure call")
+    TestAssert cOp.Status = eosRunning, "the other root is still running"
+    TestAssert InStr(strJson, """success"":false") > 0, "the result is not a success"
+    TestAssert InStr(strJson, "logPath") = 0, "no log is named when none was written"
+    cRoot.Complete eorSuccess
+
+End Sub
+
+
 Public Sub TestSessionPolicySetAndClearedInSeparateCalls()
 
     Dim cOp As clsOperation

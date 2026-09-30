@@ -1155,6 +1155,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim dItems As Dictionary
     Dim varKey As Variant
     Dim blnFound As Boolean
+    Dim blnBegun As Boolean
     Dim dResult As Dictionary
 
     LogUnhandledErrors
@@ -1208,6 +1209,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 ExportObject = ConvertToJson(dResult)
                 Exit Function
             End If
+            blnBegun = True
 
             modExport.ExportSingleObject objItem, , _
                 blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)
@@ -1221,6 +1223,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 ExportObject = ConvertToJson(dResult)
                 Exit Function
             End If
+            blnBegun = True
 
             ' Set up options and logging (mirrors ExportSingleObject setup)
             If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
@@ -1340,11 +1343,7 @@ ExportCleanUp:
     Exit Function
 
 ErrHandler:
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    ExportObject = ConvertToJson(dResult)
+    ExportObject = SingleObjectErrHandler("ExportObject", blnBegun)
 
 End Function
 
@@ -1371,6 +1370,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim strSourceFile As String
     Dim strLogPath As String
     Dim blnFound As Boolean
+    Dim blnBegun As Boolean
     Dim dResult As Dictionary
 
     LogUnhandledErrors
@@ -1474,6 +1474,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
         ImportObject = ConvertToJson(dResult)
         Exit Function
     End If
+    blnBegun = True
 
     ' Completing the operation releases the Log singleton, so the log path has to come
     ' back through the out-param, and the error journal has to be read before it.
@@ -1484,11 +1485,46 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Exit Function
 
 ErrHandler:
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    ImportObject = ConvertToJson(dResult)
+    ImportObject = SingleObjectErrHandler("ImportObject", blnBegun)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectErrHandler
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Shared ErrHandler for ImportObject and ExportObject. When the call began
+'           : its operation, the error goes into that operation's log, the log is saved
+'           : while the Log singleton still holds it, and the operation is finished.
+'---------------------------------------------------------------------------------------
+'
+Private Function SingleObjectErrHandler(strProcedure As String, blnBegun As Boolean) As String
+
+    Dim lngNumber As Long
+    Dim strDescription As String
+    Dim strLogPath As String
+    Dim cOp As clsOperation
+
+    ' Read the error first; the On Error below clears it. Nothing here may raise a
+    ' second error, or the operation would stay open after all.
+    lngNumber = Err.Number
+    strDescription = Err.Description
+    On Error Resume Next
+
+    If blnBegun Then
+        If Log.Active Then
+            Log.Error eelError, T("Unexpected error {0}: {1}", var0:=lngNumber, var1:=strDescription), _
+                ModuleName(Me) & "." & strProcedure
+            Perf.EndTiming
+            Log.SaveFile
+            Log.Active = False
+        End If
+        strLogPath = Log.SavedLogFilePath
+        Set cOp = Operation
+    End If
+
+    SingleObjectErrHandler = FailSingleObjectOperation(cOp, strLogPath, lngNumber, strDescription)
 
 End Function
 
