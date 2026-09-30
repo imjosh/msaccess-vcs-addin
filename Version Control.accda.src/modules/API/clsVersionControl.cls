@@ -3877,6 +3877,20 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : SetInteractionMode
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Select the interaction mode (eInteractionMode) before an operation starts.
+'           : modAPI.SetInteractionMode is not reachable through API, which dispatches
+'           : with CallByName on this class, so callers such as the MCP server use this.
+'---------------------------------------------------------------------------------------
+'
+Public Sub SetInteractionMode(ByVal intMode As Long)
+    Operation.InteractionMode = intMode
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : SetOperationPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
