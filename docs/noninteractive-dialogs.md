@@ -86,8 +86,13 @@ returns `success: false` with the first logged error in `error`.
 
 Use the MCP inspector (`vcs_list_dialogs`, `vcs_dismiss_dialog`,
 `vcs_recover_dialogs`, `vcs_automation_status`). Those calls use Win32
-messages and stay available while Access COM is blocked. Details and
-examples are in the MCP repository's `docs/DIALOGS.md`.
+messages, plus Microsoft Active Accessibility for Office NetUI boxes, and stay
+available while Access COM is blocked. Details and examples are in the MCP
+repository's `docs/DIALOGS.md`.
+
+The same tools also cover a `MsgBox2` box the add-in shows on an interactive
+run. Access draws that box (the `@`-separated bold `MsgBox` form) as a NetUI
+`NUIDialog`, not a standard Win32 dialog.
 
 - VBA `MsgBox` in the database under test.
 - Microsoft Access error and warning dialogs.
