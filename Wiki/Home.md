@@ -26,6 +26,7 @@ Welcome! This wiki documents installation and usage of the **MSAccess Version Co
 | [Split Files](Split-Files) | Separate form/report layout from VBA code-behind |
 | [Export / Import File Types](Export-Import-File-Types) | Source folder layout and file-type reference |
 | [Query Source Files](Query-Source-Files) | `.sql` + `.json` query pairs — what to edit in Git |
+| [Form Layout Geometry](Form-Layout-Geometry) | Why form dimensions used to differ between developers, and the layout warning |
 
 ---
 
@@ -52,6 +53,7 @@ Welcome! This wiki documents installation and usage of the **MSAccess Version Co
 | Page | Description |
 |------|-------------|
 | [MCP and Automation](MCP-and-Automation) | AI/agent integration — permissions, security, when to enable |
+| [Continuous Integration](Continuous-Integration) | Headless build, merge, and test methods for an automated deployment pipeline |
 | [Export on Save Hook](Export-on-Save-Hook) | Experimental, community-contributed DLL to export objects when saved in Access |
 
 ---
@@ -75,7 +77,7 @@ Welcome! This wiki documents installation and usage of the **MSAccess Version Co
 |----------|----------------|
 | **End users** | This wiki (synced from the repo [`Wiki/`](https://github.com/joyfullservice/msaccess-vcs-addin/tree/dev/Wiki) folder on `main`) |
 | **Contributors** | [CONTRIBUTING.md](https://github.com/joyfullservice/msaccess-vcs-addin/blob/dev/CONTRIBUTING.md) in the repository |
-| **Maintainers / AI agents** | [AGENTS.md](https://github.com/joyfullservice/msaccess-vcs-addin/blob/dev/AGENTS.md) — architecture, coding standards, MCP API |
+| **Maintainers / AI agents** | [AGENTS.md](https://github.com/joyfullservice/msaccess-vcs-addin/blob/dev/AGENTS.md) — workflow, invariants, and a routing table into `docs/` |
 | **Parser / internals** | [`docs/`](https://github.com/joyfullservice/msaccess-vcs-addin/tree/dev/docs) in the repository (not synced to this wiki) |
 
 **Wiki updates:** Edit markdown under `Wiki/` in the GitHub repository and merge to the `main` branch; [GitHub Actions](https://github.com/joyfullservice/msaccess-vcs-addin/blob/main/.github/workflows/update-wiki.yml) publishes changes to this wiki automatically.

@@ -66,9 +66,9 @@ End Sub
 ' Procedure : ResolveOrPrompt
 ' Author    : Adam Waller
 ' Date      : 4/15/2026
-' Purpose   : For agent/API operations, auto-resolve all conflicts (source is truth for
-'           : imports, database is truth for exports). For user-initiated operations,
-'           : show the interactive conflict dialog as usual.
+' Purpose   : For automated callers and any non-normal interaction mode, auto-resolve
+'           : all conflicts (source is truth for imports, database is truth for exports).
+'           : For user-initiated operations in normal mode, show the interactive dialog.
 '---------------------------------------------------------------------------------------
 '
 Public Sub ResolveOrPrompt()
@@ -81,7 +81,8 @@ Public Sub ResolveOrPrompt()
 
     If InteractionIsNonInteractive Then
         ApplyNonInteractivePolicy
-    ElseIf Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI Then
+    ElseIf Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI _
+        Or Operation.InteractionMode <> eimNormal Then
         ' Existing agent behavior when the caller did not opt into a decision
         ' policy: source wins. Noninteractive callers pass a policy instead.
         For Each varKey In m_dItems.Keys

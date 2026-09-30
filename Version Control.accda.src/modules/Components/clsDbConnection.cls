@@ -112,14 +112,13 @@ Private Sub IDbComponent_Import(strFile As String)
             End If
 
             Do
-                If CacheConnection(strConnect, strCompleted, lngErr) Then
+                If CacheConnection(strConnect, strCompleted, lngErr, strErrDesc) Then
                     RecordAuthenticatedConnection strKey, _
                         IIf(IsEnvReference(strRef), strKey, vbNullString), _
                         strCompleted, "db connection"
                     Exit Do
                 End If
                 If Not IsConnectionError(lngErr) Then Exit Do
-                strErrDesc = Err.Description
                 eAction = HandleConnectionFailure(strKey, "db connection", lngErr, strErrDesc)
                 Select Case eAction
                     Case cfaRetry
@@ -459,7 +458,7 @@ End Property
 '           : component type.
 '---------------------------------------------------------------------------------------
 '
-Private Property Get IDbComponent_FileExtensions() As Collection
+Private Property Get IDbComponent_FileExtensions(Optional Scope As eFileExtensionScope = efesIndexed) As Collection
     Set IDbComponent_FileExtensions = New Collection
     IDbComponent_FileExtensions.Add "json"
 End Property

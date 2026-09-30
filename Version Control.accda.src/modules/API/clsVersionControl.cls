@@ -22,6 +22,9 @@ Option Explicit
 Private m_PolicyScope As Long
 
 
+Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : Show
 ' Author    : Adam Waller
@@ -44,12 +47,11 @@ End Sub
 Public Sub ShowOptions()
     If Operation.Begin(eotOther) Then
         If DatabaseFileOpen Then
-            ' Force reload of options from current project before opening the form.
             Set modObjects.Options = Nothing
             DoCmd.OpenForm "frmVCSOptions"
         Else
-            ' The table data subform may crash Access when the options form is closed with no database open.
             MsgBox2 "No Database Open", "Please open a database file before configuring VCS options.", , vbInformation
+            Operation.Finish eorCanceled
         End If
     End If
 End Sub
@@ -173,7 +175,7 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
     Dim eosBefore As eOperationState
 
     ' An explicit policy makes this merge noninteractive. The policy scope opens only
-    ' once Operation.Begin succeeds (inside cmdBuild_Click), and Finish closes it.
+    ' once the root is granted (TryBeginRoot inside cmdBuild_Click), and Finish closes it.
     ' An unknown policy, or a policy request while another operation is running, is
     ' refused before anything opens or changes. An empty policy keeps the interactive
     ' (or previously configured) behavior.
@@ -228,6 +230,175 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
     End If
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BuildHeadless
+' Author    : Adam Waller
+' Date      : 8/12/2026
+' Purpose   : Full build from source for unattended callers. Unlike Build, this runs
+'           : synchronously and returns a machine-readable result, so a CI pipeline can
+'           : tell success from failure without scraping the log or watching the UI.
+'           :
+'           : Pass strSourceFolder to build from a specific folder, or omit it to use
+'           : the export folder configured for the currently open database.
+'           :
+'           : Returns JSON: {"success":true/false, "logPath":"...", "errorCount":0,
+'           :   "warningCount":0, "durationMs":0, "databasePath":"...", "error":"..."}
+'---------------------------------------------------------------------------------------
+'
+Public Function BuildHeadless(Optional ByVal strSourceFolder As String) As String
+    BuildHeadless = RunHeadlessBuild(strSourceFolder, True)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : MergeHeadless
+' Author    : Adam Waller
+' Date      : 8/12/2026
+' Purpose   : Merge changed source files into the open database for unattended callers.
+'           : The headless counterpart to MergeBuild, returning the same JSON shape as
+'           : BuildHeadless. Requires an open database.
+'---------------------------------------------------------------------------------------
+'
+Public Function MergeHeadless(Optional ByVal strSourceFolder As String) As String
+    MergeHeadless = RunHeadlessBuild(strSourceFolder, False)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RunHeadlessBuild
+' Author    : Adam Waller
+' Date      : 8/12/2026
+' Purpose   : Shared implementation for BuildHeadless / MergeHeadless.
+'           :
+'           : Deliberately bypasses clsVersionControl.Build, which opens frmVCSMain and
+'           : hands the work to SetTimer "Build" -- that returns before the build starts,
+'           : so there is nothing to report. The timer exists to release the form
+'           : reference before a same-named form is imported, which cannot matter here
+'           : because no form is opened. modBuild.Build is called directly instead, and
+'           : reports back through its dOutcome out-param (Operation.Finish releases the
+'           : Log singleton, so the log path cannot be read after the call returns).
+'---------------------------------------------------------------------------------------
+'
+Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
+    ByVal blnFullBuild As Boolean) As String
+
+    Dim dResult As Dictionary
+    Dim dOutcome As Dictionary
+    Dim intPriorMode As eInteractionMode
+    Dim varKey As Variant
+    Dim intOperationType As eOperationType
+    Dim cTrapping As clsVbeErrorTrappingScope
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    ' Cover preflight and the operation itself. Operation.Begin will save the
+    ' already-raised mode and restore it on Finish; this scope then puts the
+    ' caller's original value back.
+    Set cTrapping = BeginVbeErrorTrappingScope(eetBreakOnUnhandledErrors)
+
+    Set dResult = New Dictionary
+
+    ' Captured before anything can fail, so the error handler always restores the
+    ' caller's own mode rather than assuming it was the default.
+    intPriorMode = Operation.InteractionMode
+
+    ' A merge updates the database that is open; a full build can create one.
+    ' Checked first, since CurrentProject cannot be read with nothing open.
+    If Not DatabaseFileOpen Then
+        If Not blnFullBuild Then
+            SetPreflightError dResult, "No database is currently open. A merge requires an open database."
+            RunHeadlessBuild = ConvertToJson(dResult)
+            Exit Function
+        End If
+
+    ' The add-in cannot rebuild itself out from under the code that is running.
+    ' (RebuildAddIn exists for that, and drives a separate Access instance.)
+    ElseIf StrComp(CodeProject.FullName, CurrentProject.FullName, vbTextCompare) = 0 Then
+        SetPreflightError dResult, "Cannot build the add-in from within itself. Use RebuildAddIn instead."
+        RunHeadlessBuild = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    ' Fall back to the export folder configured for the open database.
+    If Len(strSourceFolder) = 0 Then
+        If DatabaseFileOpen Then strSourceFolder = Options.GetExportFolder
+    End If
+    If Len(strSourceFolder) = 0 Then
+        SetPreflightError dResult, "No source folder specified, and none could be determined " & _
+            "from the current database."
+        RunHeadlessBuild = ConvertToJson(dResult)
+        Exit Function
+    End If
+    If Not FolderHasVcsOptionsFile(strSourceFolder) Then
+        SetPreflightError dResult, "Source files not found in folder: " & strSourceFolder
+        RunHeadlessBuild = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    ' Silent mode routes MsgBox2 prompts to the log and returns their default answer,
+    ' and suppresses the progress form. Set before Begin, which raises its own modal
+    ' dialog when it refuses -- exactly the prompt an unattended session cannot answer.
+    ' Restored on every path out, so a session that called this once is not left silent.
+    Operation.ForceUnattended = True
+    Operation.InteractionMode = eimSilent
+
+    intOperationType = IIf(blnFullBuild, eotBuild, eotMerge)
+    If Not Operation.Begin(intOperationType) Then
+        Operation.ForceUnattended = False
+        Operation.InteractionMode = intPriorMode
+        SetPreflightError dResult, "Could not begin operation (another operation may be running)"
+        RunHeadlessBuild = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    ' Seed the outcome so a build that dies before CleanUp still reports a failure
+    ' rather than an empty result.
+    Set dOutcome = New Dictionary
+    dOutcome.Add "success", False
+
+    modBuild.Build strSourceFolder, blnFullBuild, ecfAllObjects, , , dOutcome
+    CompleteBuildOperation CBool(dOutcome("success"))
+
+    For Each varKey In dOutcome.Keys
+        dResult.Add CStr(varKey), dOutcome(varKey)
+    Next varKey
+    If Not dResult("success") Then
+        dResult.Add "error", IIf(blnFullBuild, "Build", "Merge") & _
+            " did not complete successfully. Check the log for details."
+    End If
+
+    RunHeadlessBuild = ConvertToJson(dResult)
+    Exit Function
+
+ErrHandler:
+    CompleteBuildOperation False
+    If Operation.Status <> eosReady Then
+        Operation.ForceUnattended = False
+        Operation.InteractionMode = intPriorMode
+    End If
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "error", Err.Description
+    dResult.Add "errorNumber", CLng(Err.Number)
+    RunHeadlessBuild = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetPreflightError
+' Author    : Adam Waller
+' Date      : 8/12/2026
+' Purpose   : Populate a preflight failure result for the headless build entry points.
+'---------------------------------------------------------------------------------------
+'
+Private Sub SetPreflightError(dResult As Dictionary, strError As String)
+    dResult.Add "success", False
+    dResult.Add "error", strError
+End Sub
 
 
 '---------------------------------------------------------------------------------------
@@ -303,6 +474,7 @@ Public Sub BuildAs()
     ' Proceed with build if we have the new path.
     If Len(strNewDbPath) Then
         modBuild.Build strSourceFolder, True, , strNewDbPath
+        CompleteBuildOperation True
     Else
         Operation.Finish eorCanceled
     End If
@@ -319,7 +491,14 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub MergeAllSource()
-    If Operation.Begin(eotMerge) Then modBuild.MergeAllSource
+    If Operation.Begin(eotMerge) Then
+        modBuild.MergeAllSource
+        If Operation.ErrorLevel = eelCritical Then
+            Operation.Finish eorFailed
+        Else
+            Operation.Finish eorSuccess
+        End If
+    End If
 End Sub
 
 
@@ -344,6 +523,7 @@ Public Sub LoadSelected()
         MsgBox2 "Please Select an Object First", _
             "Select a single object in the Navigation Pane to reload from source (this item must have the keyboard focus).", _
             "If you are using a non-English version of Access and it is still not working, please open an issue on GitHub to add support for your language.", vbInformation
+        Operation.Finish eorCanceled
     Else
         ' Remove all object references to selected item
         Set cComponentClass = GetClassFromObject(objSelected)
@@ -359,21 +539,30 @@ Public Sub LoadSelected()
         Form_frmVCSMain.StartBuild False
         LoadSingleObject cComponentClass, strObjectName, strSourceFilePath
         Form_frmVCSMain.FinishBuild False
+        CompleteLoadSingleObject IIf(Operation.ErrorLevel >= eelCritical, eorFailed, eorSuccess)
     End If
 
 End Sub
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : GetOptions
+' Procedure : Options
 ' Author    : Adam Waller
 ' Date      : 1/13/2021
-' Purpose   : Access the options
+' Purpose   : Access the options singleton. This must be a property, not a Function:
+'           : `Set Options = Nothing` inside this class binds to the local name, and a
+'           : Function has no setter (error 438). That left EndSession reporting
+'           : failure after deleting the override file, and the two On Error Resume Next
+'           : reloads (single-object export, scoped sync) silently keeping a cached
+'           : instance whose session overrides never reverted.
 '---------------------------------------------------------------------------------------
 '
-Public Function Options() As clsOptions
+Public Property Get Options() As clsOptions
     Set Options = modObjects.Options
-End Function
+End Property
+Public Property Set Options(cNewOptions As clsOptions)
+    Set modObjects.Options = cNewOptions
+End Property
 
 
 '---------------------------------------------------------------------------------------
@@ -521,58 +710,247 @@ End Sub
 ' Date      : 5/8/2026
 ' Purpose   : Rebuild the VCS add-in from source files and install it.
 '           : Access will close during this process.
-'           : Source path is resolved from (1) current database, (2) registry, or
-'           : (3) a folder picker dialog.
+'           : Source path is resolved from (1) the optional argument, (2) current
+'           : database, (3) registry, or (4) a folder picker dialog (interactive only).
+'           : Returns JSON describing launch or refusal. Unattended callers (MCP/API)
+'           : must pass a source folder if it cannot be derived. The rebuild refuses
+'           : when another Access process in the session holds one of the files it must
+'           : replace, or cannot be asked which files it holds. Other instances are only
+'           : reported, never closed.
 '---------------------------------------------------------------------------------------
 '
-Public Sub RebuildAddIn()
+Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
+    Optional ByVal strCallbackInfo As String) As String
 
     Dim strPath As String
+    Dim strDetail As String
+    Dim strStatusFile As String
+    Dim strPhaseStarted As String
+    Dim strRepoFolder As String
+    Dim strTargetFiles As String
+    Dim lngOthers As Long
+    Dim lngBlocking As Long
+    Dim blnUnattended As Boolean
+    Dim eimPrior As eInteractionMode
+    Dim dResult As Dictionary
+    Dim colOthers As Collection
+    Dim varLine As Variant
 
-    ' Try to derive source folder from the current project
-    If StrComp(FSO.GetBaseName(CurrentProject.Name), ADDIN_BASENAME, vbTextCompare) = 0 Then
-        strPath = CurrentProject.Path & PathSep & CurrentProject.Name & ".src" & PathSep
+    blnUnattended = (Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI)
+    eimPrior = Operation.InteractionMode
+    If blnUnattended Then Operation.InteractionMode = eimSilent
+
+    Set dResult = New Dictionary
+
+    ' Of everything the helper script does, this is the one job with no in-process
+    ' equivalent: the add-in cannot rebuild and reinstall itself while it is loaded, which
+    ' is why the work is handed to a process that outlives this one. Checked before the
+    ' source folder is resolved, so the user is not asked to pick a folder for an
+    ' operation that cannot run. (#727)
+    If Not modInstall.UseWorkerScript Then
+        If Not blnUnattended Then
+            MsgBox2 T("Helper Script Required"), _
+                T("Rebuilding the add-in requires the helper script, which is currently " & _
+                "disabled."), _
+                T("Use Build From Source to build the add-in, then open the resulting file " & _
+                "to install it."), vbExclamation
+        End If
+        dResult.Add "success", False
+        dResult.Add "status", "refused"
+        dResult.Add "error", "Helper script is disabled."
+        GoTo Finish
     End If
 
-    ' Fall back to the registry (saved during previous builds)
-    If Len(strPath) = 0 Then
+    ' Optional argument, then current project, then registry.
+    If Len(strSourceFolder) > 0 Then
+        strPath = StripSlash(strSourceFolder) & PathSep
+    ElseIf StrComp(FSO.GetBaseName(CurrentProject.Name), ADDIN_BASENAME, vbTextCompare) = 0 Then
+        strPath = CurrentProject.Path & PathSep & CurrentProject.Name & ".src" & PathSep
+    Else
         strPath = GetSetting(PROJECT_NAME, "Install", "Source Path", vbNullString)
     End If
 
-    ' Last resort: ask the user to pick the source folder
+    ' Last resort: ask the user to pick the source folder (interactive only).
     If Len(strPath) = 0 Then
+        If blnUnattended Then
+            dResult.Add "success", False
+            dResult.Add "status", "refused"
+            dResult.Add "error", "sourceFolderRequired"
+            GoTo Finish
+        End If
         With Application.FileDialog(msoFileDialogFolderPicker)
             .Title = T("Select Add-In Source Folder")
             .ButtonName = T("Select")
             If .Show = True Then
                 strPath = StripSlash(.SelectedItems(1)) & PathSep
             Else
-                Exit Sub
+                dResult.Add "success", False
+                dResult.Add "status", "refused"
+                dResult.Add "error", "cancelled"
+                GoTo Finish
             End If
         End With
     End If
 
     ' Validate source folder exists
     If Not FSO.FolderExists(strPath) Then
-        MsgBox2 T("Source Folder Not Found"), _
-            T("The source folder was not found:") & vbCrLf & strPath, _
-            , vbExclamation
-        Exit Sub
+        If Not blnUnattended Then
+            MsgBox2 T("Source Folder Not Found"), _
+                T("The source folder was not found:") & vbCrLf & strPath, _
+                , vbExclamation
+        End If
+        dResult.Add "success", False
+        dResult.Add "status", "refused"
+        dResult.Add "error", "The source folder was not found: " & strPath
+        GoTo Finish
     End If
+
+    ' Claim the status file before anything that can refuse. The caller watches this path,
+    ' and until now only the launch path ever wrote to it: a refusal returned its verdict
+    ' in the JSON and left whatever the *previous* rebuild had written on disk, so a
+    ' caller that polled -- as it is told to do -- read an earlier run's "complete" as the
+    ' outcome of the attempt it had just made. Stamping here makes every attempt that has
+    ' somewhere to write say so. The timestamp is explicit because the writer otherwise
+    ' inherits it from the file it is replacing, and it stays fixed for the rest of the
+    ' run, which is what lets a caller tell this attempt's records from the last one's.
+    strStatusFile = GetRebuildStatusFilePath(strPath)
+    strPhaseStarted = Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    WriteRebuildStatusFile strStatusFile, "starting", strPhaseStarted:=strPhaseStarted
+
     If Not FSO.FileExists(strPath & "vcs-options.json") Then
-        MsgBox2 T("Invalid Source Folder"), _
-            T("The source folder does not contain the expected VCS source files.") & vbCrLf & strPath, _
-            , vbExclamation
-        Exit Sub
+        If Not blnUnattended Then
+            MsgBox2 T("Invalid Source Folder"), _
+                T("The source folder does not contain the expected VCS source files.") & vbCrLf & strPath, _
+                , vbExclamation
+        End If
+        dResult.Add "success", False
+        dResult.Add "status", "refused"
+        dResult.Add "error", "The source folder does not contain the expected VCS source files: " & strPath
+        GoTo Finish
+    End If
+
+    ' Another Access process only matters if it holds a file this rebuild has to
+    ' replace, because a loaded VBA project is what keeps that file open. An instance
+    ' that never loaded the add-in locks nothing, so it is left alone rather than
+    ' refused over. Instances that cannot be asked are counted as blocking: a busy one
+    ' rejects the automation calls that would answer, arriving indistinguishable from an
+    ' idle one, and an unknown answer must not be read as safe. Nothing is ever closed
+    ' here -- report what was seen and let the caller decide.
+    strTargetFiles = GetInstalledAddInFileName() & vbCrLf & GetBuildTargetFileName(strPath)
+    lngOthers = GetOtherAccessInstances(strDetail, lngBlocking, strTargetFiles)
+    If lngOthers < 0 Or lngBlocking <> 0 Then
+        If lngOthers < 0 Then
+            dResult.Add "success", False
+            dResult.Add "status", "refused"
+            dResult.Add "error", "Could not enumerate Access processes. " & strDetail
+        Else
+            Set colOthers = New Collection
+            For Each varLine In Split(strDetail, vbCrLf)
+                If Len(varLine) > 0 Then colOthers.Add CStr(varLine)
+            Next varLine
+            dResult.Add "success", False
+            dResult.Add "status", "refused"
+            dResult.Add "error", T("Rebuild refused: {0} other Access instance(s) hold a file " & _
+                "this rebuild must replace, or could not be asked. Close them, then try again.", _
+                var0:=lngBlocking)
+            dResult.Add "otherInstances", colOthers
+        End If
+        If Not blnUnattended Then
+            MsgBox2 T("Other Access Instances Running"), _
+                Nz(dResult("error"), vbNullString), _
+                strDetail, vbExclamation
+        End If
+        GoTo Finish
+    End If
+
+    ' /cmd INSTALL opens the repo .accda in a new process. If that folder is not a
+    ' trusted location, autoexec raises a native untrusted-file MsgBox that nobody
+    ' can dismiss, and the rebuild hangs.
+    strRepoFolder = FSO.GetParentFolderName(StripSlash(strPath))
+    If Not IsFolderTrusted(strRepoFolder) Then
+        If Not blnUnattended Then
+            MsgBox2 T("Trusted Location Required"), _
+                T("The add-in folder is not a Microsoft Access trusted location:") & vbCrLf & strRepoFolder, _
+                T("Add it in File > Options > Trust Center > Trusted Locations, then try again."), vbExclamation
+        End If
+        dResult.Add "success", False
+        dResult.Add "status", "refused"
+        dResult.Add "error", "The add-in folder is not a trusted location: " & strRepoFolder
+        GoTo Finish
     End If
 
     ' Verify resource files are available
     VerifyResources
 
-    ' Launch the worker to handle the build and install disconnected
-    Worker.Run_BuildAndInstall strPath
+    ' The launching Access instance exits after the worker handoff, but the MCP callback
+    ' server stays alive. Extract its address and operation id here so they can travel as
+    ' shell-safe worker arguments and be reconstructed by the builder Access instance.
+    If Len(strCallbackInfo) > 0 Then MCP.RegisterCallback strCallbackInfo
 
-End Sub
+    ' Inherit the phaseStarted stamped when this attempt claimed the status file above.
+    ' It marks when the attempt began rather than when it reached this line, and holding
+    ' it constant is what makes it usable as this run's identity.
+    WriteRebuildStatusFile strStatusFile, "launched"
+
+    ' Launch the worker to handle the build and install disconnected
+    Worker.Run_BuildAndInstall strPath, blnUnattended, strStatusFile, _
+        strPhaseStarted, MCP.CallbackUrl, MCP.OperationId
+
+    ' Shell() reports that a process was created, not that the script lived long enough
+    ' to do anything, and a worker that dies on startup leaves the status file reading
+    ' "launched" forever -- indistinguishable from a rebuild still in progress. The
+    ' worker writes "building" as its first act, so waiting for the status to move is
+    ' the only confirmation available that the handoff took.
+    If Not WaitForRebuildHandoff(strStatusFile, REBUILD_HANDOFF_SECONDS) Then
+        strDetail = T("The rebuild worker did not start within {0} seconds. Nothing was " & _
+            "rebuilt, and this instance of Microsoft Access was left open.", _
+            var0:=REBUILD_HANDOFF_SECONDS)
+        WriteRebuildStatusFile strStatusFile, "launch-failed", strDetail
+        dResult.Add "success", False
+        dResult.Add "status", "launch-failed"
+        dResult.Add "error", strDetail
+        dResult.Add "statusFile", strStatusFile
+        dResult.Add "logFolder", StripSlash(strPath) & PathSep & "logs"
+        If Not blnUnattended Then
+            MsgBox2 T("Rebuild Did Not Start"), strDetail, _
+                T("Check that the helper script is present in the add-in folder."), vbExclamation
+        End If
+        GoTo Finish
+    End If
+
+    ' The worker is alive and is now waiting for this instance to release the files it
+    ' holds. Closing ourselves is what makes a rebuild possible when the current
+    ' database is the add-in itself: a file moniker will not bind to an add-in, so the
+    ' worker cannot attach to us and cannot quit us. Armed only after the handoff is
+    ' confirmed, so a launch that failed never closes the caller's Access. The delay
+    ' leaves room for the result below to reach an MCP client over COM.
+    SetTimer "QuitForRebuild", sngSeconds:=QUIT_FOR_REBUILD_SECONDS
+
+    dResult.Add "success", True
+    dResult.Add "status", "launched"
+    dResult.Add "statusFile", strStatusFile
+    dResult.Add "logFolder", StripSlash(strPath) & PathSep & "logs"
+
+Finish:
+    ' Record the refusal for anyone polling the file rather than reading the return value.
+    ' Handled here rather than at each refusal so a path added later cannot forget to.
+    ' Refusals that never reached a valid source folder have nowhere to write and are
+    ' also nowhere anyone could be polling, so they leave no record but the JSON below.
+    If Len(strStatusFile) > 0 Then
+        If dResult.Exists("status") Then
+            If StrComp(Nz(dResult("status"), vbNullString), "refused", vbBinaryCompare) = 0 Then
+                WriteRebuildStatusFile strStatusFile, "refused", _
+                    Nz(dResult("error"), vbNullString)
+            End If
+        End If
+        If Not dResult.Exists("statusFile") Then dResult.Add "statusFile", strStatusFile
+        dResult.Add "phaseStarted", strPhaseStarted
+    End If
+
+    RebuildAddIn = ConvertToJson(dResult, JSON_WHITESPACE)
+    If blnUnattended Then Operation.InteractionMode = eimPrior
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -628,7 +1006,7 @@ End Sub
 Public Sub ActivateHook()
     If Operation.Begin(eotOther) Then
         If modExportOnSaveHook.ActivateHook = False Then
-            MsgBox "Error activating the hook", vbCritical, "Unable to activate hook"
+            MsgBox2 T("Error activating the hook"), , , vbCritical, T("Unable to activate hook")
         End If
         Operation.Finish
     End If
@@ -646,29 +1024,66 @@ End Sub
 '
 Public Sub StandardizeLetterCasing()
 
-    Dim lngResult As Long
+    Dim colResult As Collection
+    Dim colIssues As New Collection
+    Dim varChange As Variant
+    Dim strDetails As String
+    Dim strIssueDetails As String
+    Dim lngShown As Long
+    Const MaxDetailLines As Long = 10
 
     If Not Operation.Begin(eotOther) Then Exit Sub
 
-    lngResult = modLetterCasing.StandardizeLetterCasing
+    Set colResult = modLetterCasing.StandardizeLetterCasing(colIssues)
 
-    Select Case lngResult
-        Case Is > 0
+    If colResult Is Nothing Then
+        If vbYes = MsgBox2(T("Module Not Found"), _
+            T("The clsStandardLetterCasing class module was not found in the current project."), _
+            T("Would you like to create a starter template?"), _
+            vbYesNo + vbQuestion) Then
+            CreateLetterCasingTemplate
+        End If
+    Else
+        If colResult.Count > 0 Then
+            lngShown = 0
+            For Each varChange In colResult
+                lngShown = lngShown + 1
+                If lngShown <= MaxDetailLines Then
+                    If Len(strDetails) > 0 Then strDetails = strDetails & vbCrLf
+                    strDetails = strDetails & varChange
+                End If
+            Next varChange
+            If colResult.Count > MaxDetailLines Then
+                strDetails = strDetails & vbCrLf & T("... and {0} more (see export log for full list)", _
+                    var0:=colResult.Count - MaxDetailLines)
+            End If
             MsgBox2 T("Letter Casing Standardized"), _
-                T("{0} correction(s) applied to VBA identifiers.", var0:=lngResult), _
-                , vbInformation
-        Case 0
+                T("{0} correction(s) applied to VBA identifiers.", var0:=colResult.Count), _
+                strDetails, vbInformation
+        End If
+        If colIssues.Count > 0 Then
+            lngShown = 0
+            For Each varChange In colIssues
+                lngShown = lngShown + 1
+                If lngShown <= MaxDetailLines Then
+                    If Len(strIssueDetails) > 0 Then strIssueDetails = strIssueDetails & vbCrLf
+                    strIssueDetails = strIssueDetails & varChange
+                End If
+            Next varChange
+            If colIssues.Count > MaxDetailLines Then
+                strIssueDetails = strIssueDetails & vbCrLf & T("... and {0} more (see export log for full list)", _
+                    var0:=colIssues.Count - MaxDetailLines)
+            End If
+            MsgBox2 T("Invalid Letter Casing Entries"), _
+                T("{0} invalid entry/entries found in clsStandardLetterCasing. Correct the module and run again.", _
+                    var0:=colIssues.Count), _
+                strIssueDetails, vbExclamation
+        ElseIf colResult.Count = 0 Then
             MsgBox2 T("Letter Casing Consistent"), _
                 T("All VBA identifiers already match the standard letter casing rules."), _
                 , vbInformation
-        Case -1
-            If vbYes = MsgBox2(T("Module Not Found"), _
-                T("The clsStandardLetterCasing class module was not found in the current project."), _
-                T("Would you like to create a starter template?"), _
-                vbYesNo + vbQuestion) Then
-                CreateLetterCasingTemplate
-            End If
-    End Select
+        End If
+    End If
 
     Operation.Finish
 
@@ -891,8 +1306,8 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 End If
             End If
 
-            ' Export AGENTS.md
-            modResource.ExtractResource "AGENTS.md", Options.GetExportFolder
+            ' Export AGENTS.md and its reference documents
+            modResource.ExtractAgentDocs Options.GetExportFolder
 
             Log.Spacer
             Log.Add T("Done. ({0} seconds)", var0:=Round(Perf.TotalTime, 2)), , False, "green", True
@@ -919,7 +1334,7 @@ ExportCleanUp:
         If Operation.ErrorLevel >= eelError Then
             dResult.Add "error", "Export completed with errors. Check the log for details."
         End If
-        dResult.Add "logPath", Log.LogFilePath
+        dResult.Add "logPath", Log.SavedLogFilePath
     End If
 
     Operation.Finish
@@ -956,6 +1371,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim dItems As Dictionary
     Dim varKey As Variant
     Dim strSourceFile As String
+    Dim strLogPath As String
     Dim blnFound As Boolean
     Dim dResult As Dictionary
 
@@ -1061,14 +1477,18 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
         Exit Function
     End If
 
+    ' Completing the operation releases the Log singleton, so the log path has to come
+    ' back through the out-param rather than be read from Log afterwards.
     LoadSingleObject cComponent, strObjectName, strSourceFile, _
-        blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)
+        blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
+        strSavedLogPath:=strLogPath
+    CompleteLoadSingleObject IIf(Operation.ErrorLevel >= eelCritical, eorFailed, eorSuccess)
 
     dResult.Add "success", (Operation.ErrorLevel < eelError)
     If Operation.ErrorLevel >= eelError Then
         dResult.Add "error", "Import completed with errors. Check the log for details."
     End If
-    dResult.Add "logPath", Log.LogFilePath
+    dResult.Add "logPath", strLogPath
     ImportObject = ConvertToJson(dResult)
     Exit Function
 
@@ -1078,6 +1498,282 @@ ErrHandler:
     dResult.Add "error", Err.Description
     dResult.Add "errorNumber", CLng(Err.Number)
     ImportObject = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ExportByType
+' Author    : Adam Waller
+' Date      : 7/17/2026
+' Purpose   : Category-scoped export: sync one or more whole component categories
+'           : from the database to source files. Reconciles deletions (orphaned source
+'           : files) within the named categories. Conflicts are auto-resolved under
+'           : MCP/API or prompted interactively.
+'           :
+'           : This is a middle tier between ExportObject (one named object, no orphan
+'           : cleanup) and Export/FullExport (entire project with global front-matter).
+'           :
+'           : varTypes accepts a single eDatabaseComponentType enum, a string alias
+'           : (anything ResolveComponentType accepts), or an Array of either.
+'           : blnFullExport=False (default) re-exports only changed objects;
+'           : True re-exports all objects. Both modes reconcile deletions.
+'           :
+'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}
+'---------------------------------------------------------------------------------------
+'
+Public Function ExportByType(ByVal varTypes As Variant, _
+    Optional ByVal blnFullExport As Boolean = False) As String
+
+    Dim dResult As Dictionary
+    Dim colContainers As Collection
+    Dim strError As String
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    Set dResult = New Dictionary
+
+    If Not DatabaseFileOpen Then
+        dResult.Add "success", False
+        dResult.Add "error", "No database is currently open."
+        ExportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    Set colContainers = GetContainersForTypes(varTypes, strError)
+    If Len(strError) > 0 Then
+        dResult.Add "success", False
+        dResult.Add "error", strError
+        ExportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    If Not ScopedExportPreflight(strError) Then
+        dResult.Add "success", False
+        dResult.Add "error", strError
+        ExportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    If Not Operation.Begin(eotExport) Then
+        dResult.Add "success", False
+        dResult.Add "error", "Could not begin export operation (another operation may be running)"
+        ExportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    BeginScopedSyncLog T("Beginning Category Export")
+    modExport.ExportScoped colContainers, blnFullExport
+    ExportByType = FinishScopedSync(dResult, colContainers, True)
+    Exit Function
+
+ErrHandler:
+    ExportByType = ScopedSyncErrHandler(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ImportByType
+' Author    : Adam Waller
+' Date      : 7/17/2026
+' Purpose   : Category-scoped import (merge): merge source files for one or more
+'           : whole component categories into the current database. Reconciles
+'           : deletions (DB objects no longer represented in source) within the
+'           : named categories. Conflicts are auto-resolved under MCP/API or prompted
+'           : interactively.
+'           :
+'           : This is a middle tier between ImportObject (one named object, no orphan
+'           : reconciliation) and MergeBuild (entire project with backup).
+'           : No database backup is taken - the caller/pipeline owns backups.
+'           :
+'           : varTypes accepts a single eDatabaseComponentType enum, a string alias
+'           : (anything ResolveComponentType accepts), or an Array of either.
+'           : blnFullImport=False (default) merges only changed source files;
+'           : True merges all source files. Both modes reconcile deletions.
+'           :
+'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}
+'---------------------------------------------------------------------------------------
+'
+Public Function ImportByType(ByVal varTypes As Variant, _
+    Optional ByVal blnFullImport As Boolean = False) As String
+
+    Dim dResult As Dictionary
+    Dim colContainers As Collection
+    Dim strError As String
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    Set dResult = New Dictionary
+
+    If Not DatabaseFileOpen Then
+        dResult.Add "success", False
+        dResult.Add "error", "No database is currently open."
+        ImportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    Set colContainers = GetContainersForTypes(varTypes, strError, True)
+    If Len(strError) > 0 Then
+        dResult.Add "success", False
+        dResult.Add "error", strError
+        ImportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    If Not ScopedImportPreflight(strError) Then
+        dResult.Add "success", False
+        dResult.Add "error", strError
+        ImportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    If Not Operation.Begin(eotMerge) Then
+        dResult.Add "success", False
+        dResult.Add "error", "Could not begin import operation (another operation may be running)"
+        ImportByType = ConvertToJson(dResult)
+        Exit Function
+    End If
+
+    BeginScopedSyncLog T("Beginning Category Import")
+    modBuild.MergeScoped colContainers, blnFullImport
+    ImportByType = FinishScopedSync(dResult, colContainers, False)
+    Exit Function
+
+ErrHandler:
+    ImportByType = ScopedSyncErrHandler(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BeginScopedSyncLog
+' Purpose   : Shared setup for ExportByType / ImportByType.
+'---------------------------------------------------------------------------------------
+'
+Private Sub BeginScopedSyncLog(strHeading As String)
+
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+
+    Set VCSIndex = Nothing
+    Set Options = Nothing
+    Options.LoadProjectOptions
+    If Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI Then
+        Options.LoadOptionOverrides
+    End If
+    Log.Clear
+    Log.SourcePath = Options.GetExportFolder
+    Log.Active = True
+    Perf.StartTiming
+
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+
+    With Log
+        .Spacer
+        .Add strHeading, False
+        .Add CurrentProject.Name
+        .Add T("VCS Version {0}", var0:=GetVCSVersion)
+        .Add T("Full Path: {0}", var0:=CurrentProject.FullName), False
+        .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
+        If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        .Add Now
+        .Spacer
+    End With
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishScopedSync
+' Purpose   : Shared wrap-up for ExportByType / ImportByType.
+'---------------------------------------------------------------------------------------
+'
+Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collection, _
+    blnExport As Boolean) As String
+
+    Dim blnCanceled As Boolean
+    Dim blnCritical As Boolean
+    Dim blnUserCanceled As Boolean
+    Dim intResult As eOperationResult
+    Dim strColor As String
+
+    blnUserCanceled = VCSIndex.Conflicts.UserCanceled
+    blnCritical = (Operation.ErrorLevel = eelCritical)
+    blnCanceled = blnCritical Or blnUserCanceled
+
+    If blnCanceled Then
+        strColor = "Red"
+    ElseIf Operation.ErrorLevel >= eelError Then
+        strColor = "red"
+    Else
+        strColor = "green"
+    End If
+
+    Log.Spacer
+    If Not blnCanceled Then
+        Log.Add T("Done. ({0} seconds)", var0:=Round(Perf.TotalTime, 2)), , False, strColor, True
+    End If
+
+    VCSIndex.ClearTempExportFolder
+    ReleaseTableDataSortExport
+    Perf.EndTiming
+    With Log
+        .Add vbNewLine & Perf.GetReports, False
+        .SaveFile
+        .Active = False
+        .Flush
+    End With
+
+    If Not blnCanceled Then
+        If blnExport Then modExport.UpdateScopedExportIndex colContainers
+        VCSIndex.Save
+    End If
+
+    If blnUserCanceled Then
+        intResult = eorCanceled
+    ElseIf blnCritical Or Operation.ErrorLevel >= eelError Then
+        intResult = eorFailed
+    Else
+        intResult = eorSuccess
+    End If
+
+    If Not dResult.Exists("success") Then
+        dResult.Add "success", (intResult = eorSuccess)
+        If intResult <> eorSuccess Then
+            dResult.Add "error", IIf(blnUserCanceled, _
+                "Operation was canceled.", _
+                "Operation completed with errors. Check the log for details.")
+        End If
+        dResult.Add "logPath", Log.SavedLogFilePath
+    End If
+
+    Operation.Finish intResult
+    FinishScopedSync = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ScopedSyncErrHandler
+' Purpose   : Ensure scoped sync operations always finish the Operation on error.
+'---------------------------------------------------------------------------------------
+'
+Private Function ScopedSyncErrHandler(dResult As Dictionary) As String
+
+    If Operation.Status = eosRunning Then
+        Perf.EndTiming
+        ReleaseTableDataSortExport
+        Log.Active = False
+        Operation.Finish eorFailed
+    End If
+
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "error", Err.Description
+    dResult.Add "errorNumber", CLng(Err.Number)
+    ScopedSyncErrHandler = ConvertToJson(dResult)
 
 End Function
 
@@ -1120,6 +1816,77 @@ Private Function FindSourceFile(cComponent As IDbComponent, strObjectName As Str
         End If
     Next varExt
 
+    ' Not found at the flat base-folder root -- the object may live under a
+    ' '@Folder-nested subfolder (e.g. a brand-new object created directly at
+    ' its real, nested location rather than the flat root, per issue tracked
+    ' upstream). Fall back to a single recursive scan of the whole category
+    ' folder rather than reporting "not found" prematurely.
+    FindSourceFile = modFileWinAPI.FindFileRecursive(strFolder, strObjectName, aExtensions)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ResetVbaProjectState
+' Author    : Adam Waller
+' Date      : 8/27/2026
+' Purpose   : Queue a reset of the current database's VBA project before RunVBA modifies
+'           : its VBComponents. This must be called as a separate external API call:
+'           : control 228 returns before its teardown runs, so no payload work may follow
+'           : it on this VBA stack. The MCP worker provides the post-call message-pump
+'           : barrier and starts RunVBA only after the reset has settled.
+'---------------------------------------------------------------------------------------
+'
+Public Function ResetVbaProjectState() As String
+
+    Dim dResult As Dictionary
+
+    SuppressErrorBreaks
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    Set dResult = New Dictionary
+
+    If Not Options.McpAllowRunVBA Then
+        dResult.Add "success", False
+        dResult.Add "resetQueued", False
+        dResult.Add "error", T("RunVBA is disabled. Enable McpAllowRunVBA in VCS Options > MCP to allow agent-generated code execution.")
+        dResult.Add "error_pattern", "run_vba_disabled"
+        GoTo CleanUp
+    End If
+
+    If ResetWouldEndOurOwnCode Then
+        dResult.Add "success", False
+        dResult.Add "resetQueued", False
+        dResult.Add "error", T("The VBA project cannot be reset from code running inside that same project.")
+        dResult.Add "error_pattern", "reset_refused"
+        GoTo CleanUp
+    End If
+
+    If ResetCurrentVBProjectState Then
+        dResult.Add "success", True
+        dResult.Add "resetQueued", True
+    Else
+        dResult.Add "success", False
+        dResult.Add "resetQueued", False
+        dResult.Add "error", T("The current database VBA project could not be reset.")
+        dResult.Add "error_pattern", "reset_failed"
+    End If
+
+CleanUp:
+    ResetVbaProjectState = ConvertToJson(dResult)
+    RestoreErrorBreaks
+    Exit Function
+
+ErrHandler:
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "resetQueued", False
+    dResult.Add "error", Err.Description
+    dResult.Add "errorNumber", CLng(Err.Number)
+    dResult.Add "error_pattern", "reset_failed"
+    GoTo CleanUp
+
 End Function
 
 
@@ -1133,6 +1900,8 @@ End Function
 '           : Returns JSON: {"success":true/false, "result":"...", "error":"...",
 '           :   "compileError":"..."}
 '           : Gated by McpAllowRunVBA option.
+'           : Suppresses BreakOnError Stop/debug breaks for the call so MCP and
+'           : automation never block waiting for a human (errors are logged instead).
 '---------------------------------------------------------------------------------------
 '
 Public Function RunVBA(ByVal strCode As String) As String
@@ -1143,19 +1912,31 @@ Public Function RunVBA(ByVal strCode As String) As String
     Dim strWrapper As String
     Dim varReturn As Variant
     Dim blnModuleCreated As Boolean
+    Dim colSweptModules As Collection
+    Dim colOrphanModules As Collection
 
+    SuppressErrorBreaks
     LogUnhandledErrors
     On Error GoTo ErrHandler
 
     Set dResult = New Dictionary
-    strModuleName = "MCP_Temp_" & Format$(Timer * 100, "0")
+    strModuleName = MCP_TEMP_MODULE_PREFIX & Format$(Timer * 100, "0")
 
     ' Check permission
     If Not Options.McpAllowRunVBA Then
         dResult.Add "success", False
-        dResult.Add "error", "RunVBA is disabled. Enable McpAllowRunVBA in VCS Options > MCP to allow agent-generated code execution."
+        dResult.Add "error", T("RunVBA is disabled. Enable McpAllowRunVBA in VCS Options > MCP to allow agent-generated code execution.")
         RunVBA = ConvertToJson(dResult)
+        RestoreErrorBreaks
         Exit Function
+    End If
+
+    If Not SweepMcpTempModules(colSweptModules, colOrphanModules) Then
+        dResult.Add "success", False
+        dResult.Add "error", T("One or more stale RunVBA temporary modules could not be removed.")
+        dResult.Add "error_pattern", "temp_module_sweep_failed"
+        dResult.Add "orphanModules", colOrphanModules
+        GoTo CleanUp
     End If
 
     ' Build the wrapper function with error number/description stored in
@@ -1228,14 +2009,18 @@ Public Function RunVBA(ByVal strCode As String) As String
         Dim strHostState As String
         strHostState = "unknown"
         If blnModuleCreated Then
-            CurrentVBProject.VBComponents.Remove cmp
-            blnModuleCreated = False
-            DoCmd.RunCommand acCmdCompileAllModules
-            DoEvents
-            If Application.IsCompiled Then
-                strHostState = "host compiles cleanly without the wrapper -- the failure is in the agent code"
+            Set cmp = Nothing
+            If TryRemoveMcpTempModule(strModuleName) Then
+                blnModuleCreated = False
+                DoCmd.RunCommand acCmdCompileAllModules
+                DoEvents
+                If Application.IsCompiled Then
+                    strHostState = "host compiles cleanly without the wrapper -- the failure is in the agent code"
+                Else
+                    strHostState = "host project does not compile on its own -- fix host compile errors before retrying RunVBA"
+                End If
             Else
-                strHostState = "host project does not compile on its own -- fix host compile errors before retrying RunVBA"
+                strHostState = "the temporary wrapper could not be removed to verify the host compile state"
             End If
         End If
         dResult.Add "success", False
@@ -1263,6 +2048,28 @@ Public Function RunVBA(ByVal strCode As String) As String
         strProjPrefix = FSO.GetParentFolderName(CurrentVBProject.FileName) & "\" & _
             FSO.GetBaseName(CurrentVBProject.FileName) & "."
     End If
+    ' Resolve an accessor before executing the payload. This canary prevents
+    ' side effects when a stale duplicate or other VBE state has made the
+    ' generated module unreachable despite a successful compile.
+    Dim varCanary As Variant
+    Dim lngCanaryErrNum As Long
+    Dim strCanaryErrDesc As String
+    On Error Resume Next
+    Err.Clear
+    varCanary = Application.Run(strProjPrefix & "MCP_GetErrNum")
+    lngCanaryErrNum = Err.Number
+    strCanaryErrDesc = Err.Description
+    Err.Clear
+    On Error GoTo ErrHandler
+    If lngCanaryErrNum <> 0 Then
+        dResult.Add "success", False
+        dResult.Add "error", strCanaryErrDesc
+        dResult.Add "errorNumber", lngCanaryErrNum
+        dResult.Add "error_pattern", "temp_module_unresolvable"
+        dResult.Add "tempModule", strModuleName
+        GoTo CleanUp
+    End If
+
     varReturn = Application.Run(strProjPrefix & "MCP_TempFunction")
 
     ' Check for runtime errors captured by the wrapper (Err is cleared
@@ -1294,17 +2101,43 @@ Public Function RunVBA(ByVal strCode As String) As String
     End If
 
 CleanUp:
+    If Not colSweptModules Is Nothing Then
+        If colSweptModules.Count > 0 And Not dResult.Exists("sweptModules") Then
+            dResult.Add "sweptModules", colSweptModules
+        End If
+    End If
+
     If blnModuleCreated Then
-        On Error Resume Next
         ' Release our stored reference BEFORE removing the component.
         ' Holding a stored COM reference through Remove leaves a dangling
         ' pointer when the underlying VBComponent is destroyed; the
         ' implicit Release at function exit then dereferences freed memory.
         Set cmp = Nothing
-        CurrentVBProject.VBComponents.Remove CurrentVBProject.VBComponents(strModuleName)
-        On Error GoTo 0
+        If Not TryRemoveMcpTempModule(strModuleName) Then
+            If dResult.Exists("success") Then
+                If CBool(dResult("success")) Then
+                    If dResult.Exists("result") Then
+                        dResult.Add "payloadResult", dResult("result")
+                        dResult.Remove "result"
+                    End If
+                    dResult("success") = False
+                    dResult.Add "error", T("The RunVBA temporary module could not be removed.")
+                Else
+                    dResult.Add "cleanupError", T("The RunVBA temporary module could not be removed.")
+                End If
+            Else
+                dResult.Add "success", False
+                dResult.Add "error", T("The RunVBA temporary module could not be removed.")
+            End If
+            If Not dResult.Exists("error_pattern") Then
+                dResult.Add "error_pattern", "temp_module_cleanup_failed"
+            End If
+            dResult.Add "cleanupFailed", True
+            dResult.Add "orphanModule", strModuleName
+        End If
     End If
     RunVBA = ConvertToJson(dResult)
+    RestoreErrorBreaks
     Exit Function
 
 ErrHandler:
@@ -1313,6 +2146,107 @@ ErrHandler:
     dResult.Add "error", Err.Description
     dResult.Add "errorNumber", CLng(Err.Number)
     GoTo CleanUp
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : IsMcpTempModuleName
+' Author    : Adam Waller
+' Date      : 8/27/2026
+' Purpose   : Identify standard modules owned by RunVBA. Friend scope keeps this
+'           : testable inside the add-in project without exposing it through COM.
+'---------------------------------------------------------------------------------------
+'
+Friend Function IsMcpTempModuleName(ByVal strName As String, _
+                                    ByVal lngComponentType As Long) As Boolean
+    IsMcpTempModuleName = (lngComponentType = vbext_ct_StdModule) And _
+        (StrComp(Left$(strName, Len(MCP_TEMP_MODULE_PREFIX)), _
+                 MCP_TEMP_MODULE_PREFIX, vbTextCompare) = 0)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SweepMcpTempModules
+' Author    : Adam Waller
+' Date      : 8/27/2026
+' Purpose   : Remove stale RunVBA modules before adding another public
+'           : MCP_TempFunction declaration. Returns False when any orphan remains.
+'---------------------------------------------------------------------------------------
+'
+Friend Function SweepMcpTempModules(ByRef colRemoved As Collection, _
+                                    ByRef colRemaining As Collection) As Boolean
+
+    Dim cmp As VBIDE.VBComponent
+    Dim intIdx As Long
+    Dim strName As String
+
+    Set colRemoved = New Collection
+    Set colRemaining = New Collection
+
+    For intIdx = CurrentVBProject.VBComponents.Count To 1 Step -1
+        Set cmp = CurrentVBProject.VBComponents(intIdx)
+        If IsMcpTempModuleName(cmp.Name, cmp.Type) Then
+            strName = cmp.Name
+            Set cmp = Nothing
+            If TryRemoveMcpTempModule(strName) Then colRemoved.Add strName
+        End If
+        Set cmp = Nothing
+    Next intIdx
+
+    ' Verify from a fresh enumeration rather than trusting Remove.
+    For intIdx = 1 To CurrentVBProject.VBComponents.Count
+        Set cmp = CurrentVBProject.VBComponents(intIdx)
+        If IsMcpTempModuleName(cmp.Name, cmp.Type) Then
+            colRemaining.Add cmp.Name
+        End If
+        Set cmp = Nothing
+    Next intIdx
+
+    SweepMcpTempModules = (colRemaining.Count = 0)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TryRemoveMcpTempModule
+' Author    : Adam Waller
+' Date      : 8/27/2026
+' Purpose   : Remove a RunVBA component with one retry, releasing every stored COM
+'           : reference before Remove and verifying absence from a fresh lookup.
+'---------------------------------------------------------------------------------------
+'
+Private Function TryRemoveMcpTempModule(ByVal strModuleName As String) As Boolean
+
+    Dim cmp As VBIDE.VBComponent
+    Dim intAttempt As Long
+
+    On Error Resume Next
+
+    For intAttempt = 1 To 2
+        Set cmp = Nothing
+        Err.Clear
+        Set cmp = CurrentVBProject.VBComponents(strModuleName)
+        If cmp Is Nothing Then
+            TryRemoveMcpTempModule = True
+            Exit For
+        End If
+
+        Set cmp = Nothing
+        Err.Clear
+        CurrentVBProject.VBComponents.Remove CurrentVBProject.VBComponents(strModuleName)
+    Next intAttempt
+
+    If Not TryRemoveMcpTempModule Then
+        Set cmp = Nothing
+        Err.Clear
+        Set cmp = CurrentVBProject.VBComponents(strModuleName)
+        TryRemoveMcpTempModule = (cmp Is Nothing)
+    End If
+
+    Set cmp = Nothing
+    If Err Then Err.Clear
+    On Error GoTo 0
 
 End Function
 
@@ -2049,6 +2983,33 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : RunTestsHeadless
+' Author    : Adam Waller
+' Date      : 7/9/2026
+' Purpose   : Automation/CI entry point. Runs tests with no forms and no prompts
+'           : (missing modTestAssert is installed silently), always exports JUnit
+'           : XML, and returns a machine-readable JSON summary including allPassed,
+'           : cancelled, junitPath, and statePath. Same filter syntax as RunTests.
+'           : Example (COM automation):
+'           :   ?VCS.RunTestsHeadless("SQL", "-slow")
+'---------------------------------------------------------------------------------------
+'
+Public Function RunTestsHeadless(ParamArray varFilters() As Variant) As String
+
+    Dim blnFiltered As Boolean
+
+    blnFiltered = (UBound(varFilters) >= LBound(varFilters))
+
+    If blnFiltered Then
+        RunTestsHeadless = ExecuteTests(CVar(varFilters), True, blnHeadless:=True)
+    Else
+        RunTestsHeadless = ExecuteTests(Empty, False, blnHeadless:=True)
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : RunFilteredTests
 ' Author    : Adam Waller
 ' Date      : 5/21/2026
@@ -2065,27 +3026,123 @@ Public Function RunFilteredTests(Optional ByVal strDecisionPolicy As String) As 
     strFilter = Trim$(Nz(Options.DefaultTestFilter, vbNullString))
 
     If Len(strFilter) = 0 Then
-        RunFilteredTests = ExecuteTests(Empty, False, strDecisionPolicy)
+        RunFilteredTests = ExecuteTests(Empty, False, strDecisionPolicy:=strDecisionPolicy)
     Else
         arrParts = Split(strFilter, ",")
         For lngIdx = LBound(arrParts) To UBound(arrParts)
             arrParts(lngIdx) = Trim$(arrParts(lngIdx))
         Next lngIdx
-        RunFilteredTests = ExecuteTests(CVar(arrParts), True, strDecisionPolicy)
+        RunFilteredTests = ExecuteTests(CVar(arrParts), True, strDecisionPolicy:=strDecisionPolicy)
     End If
 
 End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : OpenTestRunner
+' Author    : Adam Waller
+' Date      : 7/8/2026
+' Purpose   : Open the web test runner to VIEW the last run's results without running.
+'           : The UI rehydrates from the in-memory results (failed set ready to re-run).
+'           : Requires the web runner to be enabled and supported on this Access build.
+'---------------------------------------------------------------------------------------
+'
+Public Sub OpenTestRunner()
+    If Not Options.UseWebTestRunner Or Not modTestRunnerUI.EdgeTestRunnerSupported() Then
+        MsgBox2 T("Web Test Runner Unavailable"), _
+            T("The HTML test runner is disabled or not supported on this Access build."), _
+            T("Enable it in Options, or use Run Tests for the console runner."), vbInformation
+        Exit Sub
+    End If
+    modTestRunnerUI.OpenTestRunnerForResults
+    modTestRunnerUI.WaitForWebRunnerReady
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestRunnerDiag
+' Author    : Adam Waller
+' Date      : 8/17/2026
+' Purpose   : Enable or disable the web test runner diagnostic trace. When enabling,
+'           : returns the folder where the next session file will be written (the file
+'           : itself is created when the runner opens). When disabling, flushes the
+'           : current session and returns its log path.
+'---------------------------------------------------------------------------------------
+'
+Public Function TestRunnerDiag(ByVal blnEnabled As Boolean) As String
+
+    modTestRunnerDiag.DiagEnabled = blnEnabled
+    If blnEnabled Then
+        If Len(modTestRunnerDiag.CurrentLogPath) > 0 Then
+            TestRunnerDiag = modTestRunnerDiag.CurrentLogPath
+        Else
+            TestRunnerDiag = modTestRunnerDiag.DiagFolder
+        End If
+    Else
+        TestRunnerDiag = modTestRunnerDiag.CurrentLogPath
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ExportTestResultsJUnit
+' Author    : Adam Waller
+' Date      : 7/8/2026
+' Purpose   : Generate JUnit XML from the durable test-state.json without running tests.
+'---------------------------------------------------------------------------------------
+'
+Public Sub ExportTestResultsJUnit(Optional ByVal strPath As String = vbNullString)
+
+    Dim strResult As String
+
+    strResult = modTestJUnit.ExportFromState(strPath)
+    If Len(strResult) = 0 Then
+        MsgBox2 T("No Test State"), _
+            T("No durable test state file was found to export."), _
+            T("Run tests first, or check the test-results folder."), vbInformation
+    End If
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ExportTestResultsHtml
+' Author    : Adam Waller
+' Date      : 7/8/2026
+' Purpose   : Generate the HTML test-results report from durable test-state.json
+'           : without running tests.
+'---------------------------------------------------------------------------------------
+'
+Public Sub ExportTestResultsHtml(Optional ByVal strPath As String = vbNullString)
+
+    Dim strResult As String
+
+    strResult = modTestReport.ExportResultsHtml(strPath)
+    If Len(strResult) = 0 Then
+        MsgBox2 T("No Test State"), _
+            T("No durable test state file was found to export."), _
+            T("Run tests first, or check the test-results folder."), vbInformation
+    End If
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ExecuteTests
 ' Author    : Adam Waller
 ' Date      : 5/21/2026
-' Purpose   : Shared implementation for RunTests and RunFilteredTests. Scans for tests,
-'           : optionally applies filters, runs the suite, and returns a JSON summary.
+' Purpose   : Shared implementation for RunTests, RunFilteredTests, and
+'           : RunTestsHeadless. Scans for tests, optionally applies filters, runs the
+'           : suite, and returns a JSON summary. Headless mode is for automation/CI:
+'           : no forms, no prompts, console path forced, JUnit always exported.
+'           : A decision policy makes the run noninteractive: the root begins first so
+'           : the policy answers every prompt, the web runner is never used, and each
+'           : exit finishes the operation through CleanUp.
 '---------------------------------------------------------------------------------------
 '
 Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
+    Optional ByVal blnHeadless As Boolean = False, _
     Optional ByVal strDecisionPolicy As String) As String
 
     Dim blnAllPassed As Boolean
@@ -2096,15 +3153,16 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim colKeys As Collection
     Dim lngIdx As Long
     Dim strFilter As String
-    Dim eimPriorMode As eInteractionMode
     Dim blnLogWasActive As Boolean
     Dim blnLogSet As Boolean
-    Dim blnBegun As Boolean
-    Dim intPolicy As eDecisionPolicy
-    Dim intResult As eOperationResult
-    Dim blnSilentSet As Boolean
+    Dim blnUseWebRunner As Boolean
+    Dim strJUnitPath As String
     Dim strJsonPath As String
     Dim blnCanceled As Boolean
+    Dim intPolicy As eDecisionPolicy
+    Dim intResult As eOperationResult
+    Dim cRoot As clsRootOperationLease
+    Dim cTrapping As clsVbeErrorTrappingScope
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -2116,32 +3174,71 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         End If
     End If
 
-    ' Begin first. The policy scope opens as part of Begin, so a refused request
-    ' changes nothing, and the prompts below are answered by the policy.
-    If Not Operation.Begin(eotTestRun, intPolicy) Then
-        ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
-        Exit Function
-    End If
-    blnBegun = True
+    ' An automation session has no one to click Run in the web runner and no
+    ' console to watch, so any API/MCP-initiated run is headless regardless of
+    ' which entry point was called. Operation.Source is the established signal
+    ' for suppressing UI on behalf of these callers.
+    If Operation.AutomationSource Then blnHeadless = True
+    If blnHeadless Then Set cTrapping = BeginVbeErrorTrappingScope(eetBreakOnUnhandledErrors)
 
-    ' Every exit past this point reaches CleanUp, which restores logging and silent
-    ' mode and finishes the operation with this result. Finish reports
-    ' decision_required instead when a prompt was blocked.
+    ' Every exit past this point reaches CleanUp, which restores logging and finishes
+    ' the operation (if one began) with this result. Finish reports decision_required
+    ' instead when a prompt was blocked.
     intResult = eorFailed
 
+    ' A policy caller begins first. The policy scope opens as part of the root, so a
+    ' refused request changes nothing, and the preflight prompts below are answered by
+    ' the policy. ForceUnattended must be set before the root begins: Attended is
+    ' captured once, at root creation, and is immutable for the life of the operation.
+    If intPolicy <> edpAsk Then
+        If blnHeadless Then Operation.ForceUnattended = True
+        Set cRoot = Operation.TryBeginRoot(eotTestRun, intPolicy)
+        If cRoot Is Nothing Then
+            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+            GoTo CleanUp
+        End If
+    End If
+
     If Not DatabaseFileOpen Then
-        MsgBox2 T("No Database Open"), _
-            T("Please open a database file before running tests."), _
-            , vbInformation
+        If Not blnHeadless Then
+            MsgBox2 T("No Database Open"), _
+                T("Please open a database file before running tests."), _
+                , vbInformation
+        End If
         If Not Operation.DecisionBlocked Then
             ExecuteTests = "{""success"":false,""error"":""No database is open.""}"
         End If
         GoTo CleanUp
     End If
 
-    ' Ensure modTestAssert is present
+    ' A test run needs two projects: the installed add-in, loaded as a library, hosts
+    ' the runner singleton and the TestAssert every assertion routes through, while the
+    ' code under test is whatever CurrentVBProject holds. Opening the installed copy as
+    ' the current database collapses both roles onto one file -- scanning then finds the
+    ' library's own components, and InstallTestAssertModule below would write a module
+    ' into a VBA project that is currently executing, which resets it mid-run. Refuse
+    ' before either can happen; the development copy in the repository is the host.
+    If CurrentDbIsInstalledAddIn Then
+        If blnHeadless Then
+            ExecuteTests = "{""success"":false,""error"":""Refusing to run tests in the installed add-in. " & _
+                "Open the development copy of the add-in and run them there.""}"
+        Else
+            MsgBox2 T("Wrong Database for Tests"), _
+                T("Tests cannot be run in the installed add-in, which is only meant to " & _
+                  "be loaded as a library."), _
+                T("Open the development copy of the add-in and run the tests there."), _
+                vbExclamation
+        End If
+        GoTo CleanUp
+    End If
+
+    ' Ensure modTestAssert is present. A headless run installs it silently (an
+    ' automation session has no one to answer a prompt, and no decision policy
+    ' approves a generic confirmation).
     If Not TestAssertModuleExists Then
-        If vbYes = MsgBox2(T("Test Helper Not Found"), _
+        If blnHeadless Then
+            InstallTestAssertModule
+        ElseIf vbYes = MsgBox2(T("Test Helper Not Found"), _
             T("The modTestAssert module was not found in the current project."), _
             T("Would you like to install it now?"), _
             vbYesNo + vbQuestion) Then
@@ -2156,7 +3253,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     End If
 
     ' Offer to migrate if no module (other than modTestAssert) uses TestAssert yet
-    If Not TestAssertInUse Then
+    ' (skipped in headless mode)
+    If Not TestAssertInUse And Not blnHeadless Then
         If vbYes = MsgBox2(T("TestAssert Not In Use"), _
             T("No test modules are using TestAssert yet. Would you like to migrate " & _
               "Debug.Assert calls to TestAssert in your test modules?"), _
@@ -2166,21 +3264,58 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         End If
     End If
 
-    ' Match the round-trip harness: log to file and suppress blocking MsgBox dialogs
-    ' so import/build errors surface in the test console and TestRun_*.log instead.
-    ' A noninteractive policy stays in force; silent mode would approve defaults.
-    If Not InteractionIsNonInteractive Then
-        eimPriorMode = Operation.InteractionMode
-        Operation.InteractionMode = eimSilent
-        blnSilentSet = True
-    End If
     blnLogWasActive = Log.Active
     blnLogSet = True
+
+    ' The web runner needs a person to click Run, so it is never used headless or under
+    ' a decision policy.
+    blnUseWebRunner = Options.UseWebTestRunner And modTestRunnerUI.EdgeTestRunnerSupported() _
+        And Not blnHeadless And intPolicy = edpAsk
+
+    ' Web runner path: open the form only. Do NOT begin an Operation here — bridge
+    ' callbacks own the operation lifecycle when the user clicks Run. Beginning here
+    ' left eosRunning stuck after hide/reopen and blocked the next Run Tests click.
+    If blnUseWebRunner Then
+        If blnFiltered Then
+            For lngIdx = LBound(varFilters) To UBound(varFilters)
+                If Len(strFilter) > 0 Then strFilter = strFilter & ", "
+                strFilter = strFilter & Trim$(CStr(varFilters(lngIdx)))
+            Next lngIdx
+            modTestRunnerUI.SetWebRunnerDefaultFilter strFilter
+        Else
+            modTestRunnerUI.SetWebRunnerDefaultFilter vbNullString
+        End If
+
+        modTestRunnerUI.OpenWebTestRunner
+        modTestRunnerUI.WaitForWebRunnerReady
+        Exit Function
+    End If
+
+    ' Begin the root here unless a policy caller already did.
+    If cRoot Is Nothing Then
+        If blnHeadless Then Operation.ForceUnattended = True
+        Set cRoot = Operation.TryBeginRoot(eotTestRun)
+        If cRoot Is Nothing Then
+            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, MSG_OPERATION_RUNNING)
+            GoTo CleanUp
+        End If
+    End If
+
+    ' Suppress blocking MsgBox dialogs so import/build errors surface in the test log
+    ' instead. Inside a noninteractive scope this request is ignored, so the policy
+    ' stays in force (silent mode would approve defaults).
+    Operation.InteractionMode = eimSilent
     Log.Active = True
     Log.ClearErrorJournal
 
-    ' Open the main form and set up the console
-    PrepareTestConsole
+    ' No console form in headless mode (automation sessions have no UI to update).
+    ' Same Immediate-window mute the web runner uses: thousands of Debug.Print
+    ' fragments otherwise stall the Access thread for a full suite.
+    If Not blnHeadless Then
+        PrepareTestConsole
+    Else
+        Log.SuppressDebugOutput = True
+    End If
 
     ' Build filter description for log heading
     If blnFiltered Then
@@ -2201,6 +3336,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         .Add CurrentProject.Name
         .Add T("VCS Version {0}", var0:=GetVCSVersion)
         .Add T("Full Path: {0}", var0:=CurrentProject.FullName), False
+        If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
         .Add Now
         .Spacer
     End With
@@ -2212,7 +3348,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 
     If TestRunner.Tests.Count = 0 Then
         Log.Add T("No test subs found in the current project.")
-        FinalizeTestConsole True
+        If Not blnHeadless Then FinalizeTestConsole True
         intResult = eorSuccess
         GoTo CleanUp
     End If
@@ -2222,7 +3358,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         Set colKeys = TestRunner.ResolveFilters(varFilters)
         If colKeys.Count = 0 Then
             Log.Add T("No tests found matching filter: {0}", var0:=strFilter)
-            FinalizeTestConsole True
+            If Not blnHeadless Then FinalizeTestConsole True
             intResult = eorSuccess
             GoTo CleanUp
         End If
@@ -2243,6 +3379,10 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         TestRunner.RunAll
     End If
     strJsonPath = TestRunner.SaveResults
+    modTestState.PersistAfterRun
+
+    ' CI must always get the JUnit XML, regardless of the export option
+    If blnHeadless Then strJUnitPath = modTestJUnit.ExportFromState()
 
     ' Detect cancellation (before computing summary, so "all passed" is not
     ' incorrectly reported when only a subset ran before the user canceled)
@@ -2265,8 +3405,13 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         .SaveFile
     End With
 
-    FinalizeTestConsole blnAllPassed, Log.LogFilePath, blnCanceled, strJsonPath
-    ExecuteTests = TestRunner.GetResultsAsJson
+    If blnHeadless Then
+        ExecuteTests = TestRunner.GetResultsAsJson(strJUnitPath, _
+            modTestState.GetStateFilePath, Log.SavedLogFilePath, strJsonPath)
+    Else
+        FinalizeTestConsole blnAllPassed, Log.SavedLogFilePath, blnCanceled, strJsonPath
+        ExecuteTests = TestRunner.GetResultsAsJson
+    End If
     If Operation.DecisionBlocked Then ExecuteTests = OverlayDecisionRequired(ExecuteTests)
 
     TestRunner.InvokeGlobalTestTeardown
@@ -2284,11 +3429,14 @@ CleanUp:
     If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
         ExecuteTests = DecisionRequiredJson()
     End If
-    ' Restore what this run changed, then finish. Finish is a no-op if the operation
-    ' already finished, and reports decision_required if a prompt was blocked.
-    If blnLogSet Then Log.Active = blnLogWasActive
-    If blnSilentSet Then Operation.InteractionMode = eimPriorMode
-    If blnBegun Then Operation.Finish intResult
+    ' Restore what this run changed, then finish. Completing the lease is a no-op if
+    ' the operation already finished, and reports decision_required if a prompt was
+    ' blocked.
+    If blnLogSet Then
+        Log.Active = blnLogWasActive
+        Log.SuppressDebugOutput = False
+    End If
+    If Not cRoot Is Nothing Then cRoot.Complete intResult
     Exit Function
 
 ErrHandler:
@@ -2332,6 +3480,9 @@ Private Sub FinalizeTestConsole(blnAllPassed As Boolean, _
     Optional ByVal strLogPath As String = vbNullString, _
     Optional ByVal blnCanceled As Boolean = False, _
     Optional ByVal strCopyPath As String = vbNullString)
+
+    Dim strReportPath As String
+
     On Error Resume Next
     With Form_frmVCSMain
         .txtLog.ScrollBars = 2
@@ -2339,6 +3490,15 @@ Private Sub FinalizeTestConsole(blnAllPassed As Boolean, _
         .cmdOpenLogFile.Visible = (Len(strLogPath) > 0)
         .cmdCopyPath.Visible = .cmdOpenLogFile.Visible
         .strCopyToClipboardPath = IIf(Len(strCopyPath) > 0, strCopyPath, strLogPath)
+        .strLastTestResultsPath = vbNullString
+        .cmdOpenTestResults.Visible = False
+        If Options.ExportTestResultsHtml Then
+            strReportPath = modTestState.GetTestResultsFolder() & "test-results.html"
+            If FSO.FileExists(strReportPath) Then
+                .strLastTestResultsPath = strReportPath
+                .cmdOpenTestResults.Visible = True
+            End If
+        End If
         If blnCanceled Then
             .SetStatusText T("Canceled"), T("Tests Canceled"), _
                 T("The test run was canceled. Partial results are available in the log file.")
@@ -2390,6 +3550,15 @@ Public Sub InstallTestAssertModule()
         .Add "Option Explicit"
         .Add "'@Folder(""Tests"")"
         .Add vbNullString
+        .Add "' True while a test run is driving this project. Set by the test runner,"
+        .Add "' which executes in the add-in - a different VBA project - and so cannot be"
+        .Add "' observed from here any other way. Guard anything that waits for a person,"
+        .Add "' so an unattended run cannot stall on it:"
+        .Add "'"
+        .Add "'   If Not TestRunActive Then MsgBox ""Import complete."", vbInformation"
+        .Add "'"
+        .Add "Public TestRunActive As Boolean"
+        .Add vbNullString
         .Add "Private m_strAddInPath As String"
         .Add vbNullString
         .Add "Public Sub TestAssert(ByVal condition As Boolean, _"
@@ -2401,6 +3570,16 @@ Public Sub InstallTestAssertModule()
         .Add "        Err.Clear"
         .Add "        Debug.Assert condition"
         .Add "    End If"
+        .Add "End Sub"
+        .Add vbNullString
+        .Add "'---------------------------------------------------------------------------------------"
+        .Add "' Procedure : SetTestRunActive"
+        .Add "' Purpose   : Called by the VCS test runner as a run starts and finishes."
+        .Add "'           : Application.Run reaches procedures, not variables, so the flag is"
+        .Add "'           : set through here."
+        .Add "'---------------------------------------------------------------------------------------"
+        .Add "Public Sub SetTestRunActive(ByVal blnActive As Boolean)"
+        .Add "    TestRunActive = blnActive"
         .Add "End Sub"
         .Add vbNullString
         .Add "Private Function ResolveAddInPath() As String"
@@ -2453,7 +3632,10 @@ End Sub
 ' Purpose   : Scoped migration tool: replace Debug.Assert with TestAssert in test
 '           : modules only. Uses @Folder("Tests") discovery when folder annotations
 '           : exist in the project, otherwise falls back to *Test* in the module name.
-'           : Shows a preview and requires confirmation before applying changes.
+'           : The module that defines TestAssert itself is skipped (detected by
+'           : procedure signature, so a renamed helper is still excluded) -- its
+'           : Debug.Assert is the intentional fallback when the add-in is not
+'           : driving the run. Shows a preview and requires confirmation.
 '---------------------------------------------------------------------------------------
 '
 Public Sub MigrateDebugAssert()
@@ -2534,11 +3716,19 @@ Public Sub MigrateDebugAssert()
 
         If Not blnIsTest Then GoTo NextModule
 
-        ' Scan this module for Debug.Assert
+        ' Scan this module for Debug.Assert. If the module defines TestAssert
+        ' itself, skip it entirely -- its Debug.Assert is the intentional
+        ' fallback for when the add-in is not driving the run. Detected by
+        ' procedure signature (not module name) so a renamed helper is still
+        ' excluded.
         Set colLines = New Collection
         On Error Resume Next
         For lngLine = 1 To cmp.CodeModule.CountOfLines
             strLine = Trim$(cmp.CodeModule.Lines(lngLine, 1))
+            If InStr(1, strLine, "Public Sub TestAssert(", vbTextCompare) > 0 Then
+                On Error GoTo 0
+                GoTo NextModule
+            End If
             If InStr(1, strLine, "Debug.Assert ", vbTextCompare) > 0 Or _
                InStr(1, strLine, "Debug.Assert(", vbTextCompare) > 0 Then
                 colLines.Add lngLine
