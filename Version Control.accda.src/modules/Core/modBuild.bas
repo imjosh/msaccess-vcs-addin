@@ -1687,9 +1687,10 @@ Private Function SingleObjectImportError(colErrors As Collection) As String
     End If
 
     Select Case lngCount
-        Case 0:     SingleObjectImportError = "Import completed with errors. Check the log for details."
+        Case 0:     SingleObjectImportError = T("Import completed with errors. Check the log for details.")
         Case 1:     SingleObjectImportError = strFirst
-        Case Else:  SingleObjectImportError = strFirst & " (and " & (lngCount - 1) & " more errors in the log)"
+        Case Else:  SingleObjectImportError = strFirst & T(" (and {0} more errors in the log)", _
+                        var0:=lngCount - 1)
     End Select
 
 End Function

@@ -3529,7 +3529,7 @@ Private Function TestRunPreflight(ByVal blnHeadless As Boolean, ByRef strRefusal
             InstallTestAssertModule
         Else
             If Not Operation.DecisionBlocked Then
-                strRefusal = "{""success"":false,""error"":""modTestAssert is not installed.""}"
+                strRefusal = RefusalJson(vbNullString, T("modTestAssert is not installed."), False)
             End If
             intResult = eorCanceled
             Exit Function
