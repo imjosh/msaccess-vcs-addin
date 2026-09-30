@@ -195,9 +195,15 @@ Public Sub TestRuntimeErrorJsonEncodesAnyText()
 
     Dim dResult As Dictionary
     Dim strText As String
+    Dim blnBlocked As Boolean
 
+    ' RuntimeErrorJson reads the session operation's blocked flag. Clear it for
+    ' the call so the result does not depend on the host run, then restore it.
+    blnBlocked = Operation.DecisionBlocked
+    Operation.DecisionBlocked = False
     strText = "bad ""quote"" \ back" & vbCrLf & "tab" & vbTab & "bell" & Chr$(7)
     Set dResult = ParseJson(RuntimeErrorJson(strText, 5))
+    Operation.DecisionBlocked = blnBlocked
     TestAssert dResult("success") = False, "a runtime error is not a success"
     TestAssert dResult("error") = strText, "the error text survives encoding"
     TestAssert dResult("errorNumber") = 5, "the error number is included"
