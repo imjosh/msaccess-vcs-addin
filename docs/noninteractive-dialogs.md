@@ -53,6 +53,12 @@ no decisions and no blocked prompt. `SetOperationPolicy` refuses with
 `operation_already_running` while an operation runs. `ClearOperationPolicy`
 is always safe to call, including twice.
 
+`ImportObject` and `ExportObject` take no policy argument; they run under
+the session policy. The MCP sets it around each call. `ImportObject` reads
+its outcome before `Finish`, which restores the error level from before the
+operation, so a logged error (for example a refused add-in form merge)
+returns `success: false` with the first logged error in `error`.
+
 ## Dialogs this mode prevents
 
 - `MsgBox2` (the add-in's message boxes), including the printer-settings

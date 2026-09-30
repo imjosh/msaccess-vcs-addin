@@ -1498,6 +1498,74 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : FinishSingleObjectImport
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Complete the root operation after an API LoadSingleObject and return the
+'           : JSON result. colErrors is the import's error journal, read before Finish
+'           : releases the Log singleton, so the logged error goes back to the caller
+'           : in place of the message box a noninteractive policy suppressed.
+'---------------------------------------------------------------------------------------
+'
+Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
+    colErrors As Collection) As String
+
+    Dim dResult As Dictionary
+    Dim intLevel As eErrorLevel
+
+    ' Read the outcome first. Finish closes the operation's interaction scope, which
+    ' restores the error level from before the operation, so under a noninteractive
+    ' policy a refused merge would otherwise report success.
+    intLevel = cOp.ErrorLevel
+    If cOp.Status = eosRunning Then
+        cOp.Finish IIf(intLevel >= eelCritical, eorFailed, eorSuccess)
+    End If
+
+    Set dResult = New Dictionary
+    dResult.Add "success", (intLevel < eelError)
+    If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+    dResult.Add "logPath", strLogPath
+    FinishSingleObjectImport = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectImportError
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The first error or critical entry in the journal, with a count of any
+'           : others. Falls back to pointing at the log when none was journaled.
+'---------------------------------------------------------------------------------------
+'
+Private Function SingleObjectImportError(colErrors As Collection) As String
+
+    Dim varEntry As Variant
+    Dim dEntry As Dictionary
+    Dim strFirst As String
+    Dim lngCount As Long
+
+    If Not colErrors Is Nothing Then
+        For Each varEntry In colErrors
+            Set dEntry = varEntry
+            Select Case CStr(dEntry("level"))
+                Case "error", "critical"
+                    lngCount = lngCount + 1
+                    If lngCount = 1 Then strFirst = CStr(dEntry("message"))
+            End Select
+        Next varEntry
+    End If
+
+    Select Case lngCount
+        Case 0:     SingleObjectImportError = "Import completed with errors. Check the log for details."
+        Case 1:     SingleObjectImportError = strFirst
+        Case Else:  SingleObjectImportError = strFirst & " (and " & (lngCount - 1) & " more errors in the log)"
+    End Select
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : RunBuildFromContinuation
 ' Author    : Adam Waller
 ' Date      : 8/20/2026
