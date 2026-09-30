@@ -46,8 +46,12 @@ as an `error` callback. The patterns are `invalid_decision_policy`,
 A runtime error during a run that also blocked a prompt reports
 `decision_required` with the decisions and the error under `runtime_error`.
 
-`SetOperationPolicy` refuses with `operation_already_running` while an
-operation runs. `ClearOperationPolicy` is always safe to call.
+`SetOperationPolicy` sets a session policy. It stays in force across
+operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,
+replaces it; `Finish` does not close it. Each operation under it starts with
+no decisions and no blocked prompt. `SetOperationPolicy` refuses with
+`operation_already_running` while an operation runs. `ClearOperationPolicy`
+is always safe to call, including twice.
 
 ## Dialogs this mode prevents
 

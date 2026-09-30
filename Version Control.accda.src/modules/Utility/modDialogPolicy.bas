@@ -116,26 +116,57 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : BeginNonInteractive
+' Procedure : SetSessionPolicy
 ' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Open a noninteractive scope for one operation. Finish closes it. If the
-'           : operation never starts, pass the returned token to
-'           : Operation.CloseInteractionScope.
+' Date      : 09/30/2026
+' Purpose   : Open a caller-owned noninteractive scope on this operation and return the
+'           : JSON result for SetOperationPolicy. lngToken holds the scope between
+'           : calls: a scope it already holds is replaced, not nested. Finish leaves
+'           : the scope open; only ClearSessionPolicy closes it. The operation is
+'           : passed in so the rule can be tested without touching the session
+'           : operation.
 '---------------------------------------------------------------------------------------
 '
-Public Function BeginNonInteractive(ByVal strPolicy As String, Optional ByRef lngToken As Long) As Boolean
+Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As String, _
+    ByRef lngToken As Long) As String
 
+    Dim dResult As Dictionary
     Dim intPolicy As eDecisionPolicy
 
+    ' A running or staged operation keeps the policy it began with. Refuse without
+    ' touching its scope, or the policy this call would replace.
+    SetSessionPolicy = PolicyRequestRefusal(cOp)
+    If Len(SetSessionPolicy) > 0 Then Exit Function
+
+    ' Replace a policy left over from an earlier call rather than nesting under it.
+    cOp.CloseInteractionScope lngToken
     lngToken = 0
     If Not ParseDecisionPolicy(strPolicy, intPolicy) Then
-        BeginNonInteractive = False
+        SetSessionPolicy = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False)
         Exit Function
     End If
-    lngToken = Operation.PushInteractionScope(eimNonInteractive, intPolicy, True)
-    BeginNonInteractive = True
+    lngToken = cOp.PushInteractionScope(eimNonInteractive, intPolicy, False)
 
+    Set dResult = New Dictionary
+    dResult.Add "success", True
+    dResult.Add "policy", LCase$(Trim$(strPolicy))
+    SetSessionPolicy = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearSessionPolicy
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Close the scope SetSessionPolicy opened and return the JSON result for
+'           : ClearOperationPolicy. Safe when no policy is set, and safe to call twice.
+'---------------------------------------------------------------------------------------
+'
+Public Function ClearSessionPolicy(ByVal cOp As clsOperation, ByRef lngToken As Long) As String
+    cOp.CloseInteractionScope lngToken
+    lngToken = 0
+    ClearSessionPolicy = "{""success"":true}"
 End Function
 
 

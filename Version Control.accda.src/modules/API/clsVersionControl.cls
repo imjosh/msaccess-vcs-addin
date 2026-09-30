@@ -3931,34 +3931,13 @@ End Sub
 ' Procedure : SetOperationPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Push a noninteractive decision policy for the next operation.
-'           : Finish pops it. Call ClearOperationPolicy if the operation never starts.
+' Purpose   : Set a noninteractive decision policy for this session. It stays in force
+'           : across operations until ClearOperationPolicy, or another call to this,
+'           : replaces it. Finish does not close it.
 '---------------------------------------------------------------------------------------
 '
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
-
-    Dim dResult As Dictionary
-    Dim strRefusal As String
-
-    ' A running or staged operation keeps the policy it began with. Refuse without
-    ' touching its scope, or the policy this call would replace.
-    strRefusal = PolicyRequestRefusal(Operation)
-    If Len(strRefusal) > 0 Then
-        SetOperationPolicy = strRefusal
-        Exit Function
-    End If
-
-    ' Replace a policy left over from an earlier call rather than nesting under it.
-    Operation.CloseInteractionScope m_PolicyScope
-    If BeginNonInteractive(strDecisionPolicy, m_PolicyScope) Then
-        Set dResult = New Dictionary
-        dResult.Add "success", True
-        dResult.Add "policy", LCase$(Trim$(strDecisionPolicy))
-        SetOperationPolicy = ConvertToJson(dResult)
-    Else
-        SetOperationPolicy = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False)
-    End If
-
+    SetOperationPolicy = SetSessionPolicy(Operation, strDecisionPolicy, m_PolicyScope)
 End Function
 
 
@@ -3966,14 +3945,12 @@ End Function
 ' Procedure : ClearOperationPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Close the scope opened by SetOperationPolicy. Safe when Finish already
-'           : restored it, and safe to call twice.
+' Purpose   : Close the policy SetOperationPolicy set. Safe when none is set, and safe
+'           : to call twice.
 '---------------------------------------------------------------------------------------
 '
 Public Function ClearOperationPolicy() As String
-    Operation.CloseInteractionScope m_PolicyScope
-    m_PolicyScope = 0
-    ClearOperationPolicy = "{""success"":true}"
+    ClearOperationPolicy = ClearSessionPolicy(Operation, m_PolicyScope)
 End Function
 
 
