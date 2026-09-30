@@ -171,6 +171,30 @@ Public Enum eOperationResult
     eorDecisionRequired     ' Noninteractive operation stopped; a policy did not cover a prompt.
 End Enum
 
+' How a noninteractive operation answers confirmations and merge conflicts.
+' edpAsk is the interactive default and is not a noninteractive policy.
+' Conflict policies do not approve unrelated Yes/No prompts. The policy names that
+' callers pass are listed once, in modDialogPolicy.PolicyTable.
+Public Enum eDecisionPolicy
+    edpAsk = 0
+    edpBlock = 1            ' Required decisions return decision_required.
+    edpPreferSource = 2     ' Conflicts: source file wins.
+    edpPreferDatabase = 3   ' Conflicts: keep the database object.
+    edpSkip = 4             ' Conflicts: skip the source file.
+    edpDecline = 5          ' Confirmations: No/Cancel/Abort. Conflicts: keep the database object.
+End Enum
+
+' Values reported in the decision journal (Operation.Decisions) and in the
+' decision_required result. A decision has a "kind" (what happened to the prompt)
+' and a "resolution" (how it was answered); the words overlap, so each value is
+' defined once here. These are wire values: do not translate or reword them.
+Public Const DECISION_REQUIRED As String = "decision_required"      ' Kind and resolution: not answered
+Public Const DECISION_ACKNOWLEDGED As String = "acknowledged"       ' Kind and resolution: OK-only prompt
+Public Const DECISION_APPLIED As String = "applied"                 ' Kind: a policy answered it
+Public Const DECISION_DECLINED As String = "declined"               ' Resolution: answered No/Cancel/Abort
+Public Const DECISION_BLOCKED As String = "blocked"                 ' Resolution: nothing could answer it
+Public Const DECISION_KEEP_DATABASE As String = "keep_database"     ' Resolution: conflicts kept the database object
+
 ' Source of the current operation
 Public Enum eOperationSource
     eosUserInterface = 0    ' Default - ribbon, menu, immediate window

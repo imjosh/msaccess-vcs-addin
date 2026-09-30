@@ -227,9 +227,9 @@ Private Function GetSourceFolder() As String
 
         If InteractionIsNonInteractive() Then
             ' A folder picker cannot be answered by a decision policy.
-            Operation.RecordDecision "decision_required", T("Select Source Folder"), _
+            Operation.RecordDecision DECISION_REQUIRED, T("Select Source Folder"), _
                 T("No project export folder was found, and a folder picker cannot be shown."), _
-                "blocked", "file_dialog"
+                DECISION_BLOCKED, "file_dialog"
             DoCmd.Hourglass False
             Exit Function
         End If

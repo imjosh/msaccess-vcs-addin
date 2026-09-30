@@ -576,7 +576,7 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
                 MCP.PostCallback "error", -1, -1, "Operation timed out", dExtra
             Case eorDecisionRequired
                 dExtra.Add "decision_required", True
-                dExtra.Add "error_pattern", "decision_required"
+                dExtra.Add "error_pattern", ERR_DECISION_REQUIRED
                 MCP.PostCallback "error", -1, -1, "Decision required", dExtra
             Case Else
                 MCP.PostCallback "complete", 100, 100, "Operation completed", dExtra

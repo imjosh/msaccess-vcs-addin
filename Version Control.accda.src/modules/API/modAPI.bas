@@ -37,23 +37,12 @@ Public Const API_REFUSED_PREFIX As String = "VCS_API_REFUSED: "
 ' Use hard-coded enum index values to preserve user settings in existing projects
 ' if new values are added in the future.
 
-' Control the interaction mode
+' Control the interaction mode. (This one stays here rather than in modConstants because
+' SetInteractionMode below exposes it to external callers.)
 Public Enum eInteractionMode
     eimNormal = 0
     eimSilent = 1
     eimNonInteractive = 2   ' Suppress UI. Unresolved decisions block; they are not approved.
-End Enum
-
-' How a noninteractive operation answers confirmations and merge conflicts.
-' edpAsk is the interactive default and is not a noninteractive policy.
-' Conflict policies do not approve unrelated Yes/No prompts.
-Public Enum eDecisionPolicy
-    edpAsk = 0
-    edpBlock = 1            ' Required decisions return decision_required.
-    edpPreferSource = 2     ' Conflicts: source file wins.
-    edpPreferDatabase = 3   ' Conflicts: keep the database object.
-    edpSkip = 4             ' Conflicts: skip the source file.
-    edpDecline = 5          ' Confirmations: No/Cancel/Abort. Conflicts: keep the database object.
 End Enum
 
 ' Formats used when exporting table data.

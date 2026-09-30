@@ -33,6 +33,38 @@ Public Sub TestParseDecisionPolicyNames()
 End Sub
 
 
+Public Sub TestPolicyNamesRoundTripThroughTheTable()
+
+    Dim intPolicy As eDecisionPolicy
+    Dim varName As Variant
+
+    For Each varName In Array("block", "prefer_source", "prefer_database", "skip", "decline")
+        TestAssert ParseDecisionPolicy(CStr(varName), intPolicy), varName & " parses"
+        TestAssert DecisionPolicyName(intPolicy) = varName, varName & " names itself"
+    Next varName
+    TestAssert Len(DecisionPolicyName(edpAsk)) = 0, "edpAsk is not a named policy"
+    TestAssert InStr(InvalidPolicyMessage(), "block, prefer_source, prefer_database, skip, or decline") > 0, _
+        "the invalid-policy message lists every name in table order"
+    TestAssert ConflictResolutionName(edpPreferSource) = "prefer_source", "prefer_source reports its own name"
+    TestAssert ConflictResolutionName(edpSkip) = "keep_database", "other policies keep the database object"
+
+End Sub
+
+
+Public Sub TestDecisionWireValuesAreUnchanged()
+
+    ' Pinned to literals on purpose: these strings are the wire contract.
+    TestAssert DECISION_REQUIRED = "decision_required", "decision_required"
+    TestAssert ERR_DECISION_REQUIRED = "decision_required", "the error pattern shares it"
+    TestAssert DECISION_ACKNOWLEDGED = "acknowledged", "acknowledged"
+    TestAssert DECISION_APPLIED = "applied", "applied"
+    TestAssert DECISION_DECLINED = "declined", "declined"
+    TestAssert DECISION_BLOCKED = "blocked", "blocked"
+    TestAssert DECISION_KEEP_DATABASE = "keep_database", "keep_database"
+
+End Sub
+
+
 Public Sub TestOkOnlyPromptIsAcknowledged()
 
     Dim intResult As VbMsgBoxResult

@@ -31,11 +31,6 @@ Option Explicit
 '@Folder("Infrastructure")
 
 
-Private Const KIND_DECISION_REQUIRED As String = "decision_required"
-Private Const KIND_ACKNOWLEDGED As String = "acknowledged"
-Private Const KIND_APPLIED As String = "applied"
-Private Const RESOLUTION_ACKNOWLEDGED As String = "acknowledged"
-
 
 ' State saved when a scope opens, restored when it closes.
 Private Type udtFrame
@@ -295,7 +290,7 @@ Public Sub RecordDecision(ByVal strKind As String, ByVal strTitle As String, _
     dItem.Add "detail", strDetail
     this.Journal.Add dItem
 
-    If StrComp(strKind, KIND_DECISION_REQUIRED, vbTextCompare) = 0 Then
+    If StrComp(strKind, DECISION_REQUIRED, vbTextCompare) = 0 Then
         this.Blocked = True
         If this.ErrorLevel < eelCritical Then this.ErrorLevel = eelCritical
     End If
@@ -322,12 +317,12 @@ Public Function ResolvePrompt(ByVal intButtons As Long, _
 
     ResolveNonInteractivePrompt intButtons, this.Policy, intResult, strResolution, blnBlocked
     If blnBlocked Then
-        RecordDecision KIND_DECISION_REQUIRED, strTitle, strMessage, strResolution, _
+        RecordDecision DECISION_REQUIRED, strTitle, strMessage, strResolution, _
             "buttons=" & CStr(intButtons And MB_BUTTON_STYLE_MASK)
-    ElseIf strResolution = RESOLUTION_ACKNOWLEDGED Then
-        RecordDecision KIND_ACKNOWLEDGED, strTitle, strMessage, strResolution
+    ElseIf strResolution = DECISION_ACKNOWLEDGED Then
+        RecordDecision DECISION_ACKNOWLEDGED, strTitle, strMessage, strResolution
     Else
-        RecordDecision KIND_APPLIED, strTitle, strMessage, strResolution, "result=" & CStr(intResult)
+        RecordDecision DECISION_APPLIED, strTitle, strMessage, strResolution, "result=" & CStr(intResult)
     End If
     ResolvePrompt = intResult
 

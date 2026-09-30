@@ -19,7 +19,7 @@ Option Private Module
 Public Const ERR_INVALID_DECISION_POLICY As String = "invalid_decision_policy"
 Public Const ERR_MERGE_NOT_AVAILABLE As String = "merge_not_available"
 Public Const ERR_OPERATION_ALREADY_RUNNING As String = "operation_already_running"
-Public Const ERR_DECISION_REQUIRED As String = "decision_required"
+Public Const ERR_DECISION_REQUIRED As String = DECISION_REQUIRED
 
 
 ' The low bits of a MsgBox style select the button set (vbOKOnly to vbRetryCancel).
@@ -27,32 +27,91 @@ Public Const MB_BUTTON_STYLE_MASK As Long = 7
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : PolicyTable
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : The one list of policy names a caller can pass, mapped to eDecisionPolicy.
+'           : Parsing, naming and the invalid-policy message all read it, so a new
+'           : policy is registered here (and in eDecisionPolicy). Keys are lower case
+'           : and in the order the invalid-policy message lists them.
+'---------------------------------------------------------------------------------------
+'
+Private Function PolicyTable() As Dictionary
+
+    Static dTable As Dictionary
+
+    If dTable Is Nothing Then
+        Set dTable = New Dictionary
+        dTable.Add "block", edpBlock
+        dTable.Add "prefer_source", edpPreferSource
+        dTable.Add "prefer_database", edpPreferDatabase
+        dTable.Add "skip", edpSkip
+        dTable.Add "decline", edpDecline
+    End If
+    Set PolicyTable = dTable
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ParseDecisionPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
 ' Purpose   : Map a policy name to eDecisionPolicy. Returns False for unknown names.
-'           : Accepted names: block, prefer_source, prefer_database, skip, decline.
+'           : Accepted names are the keys of PolicyTable.
 '---------------------------------------------------------------------------------------
 '
 Public Function ParseDecisionPolicy(ByVal strPolicy As String, ByRef intPolicy As eDecisionPolicy) As Boolean
 
-    Select Case LCase$(Trim$(strPolicy))
-        Case "block"
-            intPolicy = edpBlock
-        Case "prefer_source"
-            intPolicy = edpPreferSource
-        Case "prefer_database"
-            intPolicy = edpPreferDatabase
-        Case "skip"
-            intPolicy = edpSkip
-        Case "decline"
-            intPolicy = edpDecline
-        Case Else
-            ParseDecisionPolicy = False
-            Exit Function
-    End Select
-    ParseDecisionPolicy = True
+    Dim dTable As Dictionary
+    Dim strName As String
 
+    Set dTable = PolicyTable()
+    strName = LCase$(Trim$(strPolicy))
+    If dTable.Exists(strName) Then
+        intPolicy = dTable.Item(strName)
+        ParseDecisionPolicy = True
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DecisionPolicyName
+' Date      : 09/29/2026
+' Purpose   : The name a caller passes for a policy. Empty for edpAsk, which is not a
+'           : noninteractive policy.
+'---------------------------------------------------------------------------------------
+'
+Public Function DecisionPolicyName(ByVal intPolicy As eDecisionPolicy) As String
+
+    Dim dTable As Dictionary
+    Dim varName As Variant
+
+    Set dTable = PolicyTable()
+    For Each varName In dTable.Keys
+        If dTable.Item(varName) = intPolicy Then
+            DecisionPolicyName = varName
+            Exit Function
+        End If
+    Next varName
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ConflictResolutionName
+' Date      : 09/29/2026
+' Purpose   : The resolution reported when a policy answered a conflict: the policy
+'           : name for prefer_source, otherwise keep_database.
+'---------------------------------------------------------------------------------------
+'
+Public Function ConflictResolutionName(ByVal intPolicy As eDecisionPolicy) As String
+    If intPolicy = edpPreferSource Then
+        ConflictResolutionName = DecisionPolicyName(edpPreferSource)
+    Else
+        ConflictResolutionName = DECISION_KEEP_DATABASE
+    End If
 End Function
 
 
@@ -142,26 +201,26 @@ Public Sub ResolveNonInteractivePrompt(ByVal intButtons As Long, _
 
     intStyle = intButtons And MB_BUTTON_STYLE_MASK
     blnBlocked = False
-    strResolution = "acknowledged"
+    strResolution = DECISION_ACKNOWLEDGED
     intResult = vbOK
 
     If intStyle = vbOKOnly Then
         intResult = vbOK
-        strResolution = "acknowledged"
+        strResolution = DECISION_ACKNOWLEDGED
         Exit Sub
     End If
 
     intResult = NonDestructiveResult(intStyle)
 
     If intPolicy = edpDecline Then
-        strResolution = "declined"
+        strResolution = DECISION_DECLINED
         blnBlocked = False
         Exit Sub
     End If
 
     ' prefer_source / prefer_database / skip apply to merge conflicts, not to a
     ' generic confirmation. block, ask, and those conflict policies all stop here.
-    strResolution = "decision_required"
+    strResolution = DECISION_REQUIRED
     blnBlocked = True
 
 End Sub
@@ -275,9 +334,20 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function InvalidPolicyMessage() As String
+
+    Dim varNames As Variant
+    Dim strList As String
+    Dim lngIdx As Long
+
     ' The policy names are wire values, so they stay out of the translated sentence.
-    InvalidPolicyMessage = T("Unknown decision policy. Use {0}.", _
-        var0:="block, prefer_source, prefer_database, skip, or decline")
+    varNames = PolicyTable().Keys
+    For lngIdx = LBound(varNames) To UBound(varNames)
+        If lngIdx > LBound(varNames) Then strList = strList & ", "
+        If lngIdx = UBound(varNames) And lngIdx > LBound(varNames) Then strList = strList & "or "
+        strList = strList & varNames(lngIdx)
+    Next lngIdx
+    InvalidPolicyMessage = T("Unknown decision policy. Use {0}.", var0:=strList)
+
 End Function
 
 
