@@ -17,6 +17,8 @@ Option Private Module
 
 ' Error patterns returned when a request is refused or stops for a decision.
 Public Const ERR_INVALID_DECISION_POLICY As String = "invalid_decision_policy"
+Public Const ERR_INTERACTION_MODE_REFUSED As String = "interaction_mode_refused"
+Public Const ERR_INVALID_INTERACTION_MODE As String = "invalid_interaction_mode"
 Public Const ERR_MERGE_NOT_AVAILABLE As String = "merge_not_available"
 Public Const ERR_OPERATION_ALREADY_RUNNING As String = "operation_already_running"
 Public Const ERR_DECISION_REQUIRED As String = DECISION_REQUIRED
@@ -167,6 +169,48 @@ End Function
 Public Function ClearSessionPolicy(ByVal cOp As clsOperation) As String
     cOp.CloseSessionScope
     ClearSessionPolicy = "{""success"":true}"
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SelectInteractionMode
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Report whether the requested mode took effect. The setter preserves
+'           : enclosing scopes and cannot relax a running root. Read back the mode
+'           : rather than treating an ignored selection as acceptance. No scope is
+'           : closed here, including one left open after failed caller cleanup.
+'---------------------------------------------------------------------------------------
+'
+Public Function SelectInteractionMode(ByVal cOp As clsOperation, ByVal intMode As Long) As String
+
+    Dim dResult As Dictionary
+    Dim strPattern As String
+    Dim strError As String
+    Dim intEffective As eInteractionMode
+
+    If intMode < eimNormal Or intMode > eimNonInteractive Then
+        strPattern = ERR_INVALID_INTERACTION_MODE
+        strError = T("Unknown interaction mode. Use 0 (normal), 1 (silent), or 2 (noninteractive).")
+    Else
+        cOp.InteractionMode = intMode
+        If cOp.InteractionMode <> intMode Then
+            strPattern = ERR_INTERACTION_MODE_REFUSED
+            strError = T("The requested interaction mode could not take effect. An enclosing noninteractive scope or an active operation must be released by its owner first.")
+        End If
+    End If
+
+    intEffective = cOp.InteractionMode
+    Set dResult = New Dictionary
+    dResult.Add "success", (Len(strPattern) = 0)
+    dResult.Add "requested_mode", intMode
+    dResult.Add "effective_mode", intEffective
+    If Len(strPattern) > 0 Then
+        dResult.Add "error_pattern", strPattern
+        dResult.Add "error", strError
+    End If
+    SelectInteractionMode = ConvertToJson(dResult)
+
 End Function
 
 

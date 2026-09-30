@@ -542,6 +542,224 @@ Public Sub TestRuntimeErrorBelongsToItsRoot()
 End Sub
 
 
+Public Sub TestInteractionModeSelectionReportsEffectiveMode()
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim intMode As Long
+
+    On Error GoTo ErrHandler
+    Set cOp = NewUnattendedOperation
+    For intMode = eimNonInteractive To eimNormal Step -1
+        Set dResult = ParseJson(SelectInteractionMode(cOp, intMode))
+        TestAssert dResult("success") = True, "unscoped mode selection succeeds"
+        TestAssert dResult("requested_mode") = intMode, "requested mode is reported"
+        TestAssert dResult("effective_mode") = intMode, "effective mode matches the request"
+        TestAssert cOp.InteractionMode = intMode, "the mode actually took effect"
+        TestAssert Not dResult.Exists("error_pattern"), "acceptance has no refusal pattern"
+        TestAssert Not dResult.Exists("started"), "selecting a mode starts no operation"
+    Next intMode
+
+CleanUp:
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, "TestInteractionModeSelectionReportsEffectiveMode " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestInteractiveSelectionPreservesCallerScope()
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim lngToken As Long
+
+    On Error GoTo ErrHandler
+    Set cOp = NewUnattendedOperation
+    lngToken = cOp.PushInteractionScope(eimNonInteractive, edpDecline)
+    cOp.RecordDecision NewDecision(DECISION_DECLINED, "Confirm", "Overwrite?", DECISION_DECLINED)
+    cOp.DecisionBlocked = True
+    cOp.ErrorLevel = eelCritical
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
+    TestAssert dResult("success") = False, "interactive selection is refused"
+    TestAssert dResult("error_pattern") = "interaction_mode_refused", "stable refusal pattern"
+    TestAssert Len(dResult("error")) > 0, "refusal explains how to recover"
+    TestAssert dResult("requested_mode") = 0, "interactive mode was requested"
+    TestAssert dResult("effective_mode") = 2, "noninteractive mode is still effective"
+    TestAssert cOp.InteractionMode = eimNonInteractive, "the enclosing mode stays in force"
+    TestAssert cOp.DecisionPolicy = edpDecline, "the enclosing policy stays in force"
+    TestAssert cOp.DecisionBlocked, "the blocked flag is preserved"
+    TestAssert cOp.ErrorLevel = eelCritical, "the error level is preserved"
+    TestAssert cOp.Decisions.Count = 1, "the decision journal is preserved"
+    cOp.CloseInteractionScope lngToken
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
+    TestAssert dResult("success") = True, "the owner's close allows interactive selection"
+    TestAssert cOp.InteractionMode = eimNormal, "interactive mode is effective after the close"
+
+CleanUp:
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, "TestInteractiveSelectionPreservesCallerScope " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestInteractiveSelectionAfterFailedPolicyCleanup()
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim dResult As Dictionary
+
+    On Error GoTo ErrHandler
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    cRoot.RecordRuntimeError "Failed operation", 5
+    cRoot.Complete eorFailed
+    ' Simulate a caller whose cleanup never reached ClearOperationPolicy.
+    ' Finishing the failed root releases only operation-owned scopes.
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
+    TestAssert cOp.Status = eosReady, "the failed operation has finished"
+    TestAssert dResult("success") = False, "leftover session policy refuses interactive mode"
+    TestAssert dResult("error_pattern") = "interaction_mode_refused", "cleanup failure is observable"
+    TestAssert dResult("effective_mode") = 2, "leftover noninteractive mode is reported"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the caller's policy remains intact"
+    TestAssert cOp.Result = eorFailed, "selecting a mode preserves the failed outcome"
+    ClearPolicyInOneCall cOp
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
+    TestAssert dResult("success") = True, "a later owner cleanup allows selection"
+    TestAssert dResult("effective_mode") = 0, "interactive mode is effective after cleanup"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If lngErr <> 0 Then TestAssert False, "TestInteractiveSelectionAfterFailedPolicyCleanup " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestSilentSelectionInsidePolicyScopeIsRefused()
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+
+    On Error GoTo ErrHandler
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "decline"
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimSilent))
+    TestAssert dResult("success") = False, "silent mode cannot weaken a noninteractive scope"
+    TestAssert dResult("requested_mode") = 1, "silent request is reported"
+    TestAssert dResult("effective_mode") = 2, "effective mode remains noninteractive"
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNonInteractive))
+    TestAssert dResult("success") = True, "an already effective mode is accepted"
+    TestAssert cOp.DecisionPolicy = edpDecline, "selecting the same mode preserves policy"
+    ClearPolicyInOneCall cOp
+
+CleanUp:
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, "TestSilentSelectionInsidePolicyScopeIsRefused " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestInteractiveSelectionCannotRelaxRunningRoot()
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim dResult As Dictionary
+
+    On Error GoTo ErrHandler
+    Set cOp = NewUnattendedOperation
+    cOp.InteractionMode = eimSilent
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
+    TestAssert dResult("success") = False, "a running silent root cannot be relaxed"
+    TestAssert dResult("error_pattern") = "interaction_mode_refused", "active-root refusal is structured"
+    TestAssert dResult("effective_mode") = 1, "silent mode is still effective"
+    TestAssert cRoot.IsValid, "the root lease is left intact"
+    cRoot.Complete eorSuccess
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
+    TestAssert dResult("success") = True, "interactive selection succeeds after the root finishes"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If lngErr <> 0 Then TestAssert False, "TestInteractiveSelectionCannotRelaxRunningRoot " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestInvalidInteractionModeLeavesStateIntact()
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim varMode As Variant
+
+    On Error GoTo ErrHandler
+    Set cOp = NewUnattendedOperation
+    cOp.InteractionMode = eimSilent
+    For Each varMode In Array(-1, 3, 32768)
+        Set dResult = ParseJson(SelectInteractionMode(cOp, CLng(varMode)))
+        TestAssert dResult("success") = False, "unknown mode is refused"
+        TestAssert dResult("error_pattern") = "invalid_interaction_mode", "invalid-mode pattern is stable"
+        TestAssert dResult("requested_mode") = varMode, "invalid request is reported"
+        TestAssert dResult("effective_mode") = 1, "the previous mode is reported"
+        TestAssert cOp.InteractionMode = eimSilent, "invalid input does not mutate the mode"
+    Next varMode
+
+CleanUp:
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, "TestInvalidInteractionModeLeavesStateIntact " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
 ' One SetOperationPolicy or ClearOperationPolicy request: no state survives the call
 ' except what the operation itself keeps.
 Private Sub SetPolicyInOneCall(ByVal cOp As clsOperation, ByVal strPolicy As String)

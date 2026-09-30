@@ -63,6 +63,38 @@ no decisions and no blocked prompt. `SetOperationPolicy` refuses with
 `operation_already_running` while an operation runs. `ClearOperationPolicy`
 is always safe to call, including twice.
 
+`SetInteractionMode` returns a JSON string through both the VBA function and
+`VCS.API("SetInteractionMode", mode)`. Modes are 0 (normal/interactive), 1 (silent),
+and 2 (noninteractive). Every response includes `success`, `requested_mode`, and
+`effective_mode`; success means the requested mode is effective when the call
+returns. Selecting a mode starts no operation and posts no completion callback.
+
+```json
+{"success":true,"requested_mode":0,"effective_mode":0}
+{"success":false,"requested_mode":0,"effective_mode":2,"error_pattern":"interaction_mode_refused","error":"..."}
+```
+
+An enclosing noninteractive scope prevents selecting normal or silent mode.
+A running or staged root also prevents relaxing its mode. These refusals preserve
+the scope, policy, decisions, blocked flag, error level, and root lease. The
+scope owner must clear its session policy with `ClearOperationPolicy` (or close
+its own scope token), and an active root must finish before a weaker mode can take
+effect. If caller cleanup failed and left a session policy open after a failed
+operation, an interactive selection returns this refusal; it never clears that
+policy implicitly. Requesting an already effective mode succeeds without
+changing the policy. An unknown mode returns `invalid_interaction_mode` and
+leaves the state intact.
+
+Callers that depend on confirmed interactive mode require an **A24 build or
+later** and must check the structured result before starting work. Earlier builds
+return VBA `Empty`, which does not establish acceptance. This development
+contract uses capability detection rather than a numeric release-version gate:
+require `success: true` and `effective_mode` equal to the requested mode; missing,
+empty, or malformed responses require an add-in upgrade. Existing VBA calls
+that ignore the return value continue to work. Rebuilding does not increment the
+add-in's version, so its current version number alone cannot identify this
+capability. M32 owns consumption of this contract on the MCP side.
+
 `ImportObject` and `ExportObject` take no policy argument; they run under
 the session policy. The MCP sets it around each call. `ImportObject` reads
 its outcome before `Finish`, which restores the error level from before the

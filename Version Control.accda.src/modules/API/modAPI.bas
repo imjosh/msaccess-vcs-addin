@@ -208,9 +208,9 @@ End Function
 '           : interaction mode to silent during an automated build.)
 '---------------------------------------------------------------------------------------
 '
-Public Sub SetInteractionMode(intMode As eInteractionMode)
-    Operation.InteractionMode = intMode
-End Sub
+Public Function SetInteractionMode(intMode As eInteractionMode) As String
+    SetInteractionMode = SelectInteractionMode(Operation, intMode)
+End Function
 
 
 '---------------------------------------------------------------------------------------

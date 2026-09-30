@@ -3947,9 +3947,9 @@ End Sub
 '           : with CallByName on this class, so callers such as the MCP server use this.
 '---------------------------------------------------------------------------------------
 '
-Public Sub SetInteractionMode(ByVal intMode As Long)
-    modAPI.SetInteractionMode intMode
-End Sub
+Public Function SetInteractionMode(ByVal intMode As Long) As String
+    SetInteractionMode = modAPI.SetInteractionMode(intMode)
+End Function
 
 
 '---------------------------------------------------------------------------------------
