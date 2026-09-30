@@ -1554,7 +1554,8 @@ End Sub
 ' Purpose   : Complete the root operation after an API LoadSingleObject and return the
 '           : JSON result. colErrors is the import's error journal, read before Finish
 '           : releases the Log singleton, so the logged error goes back to the caller
-'           : in place of the message box a noninteractive policy suppressed.
+'           : in place of the message box a noninteractive policy suppressed. A prompt
+'           : the policy blocked makes the result decision_required.
 '---------------------------------------------------------------------------------------
 '
 Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
@@ -1571,11 +1572,51 @@ Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As Stri
         cOp.Finish IIf(intLevel >= eelCritical, eorFailed, eorSuccess)
     End If
 
-    Set dResult = New Dictionary
-    dResult.Add "success", (intLevel < eelError)
-    If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+    If cOp.Result = eorDecisionRequired Then
+        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", (intLevel < eelError)
+        If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+    End If
     dResult.Add "logPath", strLogPath
     FinishSingleObjectImport = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishSingleObjectExport
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Complete the root operation after an API ExportObject and return the JSON
+'           : result. dResult already holds a failure when the export stopped early. A
+'           : prompt the policy blocked makes the result decision_required.
+'---------------------------------------------------------------------------------------
+'
+Public Function FinishSingleObjectExport(cOp As clsOperation, strLogPath As String, _
+    dResult As Dictionary) As String
+
+    Dim dFinal As Dictionary
+    Dim intLevel As eErrorLevel
+
+    ' Read the error level before Finish restores it (see FinishSingleObjectImport).
+    intLevel = cOp.ErrorLevel
+    If cOp.Status = eosRunning Then cOp.Finish
+
+    If cOp.Result = eorDecisionRequired Then
+        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
+    Else
+        Set dFinal = dResult
+        If Not dFinal.Exists("success") Then
+            dFinal.Add "success", (intLevel < eelError)
+            If intLevel >= eelError Then
+                dFinal.Add "error", "Export completed with errors. Check the log for details."
+            End If
+        End If
+    End If
+    If Len(strLogPath) > 0 And Not dFinal.Exists("logPath") Then dFinal.Add "logPath", strLogPath
+    FinishSingleObjectExport = ConvertToJson(dFinal)
 
 End Function
 
@@ -1588,20 +1629,29 @@ End Function
 '           : cOp as failed, so a raised error does not leave the root, its log and its
 '           : interaction scope open for the next call. Pass Nothing when the call had
 '           : not begun its operation yet: the running root, if any, is someone else's.
+'           : If a prompt was blocked, decision_required is the primary result and the
+'           : error goes alongside as runtime_error, as for a test run.
 '---------------------------------------------------------------------------------------
 '
 Public Function FailSingleObjectOperation(cOp As clsOperation, strLogPath As String, _
     lngNumber As Long, strDescription As String) As String
 
     Dim dResult As Dictionary
+    Dim blnBlocked As Boolean
 
     If Not cOp Is Nothing Then
         If cOp.Status = eosRunning Then cOp.Finish eorFailed
+        blnBlocked = (cOp.Result = eorDecisionRequired)
     End If
 
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", strDescription
+    If blnBlocked Then
+        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
+        dResult.Add "runtime_error", strDescription
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", False
+        dResult.Add "error", strDescription
+    End If
     dResult.Add "errorNumber", lngNumber
     If Len(strLogPath) > 0 Then dResult.Add "logPath", strLogPath
     FailSingleObjectOperation = ConvertToJson(dResult)

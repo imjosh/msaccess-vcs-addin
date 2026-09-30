@@ -61,7 +61,10 @@ is always safe to call, including twice.
 the session policy. The MCP sets it around each call. `ImportObject` reads
 its outcome before `Finish`, which restores the error level from before the
 operation, so a logged error (for example a refused add-in form merge)
-returns `success: false` with the first logged error in `error`.
+returns `success: false` with the first logged error in `error`. A prompt
+the policy blocked during either call returns `decision_required` with the
+decisions, like the multi-object calls, and a raised error after it goes
+under `runtime_error`.
 
 ## Dialogs this mode prevents
 

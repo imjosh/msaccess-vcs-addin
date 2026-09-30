@@ -310,6 +310,91 @@ Public Sub TestSingleObjectErrorFinishesItsOperation()
 End Sub
 
 
+Public Sub TestBlockedPromptInSingleObjectImportIsDecisionRequired()
+
+    Dim cOp As clsOperation
+    Dim strJson As String
+
+    ' ImportObject as the MCP calls it, with a confirmation the block policy does not
+    ' answer. The caller has to see the decision, not a plain success.
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Overwrite?").Blocked, "the policy blocks the prompt"
+
+    strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", New Collection)
+    TestAssert cOp.Status = eosReady, "the import's operation is finished"
+    TestAssert InStr(strJson, """success"":false") > 0, "a blocked prompt is not a success"
+    TestAssert InStr(strJson, """error_pattern"":""decision_required""") > 0, "the pattern is decision_required"
+    TestAssert InStr(strJson, """decision_required"":true") > 0, "the result flags the decision"
+    TestAssert InStr(strJson, "Overwrite?") > 0, "the decisions list the blocked prompt"
+    TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
+Public Sub TestBlockedPromptInSingleObjectExportIsDecisionRequired()
+
+    Dim cOp As clsOperation
+    Dim strJson As String
+
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotExport), "the export begins under the session policy"
+    TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Overwrite?").Blocked, "the policy blocks the prompt"
+
+    strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary)
+    TestAssert cOp.Status = eosReady, "the export's operation is finished"
+    TestAssert InStr(strJson, """success"":false") > 0, "a blocked prompt is not a success"
+    TestAssert InStr(strJson, """error_pattern"":""decision_required""") > 0, "the pattern is decision_required"
+    TestAssert InStr(strJson, "Overwrite?") > 0, "the decisions list the blocked prompt"
+    TestAssert InStr(strJson, "Export_1.log") > 0, "the result names the log"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
+Public Sub TestSingleObjectExportWithoutPromptSucceeds()
+
+    Dim cOp As clsOperation
+    Dim strJson As String
+
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotExport), "the export begins under the session policy"
+
+    strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary)
+    TestAssert InStr(strJson, """success"":true") > 0, "an export with no prompt succeeds"
+    TestAssert InStr(strJson, "decision_required") = 0, "no decision is reported"
+    TestAssert InStr(strJson, "Export_1.log") > 0, "the result names the log"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
+Public Sub TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired()
+
+    Dim cOp As clsOperation
+    Dim strJson As String
+
+    ' A raised error after a blocked prompt: the decision is primary, the error rides along.
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotMerge), "the import begins"
+    cOp.ResolvePrompt vbYesNo, "Confirm", "Overwrite?"
+
+    strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set")
+    TestAssert cOp.Status = eosReady, "the raised error finishes the operation"
+    TestAssert InStr(strJson, """error_pattern"":""decision_required""") > 0, "the pattern is decision_required"
+    TestAssert InStr(strJson, "Overwrite?") > 0, "the decisions list the blocked prompt"
+    TestAssert InStr(strJson, """runtime_error"":""Object variable not set""") > 0, "the error is kept as runtime_error"
+    TestAssert InStr(strJson, """errorNumber"":91") > 0, "the result carries the error number"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
 Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
 
     Dim cOp As clsOperation
