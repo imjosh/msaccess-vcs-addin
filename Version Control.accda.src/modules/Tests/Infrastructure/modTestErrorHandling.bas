@@ -123,3 +123,31 @@ Public Sub TestEffectiveVbeErrorTrappingFloor2()
     TestAssert EffectiveVbeErrorTrapping(eetBreakOnUnhandledErrors, eetBreakOnUnhandledErrors) = eetBreakOnUnhandledErrors, _
         "floor 2 leaves 2"
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestCloseBeforeImportLeavesLoadedAddInFormAlone
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Importing frmVCSMain into the add-in's own project must not try to close
+'           : the loaded main form. During an MCP import its Form_Unload cancels the
+'           : close, and the 2501 that raised used to stay in Err, so the next
+'           : DebugMode(True) logged it as an unhandled error ahead of the merge's own
+'           : refusal (A14). Tests never hold the session operation that Form_Unload
+'           : reads, so here the close would succeed instead. The test fails on that
+'           : closed form, and the full cancel path is covered by the A14 live check.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestCloseBeforeImportLeavesLoadedAddInFormAlone()
+
+    Dim blnClosed As Boolean
+
+    ' Left loaded and hidden, as Build and MergeBuild leave it.
+    If Not IsLoaded(acForm, "frmVCSMain", False) Then DoCmd.OpenForm "frmVCSMain", , , , , acHidden
+
+    blnClosed = CloseObjectBeforeImport(acForm, "frmVCSMain")
+    TestAssert Err.Number = 0, "no error is left in Err for the next DebugMode(True) to log"
+    TestAssert blnClosed, "an add-in form name is left for clsDbForm.Merge to refuse"
+    TestAssert IsLoaded(acForm, "frmVCSMain", False), "the main form is still loaded"
+
+End Sub

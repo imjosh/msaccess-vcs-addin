@@ -1294,6 +1294,7 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     Dim dCategory As Dictionary
     Dim dSourceFiles As Dictionary
     Dim intResult As eOperationResult
+    Dim blnClosed As Boolean
 
     ' Guard clauses
     If cComponentClass Is Nothing Then Exit Sub
@@ -1302,15 +1303,9 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
 
     ' Make sure the object is currently closed. (This is really important, since we
-    ' will be deleting the object before adding it from source.)
-    With cComponentClass
-        Select Case .ComponentType
-            Case acForm, acMacro, acModule, acQuery, acReport, acTable
-                If SysCmd(acSysCmdGetObjectState, .ComponentType, strName) <> adStateClosed Then
-                    DoCmd.Close .ComponentType, strName, acSavePrompt
-                End If
-        End Select
-    End With
+    ' will be deleting the object before adding it from source.) The result is
+    ' reported after Log.Clear below, which would otherwise discard it.
+    blnClosed = CloseObjectBeforeImport(cComponentClass.ComponentType, strName)
 
     If blnNoIndex Then
         ' Skip the expensive index load and options reload. The caller has already
@@ -1357,6 +1352,14 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
         Log.Error eelError, T("Source file not found: {0}", _
             var0:=Nz2(strSourceFilePath, T("(empty path)"))), _
             ModuleName & ".LoadSingleObject"
+        Operation.ErrorLevel = eelCritical
+        intResult = eorFailed
+        GoTo CleanUp
+    End If
+
+    If Not blnClosed Then
+        Log.Error eelError, T("{0} is open and could not be closed, so it was not replaced from source.", _
+            var0:=strName), ModuleName & ".LoadSingleObject"
         Operation.ErrorLevel = eelCritical
         intResult = eorFailed
         GoTo CleanUp
@@ -1444,6 +1447,53 @@ CleanUp:
     End With
 
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CloseObjectBeforeImport
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Close an open object so LoadSingleObject can replace it from source.
+'           : Returns False when the object is still open afterwards.
+'           : A form that shares its name with an add-in form is left alone, since
+'           : clsDbForm.Merge refuses those names anyway. When the database is the
+'           : add-in itself, that form can be the add-in's own frmVCSMain, which Build,
+'           : MergeBuild and some tests leave loaded and hidden. Its Form_Unload cancels
+'           : the close while an operation is running, so DoCmd.Close raised 2501. That
+'           : error was left in Err under On Error Resume Next, and the next
+'           : DebugMode(True) logged it as an unhandled error. The API result then
+'           : reported that error instead of the merge's own refusal (A14).
+'---------------------------------------------------------------------------------------
+'
+Public Function CloseObjectBeforeImport(ByVal intType As AcObjectType, strName As String) As Boolean
+
+    Select Case intType
+        Case acForm, acMacro, acModule, acQuery, acReport, acTable
+            ' Objects that can be open in the database
+        Case Else
+            CloseObjectBeforeImport = True
+            Exit Function
+    End Select
+
+    If intType = acForm Then
+        If ObjectExists(acForm, strName, True) Then
+            CloseObjectBeforeImport = True
+            Exit Function
+        End If
+    End If
+
+    If SysCmd(acSysCmdGetObjectState, intType, strName) <> adStateClosed Then
+        LogUnhandledErrors
+        On Error Resume Next
+        DoCmd.Close intType, strName, acSavePrompt
+        ' A canceled close (2501) or any other failure shows up in the state check.
+        If Err Then Err.Clear
+        On Error GoTo 0
+    End If
+
+    CloseObjectBeforeImport = (SysCmd(acSysCmdGetObjectState, intType, strName) = adStateClosed)
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
