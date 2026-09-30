@@ -151,10 +151,9 @@ Public Sub TestSessionPolicyStaysInForceAfterFinish()
 
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
-    Dim lngToken As Long
 
     Set cOp = NewUnattendedOperation
-    TestAssert InStr(SetSessionPolicy(cOp, "decline", lngToken), """success"":true") > 0, "the policy is set"
+    TestAssert InStr(SetSessionPolicy(cOp, "decline"), """success"":true") > 0, "the policy is set"
     Set cRoot = cOp.TryBeginRoot(eotOther)
     TestAssert cOp.DecisionPolicy = edpDecline, "the operation runs under the session policy"
     cRoot.Complete eorSuccess
@@ -162,7 +161,7 @@ Public Sub TestSessionPolicyStaysInForceAfterFinish()
     TestAssert cOp.InteractionMode = eimNonInteractive, "Finish leaves the session policy noninteractive"
     TestAssert cOp.DecisionPolicy = edpDecline, "Finish leaves the session policy in force"
     TestAssert Not cOp.ResolvePrompt(vbYesNo, "Confirm", "Proceed?").Blocked, "the policy still answers prompts"
-    ClearSessionPolicy cOp, lngToken
+    ClearSessionPolicy cOp
 
 End Sub
 
@@ -173,20 +172,19 @@ Public Sub TestClearSessionPolicyClosesItAndASecondClearIsANoOp()
     Dim intMode As eInteractionMode
     Dim intPolicy As eDecisionPolicy
     Dim lngOther As Long
-    Dim lngToken As Long
 
     ' The caller clears a policy set for an operation that never started.
     Set cOp = NewUnattendedOperation
     intMode = cOp.InteractionMode
     intPolicy = cOp.DecisionPolicy
-    SetSessionPolicy cOp, "block", lngToken
-    TestAssert InStr(ClearSessionPolicy(cOp, lngToken), """success"":true") > 0, "clearing succeeds"
+    SetSessionPolicy cOp, "block"
+    TestAssert InStr(ClearSessionPolicy(cOp), """success"":true") > 0, "clearing succeeds"
     TestAssert (cOp.InteractionMode = intMode) And (cOp.DecisionPolicy = intPolicy), _
         "clearing restores the mode and policy from before the set"
 
     ' A second clear must not close a scope someone else opened since.
     lngOther = cOp.PushInteractionScope(eimNonInteractive, edpDecline, False)
-    TestAssert InStr(ClearSessionPolicy(cOp, lngToken), """success"":true") > 0, "a second clear succeeds"
+    TestAssert InStr(ClearSessionPolicy(cOp), """success"":true") > 0, "a second clear succeeds"
     TestAssert cOp.DecisionPolicy = edpDecline, "a second clear changes nothing"
     cOp.CloseInteractionScope lngOther
 
@@ -197,14 +195,13 @@ Public Sub TestSetSessionPolicyReplacesRatherThanNests()
 
     Dim cOp As clsOperation
     Dim intPolicy As eDecisionPolicy
-    Dim lngToken As Long
 
     Set cOp = NewUnattendedOperation
     intPolicy = cOp.DecisionPolicy
-    SetSessionPolicy cOp, "block", lngToken
-    SetSessionPolicy cOp, "decline", lngToken
+    SetSessionPolicy cOp, "block"
+    SetSessionPolicy cOp, "decline"
     TestAssert cOp.DecisionPolicy = edpDecline, "the second policy is in force"
-    ClearSessionPolicy cOp, lngToken
+    ClearSessionPolicy cOp
     TestAssert cOp.DecisionPolicy = intPolicy, "one clear removes it, with nothing left underneath"
 
 End Sub
@@ -214,12 +211,11 @@ Public Sub TestEachOperationUnderASessionPolicyStartsUnblocked()
 
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
-    Dim lngToken As Long
 
     ' A prompt one operation left unanswered belongs to that operation's result, not
     ' to every later operation that runs under the same session policy.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block", lngToken
+    SetSessionPolicy cOp, "block"
     Set cRoot = cOp.TryBeginRoot(eotOther)
     cOp.ResolvePrompt vbYesNo, "Confirm", "Proceed?"
     cRoot.Complete eorSuccess
@@ -231,7 +227,7 @@ Public Sub TestEachOperationUnderASessionPolicyStartsUnblocked()
     TestAssert cOp.DecisionPolicy = edpBlock, "the next operation runs under the session policy"
     cRoot.Complete eorSuccess
     TestAssert cOp.Result = eorSuccess, "the next operation can succeed"
-    ClearSessionPolicy cOp, lngToken
+    ClearSessionPolicy cOp
 
 End Sub
 
@@ -240,18 +236,17 @@ Public Sub TestOperationPolicyInsideSessionPolicyEndsAtFinish()
 
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
-    Dim lngToken As Long
 
     ' MergeBuild and RunFilteredTests pass their own policy to the root. It applies for
     ' that operation only, and the session policy is back in force afterwards.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "decline", lngToken
+    SetSessionPolicy cOp, "decline"
     Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     TestAssert cOp.DecisionPolicy = edpBlock, "the operation's own policy applies while it runs"
     cRoot.Complete eorSuccess
     TestAssert (cOp.InteractionMode = eimNonInteractive) And (cOp.DecisionPolicy = edpDecline), _
         "the session policy is back after Finish"
-    ClearSessionPolicy cOp, lngToken
+    ClearSessionPolicy cOp
 
 End Sub
 
@@ -262,13 +257,12 @@ Public Sub TestRefusedSingleObjectImportFailsUnderSessionPolicy()
     Dim colErrors As Collection
     Dim dEntry As Dictionary
     Dim strJson As String
-    Dim lngToken As Long
 
     ' ImportObject as the MCP calls it: a session policy, then a merge that clsDbForm
     ' refuses with Log.Error. The policy acknowledges the error's message box, and the
     ' result still has to report the failure after Finish restores the error level.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block", lngToken
+    SetSessionPolicy cOp, "block"
     TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
     TestAssert Not cOp.ResolvePrompt(vbExclamation, "Error", "Merging not supported").Blocked, _
         "the logged error's message box is acknowledged without a dialog"
@@ -284,6 +278,59 @@ Public Sub TestRefusedSingleObjectImportFailsUnderSessionPolicy()
     TestAssert InStr(strJson, """success"":false") > 0, "a refused merge is not a success"
     TestAssert InStr(strJson, "Merging not supported for add-in forms") > 0, "the logged error is in the result"
     TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
-    ClearSessionPolicy cOp, lngToken
+    ClearSessionPolicy cOp
 
+End Sub
+
+
+Public Sub TestSessionPolicySetAndClearedInSeparateCalls()
+
+    Dim cOp As clsOperation
+    Dim intMode As eInteractionMode
+    Dim intPolicy As eDecisionPolicy
+
+    ' The MCP sets and clears the policy in two API calls, each on a new
+    ' clsVersionControl, so nothing but the operation lives from one to the next.
+    Set cOp = NewUnattendedOperation
+    intMode = cOp.InteractionMode
+    intPolicy = cOp.DecisionPolicy
+    SetPolicyInOneCall cOp, "block"
+    SetPolicyInOneCall cOp, "decline"
+    TestAssert cOp.DecisionPolicy = edpDecline, "the second call's policy is in force"
+    ClearPolicyInOneCall cOp
+    TestAssert (cOp.InteractionMode = intMode) And (cOp.DecisionPolicy = intPolicy), _
+        "a clear in a later call restores the mode and policy from before the first set"
+
+End Sub
+
+
+Public Sub TestSessionPolicyBelongsToItsOperation()
+
+    Dim cFirst As clsOperation
+    Dim cSecond As clsOperation
+    Dim intMode As eInteractionMode
+
+    ' Scope tokens are numbered per operation, so each operation must hold its own.
+    Set cFirst = NewUnattendedOperation
+    Set cSecond = NewUnattendedOperation
+    intMode = cFirst.InteractionMode
+    SetSessionPolicy cFirst, "block"
+    SetSessionPolicy cSecond, "decline"
+    ClearSessionPolicy cFirst
+    TestAssert cFirst.InteractionMode = intMode, "clearing one operation's policy closes it"
+    TestAssert (cSecond.InteractionMode = eimNonInteractive) And (cSecond.DecisionPolicy = edpDecline), _
+        "the other operation's policy stays in force"
+    ClearSessionPolicy cSecond
+
+End Sub
+
+
+' One SetOperationPolicy or ClearOperationPolicy request: no state survives the call
+' except what the operation itself keeps.
+Private Sub SetPolicyInOneCall(ByVal cOp As clsOperation, ByVal strPolicy As String)
+    TestAssert InStr(SetSessionPolicy(cOp, strPolicy), """success"":true") > 0, "the " & strPolicy & " policy is set"
+End Sub
+
+Private Sub ClearPolicyInOneCall(ByVal cOp As clsOperation)
+    TestAssert InStr(ClearSessionPolicy(cOp), """success"":true") > 0, "clearing succeeds"
 End Sub

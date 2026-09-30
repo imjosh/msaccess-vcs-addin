@@ -120,15 +120,14 @@ End Function
 ' Author    : Josh
 ' Date      : 09/30/2026
 ' Purpose   : Open a caller-owned noninteractive scope on this operation and return the
-'           : JSON result for SetOperationPolicy. lngToken holds the scope between
-'           : calls: a scope it already holds is replaced, not nested. Finish leaves
-'           : the scope open; only ClearSessionPolicy closes it. The operation is
-'           : passed in so the rule can be tested without touching the session
-'           : operation.
+'           : JSON result for SetOperationPolicy. The operation holds the scope
+'           : between calls: one it already holds is replaced, not nested. Finish
+'           : leaves the scope open; only ClearSessionPolicy closes it. The
+'           : operation is passed in so the rule can be tested without touching the
+'           : session operation.
 '---------------------------------------------------------------------------------------
 '
-Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As String, _
-    ByRef lngToken As Long) As String
+Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As String) As String
 
     Dim dResult As Dictionary
     Dim intPolicy As eDecisionPolicy
@@ -139,13 +138,12 @@ Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As S
     If Len(SetSessionPolicy) > 0 Then Exit Function
 
     ' Replace a policy left over from an earlier call rather than nesting under it.
-    cOp.CloseInteractionScope lngToken
-    lngToken = 0
+    cOp.CloseSessionScope
     If Not ParseDecisionPolicy(strPolicy, intPolicy) Then
         SetSessionPolicy = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False)
         Exit Function
     End If
-    lngToken = cOp.PushInteractionScope(eimNonInteractive, intPolicy, False)
+    cOp.OpenSessionScope intPolicy
 
     Set dResult = New Dictionary
     dResult.Add "success", True
@@ -163,9 +161,8 @@ End Function
 '           : ClearOperationPolicy. Safe when no policy is set, and safe to call twice.
 '---------------------------------------------------------------------------------------
 '
-Public Function ClearSessionPolicy(ByVal cOp As clsOperation, ByRef lngToken As Long) As String
-    cOp.CloseInteractionScope lngToken
-    lngToken = 0
+Public Function ClearSessionPolicy(ByVal cOp As clsOperation) As String
+    cOp.CloseSessionScope
     ClearSessionPolicy = "{""success"":true}"
 End Function
 

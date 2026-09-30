@@ -53,6 +53,9 @@ Private m_Root As udtRoot
 ' Owns interaction mode, decision policy, blocked flag, decision journal and error level.
 Private m_Scope As clsInteractionScope
 
+' Owner token of the scope OpenSessionScope opened. Zero when none is open.
+Private m_SessionScope As Long
+
 ' Journal of the operation that finished last (see LastDecisions).
 Private m_LastDecisions As Collection
 
@@ -829,6 +832,36 @@ End Function
 '
 Public Sub CloseInteractionScope(ByVal lngToken As Long)
     Scope.CloseScope lngToken
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : OpenSessionScope
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Open the caller-owned noninteractive scope a session policy runs under,
+'           : replacing the one already open rather than nesting under it. The
+'           : operation keeps the token, since API runs each call on a new
+'           : clsVersionControl and no caller lives from the set to the clear.
+'---------------------------------------------------------------------------------------
+'
+Public Sub OpenSessionScope(ByVal intPolicy As eDecisionPolicy)
+    CloseSessionScope
+    m_SessionScope = Scope.OpenScope(eimNonInteractive, intPolicy, False)
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CloseSessionScope
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Close the scope OpenSessionScope opened. Safe when none is open, and
+'           : safe to call twice.
+'---------------------------------------------------------------------------------------
+'
+Public Sub CloseSessionScope()
+    Scope.CloseScope m_SessionScope
+    m_SessionScope = 0
 End Sub
 
 
