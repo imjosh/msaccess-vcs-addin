@@ -254,3 +254,36 @@ Public Sub TestOperationPolicyInsideSessionPolicyEndsAtFinish()
     ClearSessionPolicy cOp, lngToken
 
 End Sub
+
+
+Public Sub TestRefusedSingleObjectImportFailsUnderSessionPolicy()
+
+    Dim cOp As clsOperation
+    Dim colErrors As Collection
+    Dim dEntry As Dictionary
+    Dim strJson As String
+    Dim lngToken As Long
+
+    ' ImportObject as the MCP calls it: a session policy, then a merge that clsDbForm
+    ' refuses with Log.Error. The policy acknowledges the error's message box, and the
+    ' result still has to report the failure after Finish restores the error level.
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block", lngToken
+    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert Not cOp.ResolvePrompt(vbExclamation, "Error", "Merging not supported").Blocked, _
+        "the logged error's message box is acknowledged without a dialog"
+    cOp.ErrorLevel = eelError
+    Set dEntry = New Dictionary
+    dEntry.Add "level", "error"
+    dEntry.Add "message", "ERROR: Merging not supported for add-in forms. Use full build instead."
+    Set colErrors = New Collection
+    colErrors.Add dEntry
+
+    strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors)
+    TestAssert cOp.Status = eosReady, "the import's operation is finished"
+    TestAssert InStr(strJson, """success"":false") > 0, "a refused merge is not a success"
+    TestAssert InStr(strJson, "Merging not supported for add-in forms") > 0, "the logged error is in the result"
+    TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
+    ClearSessionPolicy cOp, lngToken
+
+End Sub

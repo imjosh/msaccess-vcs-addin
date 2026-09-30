@@ -1479,18 +1479,11 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     End If
 
     ' Completing the operation releases the Log singleton, so the log path has to come
-    ' back through the out-param rather than be read from Log afterwards.
+    ' back through the out-param, and the error journal has to be read before it.
     LoadSingleObject cComponent, strObjectName, strSourceFile, _
         blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
         strSavedLogPath:=strLogPath
-    CompleteLoadSingleObject IIf(Operation.ErrorLevel >= eelCritical, eorFailed, eorSuccess)
-
-    dResult.Add "success", (Operation.ErrorLevel < eelError)
-    If Operation.ErrorLevel >= eelError Then
-        dResult.Add "error", "Import completed with errors. Check the log for details."
-    End If
-    dResult.Add "logPath", strLogPath
-    ImportObject = ConvertToJson(dResult)
+    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0))
     Exit Function
 
 ErrHandler:
