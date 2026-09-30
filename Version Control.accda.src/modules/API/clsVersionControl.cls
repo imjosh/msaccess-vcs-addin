@@ -3047,26 +3047,13 @@ End Function
 ' Date      : 5/21/2026
 ' Purpose   : Ribbon entry point for running tests. Reads the DefaultTestFilter option
 '           : and applies it automatically. If the option is empty, runs all tests.
+'           : ExecuteTests reads the option, after it has validated the policy and begun
+'           : the root, so the policy answers any error that loading the options logs.
 '---------------------------------------------------------------------------------------
 '
 Public Function RunFilteredTests(Optional ByVal strDecisionPolicy As String) As String
-
-    Dim strFilter As String
-    Dim arrParts() As String
-    Dim lngIdx As Long
-
-    strFilter = Trim$(Nz(Options.DefaultTestFilter, vbNullString))
-
-    If Len(strFilter) = 0 Then
-        RunFilteredTests = ExecuteTests(Empty, False, strDecisionPolicy:=strDecisionPolicy)
-    Else
-        arrParts = Split(strFilter, ",")
-        For lngIdx = LBound(arrParts) To UBound(arrParts)
-            arrParts(lngIdx) = Trim$(arrParts(lngIdx))
-        Next lngIdx
-        RunFilteredTests = ExecuteTests(CVar(arrParts), True, strDecisionPolicy:=strDecisionPolicy)
-    End If
-
+    RunFilteredTests = ExecuteTests(Empty, False, strDecisionPolicy:=strDecisionPolicy, _
+        blnDefaultFilter:=True)
 End Function
 
 
@@ -3171,11 +3158,14 @@ End Sub
 '           : A decision policy makes the run noninteractive: the root begins first so
 '           : the policy answers every prompt, the web runner is never used, and each
 '           : exit finishes the operation through CleanUp.
+'           : blnDefaultFilter replaces varFilters with the DefaultTestFilter option,
+'           : read once the policy root (if any) is held.
 '---------------------------------------------------------------------------------------
 '
 Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Optional ByVal blnHeadless As Boolean = False, _
-    Optional ByVal strDecisionPolicy As String) As String
+    Optional ByVal strDecisionPolicy As String, _
+    Optional ByVal blnDefaultFilter As Boolean = False) As String
 
     Dim blnAllPassed As Boolean
     Dim lngPassed As Long
@@ -3230,6 +3220,11 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
             GoTo CleanUp
         End If
     End If
+
+    ' Loading the options can log an error (a conflicted options file, for one). Under a
+    ' policy the root above is already held, so its scope answers that error's message
+    ' box and a refused or invalid request never loads them.
+    If blnDefaultFilter Then blnFiltered = ReadDefaultTestFilter(varFilters)
 
     If Not TestRunPreflight(blnHeadless, ExecuteTests, intResult) Then GoTo CleanUp
 
@@ -3432,6 +3427,35 @@ Private Function ParsePolicyOrRefuse(ByVal strDecisionPolicy As String, _
     If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
         ParsePolicyOrRefuse = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
     End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ReadDefaultTestFilter
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Split the DefaultTestFilter option into trimmed filter terms. Returns True
+'           : and sets varFilters when the option names a filter; False (run all tests)
+'           : when it is empty.
+'---------------------------------------------------------------------------------------
+'
+Private Function ReadDefaultTestFilter(ByRef varFilters As Variant) As Boolean
+
+    Dim strFilter As String
+    Dim arrParts() As String
+    Dim lngIdx As Long
+
+    varFilters = Empty
+    strFilter = Trim$(Nz(Options.DefaultTestFilter, vbNullString))
+    If Len(strFilter) = 0 Then Exit Function
+
+    arrParts = Split(strFilter, ",")
+    For lngIdx = LBound(arrParts) To UBound(arrParts)
+        arrParts(lngIdx) = Trim$(arrParts(lngIdx))
+    Next lngIdx
+    varFilters = arrParts
+    ReadDefaultTestFilter = True
 
 End Function
 
