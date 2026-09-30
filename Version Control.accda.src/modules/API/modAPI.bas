@@ -693,6 +693,8 @@ End Function
 '           : Writes to logs/MCP_Debug.log in the source folder.
 '           : Do not call this from the per-callback streaming path (PostCallback
 '           : log/progress). File appends dominated agentic build time.
+'           : A failed write is dropped silently. Most calls run before the MCP
+'           : call's root begins, where a logged error would open a message box.
 '---------------------------------------------------------------------------------------
 '
 Public Sub MCPDebugLog(strMessage As String)
@@ -706,7 +708,7 @@ Public Sub MCPDebugLog(strMessage As String)
     End If
 
     ' Append to log file
-    AppendToFile Format$(Now, "yyyy-mm-dd hh:nn:ss") & " | " & strMessage, m_strMCPDebugLogPath
+    TryAppendToFile Format$(Now, "yyyy-mm-dd hh:nn:ss") & " | " & strMessage, m_strMCPDebugLogPath
 
 End Sub
 

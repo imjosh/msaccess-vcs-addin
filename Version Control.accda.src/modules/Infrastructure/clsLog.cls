@@ -404,7 +404,9 @@ Public Sub Error(eLevel As eErrorLevel, strDescription As String, Optional strSo
         ' Without a console, route prompts through MsgBox2 so InteractionMode and
         ' Attended suppress blocking dialogs during harness and automation runs.
         If m_RichText Is Nothing Then
-            If Operation.InteractionMode <> eimNormal Or Not Operation.Attended Then
+            If MCPCallBeforeRoot(MCP.IsActive, Operation.IsActive) Then
+                ' Logged above. No scope is open yet to suppress a box.
+            ElseIf Operation.InteractionMode <> eimNormal Or Not Operation.Attended Then
                 Select Case eLevel
                     Case eelWarning:    MsgBox2 "Warning", strDisplay, .GetStr, vbInformation
                     Case eelError:      MsgBox2 "Error", strDisplay, .GetStr, vbExclamation

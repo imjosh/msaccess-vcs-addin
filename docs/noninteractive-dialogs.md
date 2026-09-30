@@ -74,6 +74,10 @@ under `runtime_error`.
 
 - `MsgBox2` (the add-in's message boxes), including the printer-settings
   import.
+- A logged error's message box before an MCP call's root begins. The
+  policy scope opens with the root, so until then `Log.Error` only logs
+  (`MCPCallBeforeRoot`). `MCPDebugLog` writes through `TryAppendToFile`,
+  which drops a failed line without logging it.
 - `frmVCSConflict` (merge conflicts).
 - The source-folder picker when the project folder is unknown.
 - `frmVCSMain` being left visible as a results window. Every site that opens

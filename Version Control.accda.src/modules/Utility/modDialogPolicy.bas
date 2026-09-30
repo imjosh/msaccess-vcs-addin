@@ -180,6 +180,23 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : MCPCallBeforeRoot
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : True when an MCP call has registered its callback but no root is running.
+'           : The call's policy scope opens with its root, so until then the mode reads
+'           : normal even for a noninteractive call. Nobody is at the screen either
+'           : way, so a logged error stays in the log instead of opening a message box.
+'           : The MCP registration is released when the root finishes.
+'           : Pass MCP.IsActive and Operation.IsActive.
+'---------------------------------------------------------------------------------------
+'
+Public Function MCPCallBeforeRoot(ByVal blnMCPActive As Boolean, ByVal blnRootActive As Boolean) As Boolean
+    MCPCallBeforeRoot = blnMCPActive And Not blnRootActive
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : InteractionIsNormal
 ' Author    : Josh
 ' Date      : 09/29/2026

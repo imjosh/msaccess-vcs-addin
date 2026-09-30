@@ -209,3 +209,15 @@ Public Sub TestRuntimeErrorJsonEncodesAnyText()
     TestAssert dResult("errorNumber") = 5, "the error number is included"
 
 End Sub
+
+
+Public Sub TestMCPCallBeforeRootKeepsLoggedErrorsOutOfBoxes()
+
+    ' Log.Error skips its message box only in the gap between an MCP call
+    ' registering its callback and its root beginning.
+    TestAssert MCPCallBeforeRoot(True, False), "MCP registered, no root yet"
+    TestAssert Not MCPCallBeforeRoot(True, True), "inside the root the policy scope decides"
+    TestAssert Not MCPCallBeforeRoot(False, False), "no MCP call: interactive rules apply"
+    TestAssert Not MCPCallBeforeRoot(False, True), "a root without MCP is unchanged"
+
+End Sub

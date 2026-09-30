@@ -163,6 +163,59 @@ Public Sub TestWriteFileCaseCorrection()
 End Sub
 
 
+Public Sub TestTryAppendToFileAppendsLines()
+
+    Dim strFolder As String
+    Dim strPath As String
+    Dim strText As String
+
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_test")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strPath = strFolder & "\debug.log"
+
+    TestAssert TryAppendToFile("one", strPath), "first line written"
+    TestAssert TryAppendToFile("two", strPath), "second line written"
+    strText = ReadFile(strPath)
+    TestAssert strText = "one" & vbCrLf & "two" & vbCrLf, "lines appended in order"
+    TestAssert InStr(strText, ChrW$(&HFEFF)) = 0, "no BOM in the middle of the file"
+
+    FSO.DeleteFolder strFolder, True
+
+End Sub
+
+
+Public Sub TestTryAppendToFileFailsQuietly()
+
+    Dim strFolder As String
+    Dim strBlocker As String
+    Dim lngJournal As Long
+    Dim lngErrors As Long
+    Dim eLevel As eErrorLevel
+    Dim blnWritten As Boolean
+
+    ' A file where the log folder should be: the A17 repro. The write must fail
+    ' without logging an error, which is what opened a message box.
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_fail")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strBlocker = strFolder & "\logs"
+    WriteFile "not a folder", strBlocker
+
+    lngJournal = Log.ErrorJournalCount
+    lngErrors = Log.ErrorCount
+    eLevel = Operation.ErrorLevel
+    blnWritten = TryAppendToFile("line", strBlocker & "\MCP_Debug.log")
+
+    TestAssert Not blnWritten, "a write under a file reports failure"
+    TestAssert Log.ErrorJournalCount = lngJournal, "nothing added to the error journal"
+    TestAssert Log.ErrorCount = lngErrors, "no error counted"
+    TestAssert Operation.ErrorLevel = eLevel, "operation error level unchanged"
+    TestAssert ReadFile(strBlocker) = "not a folder" & vbCrLf, "the blocking file is untouched"
+
+    FSO.DeleteFolder strFolder, True
+
+End Sub
+
+
 Public Sub TestWriteBinaryFileSkipsUnchangedContent()
 
     Dim strPath As String
