@@ -330,19 +330,6 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : ResolveConflictAction
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Resolution for one conflict under the current policy, given the action
-'           : the conflict asks for. ercNone means the policy does not resolve it.
-'---------------------------------------------------------------------------------------
-'
-Public Function ResolveConflictAction(ByVal intRequested As eResolveConflict) As eResolveConflict
-    ResolveConflictAction = ConflictActionForPolicy(this.Policy, intRequested)
-End Function
-
-
-'---------------------------------------------------------------------------------------
 ' Procedure : DecisionCount
 ' Author    : Josh
 ' Date      : 09/29/2026
@@ -364,18 +351,6 @@ End Property
 '
 Public Function Decisions() As Collection
     Set Decisions = this.Journal
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : DecisionsJson
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Decisions as a JSON array. Valid for any characters in the prompt text.
-'---------------------------------------------------------------------------------------
-'
-Public Function DecisionsJson() As String
-    DecisionsJson = ConvertToJson(this.Journal)
 End Function
 
 

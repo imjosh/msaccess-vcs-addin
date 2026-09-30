@@ -30,7 +30,7 @@ Public Sub TestNewScopeStartsNormalWithNoDecisions()
     TestAssert cScope.DecisionPolicy = edpAsk, "a new scope asks"
     TestAssert Not cScope.Blocked, "a new scope is not blocked"
     TestAssert cScope.DecisionCount = 0, "a new scope has no decisions"
-    TestAssert cScope.DecisionsJson = "[]", "no decisions is an empty JSON array"
+    TestAssert ConvertToJson(cScope.Decisions) = "[]", "no decisions is an empty JSON array"
     TestAssert Not cScope.InNonInteractiveScope, "no scope is open"
 
 End Sub
@@ -381,23 +381,23 @@ Public Sub TestConflictActionForEachPolicyAndRequestedAction()
     For Each varRequested In Array(ercNone, ercSkip, ercOverwrite, ercDelete)
         lngToken = cScope.OpenScope(eimNonInteractive, edpPreferSource)
         If varRequested = ercNone Then
-            TestAssert cScope.ResolveConflictAction(varRequested) = ercOverwrite, _
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercOverwrite, _
                 "prefer_source overwrites when the conflict asks for nothing"
         Else
-            TestAssert cScope.ResolveConflictAction(varRequested) = varRequested, _
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = varRequested, _
                 "prefer_source applies the conflict's own action (" & CStr(varRequested) & ")"
         End If
         cScope.CloseScope lngToken
 
         For Each varPolicy In Array(edpPreferDatabase, edpSkip, edpDecline)
             lngToken = cScope.OpenScope(eimNonInteractive, varPolicy)
-            TestAssert cScope.ResolveConflictAction(varRequested) = ercSkip, _
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercSkip, _
                 PolicyLabel(varPolicy) & " keeps the database object (" & CStr(varRequested) & ")"
             cScope.CloseScope lngToken
         Next varPolicy
 
         lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
-        TestAssert cScope.ResolveConflictAction(varRequested) = ercNone, _
+        TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercNone, _
             "block does not resolve a conflict (" & CStr(varRequested) & ")"
         cScope.CloseScope lngToken
     Next varRequested
@@ -418,7 +418,7 @@ Public Sub TestDecisionRequiredIsRecordedAndBlocks()
     TestAssert cScope.ErrorLevel = eelCritical, "decision_required raises the error level to critical"
     TestAssert cScope.DecisionCount = 1, "the decision is recorded"
 
-    Set colDecisions = ParseJson(cScope.DecisionsJson)
+    Set colDecisions = ParseJson(ConvertToJson(cScope.Decisions))
     TestAssert colDecisions(1)("kind") = "decision_required", "kind is reported"
     TestAssert colDecisions(1)("title") = "Select Source Folder", "title is reported"
     TestAssert colDecisions(1)("message") = "No folder", "message is reported"
@@ -466,7 +466,7 @@ Public Sub TestDecisionsJsonIsValidForControlCharacters()
 
     lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
     cScope.RecordDecision "decision_required", strTitle, strMessage, "blocked", strMessage
-    strJson = cScope.DecisionsJson
+    strJson = ConvertToJson(cScope.Decisions)
     cScope.CloseScope lngToken
 
     For lngIdx = 1 To Len(strJson)
@@ -493,7 +493,7 @@ Public Sub TestPromptDecisionTextRoundTripsThroughJson()
 
     lngToken = cScope.OpenScope(eimNonInteractive, edpBlock)
     cScope.ResolvePrompt vbYesNo, "Confirm" & vbLf, strMessage
-    Set colDecisions = ParseJson(cScope.DecisionsJson)
+    Set colDecisions = ParseJson(ConvertToJson(cScope.Decisions))
     cScope.CloseScope lngToken
 
     TestAssert colDecisions(1)("message") = strMessage, "a blocked prompt's text round-trips"

@@ -730,7 +730,15 @@ End Sub
 ' Procedure : Scope
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : The interaction scope object this operation delegates to.
+' Purpose   : The interaction scope object this operation delegates to. Callers use
+'           : the members below rather than the scope, which stays private so the
+'           : scope can change without touching them. The property-style members
+'           : that only forward (DecisionPolicy, DecisionBlocked, ErrorLevel,
+'           : PushInteractionScope, CloseInteractionScope, Decisions) are the
+'           : operation's contract: the export, build and merge code reads and sets
+'           : them on Operation, and the API class and modDialogPolicy open and close
+'           : scopes through it. The members that did nothing else, such as
+'           : ResolveConflictAction, were removed.
 '---------------------------------------------------------------------------------------
 '
 Private Property Get Scope() As clsInteractionScope
@@ -833,18 +841,6 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : ResolveConflictAction
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Resolution for one conflict under the current policy.
-'---------------------------------------------------------------------------------------
-'
-Public Function ResolveConflictAction(ByVal intRequested As eResolveConflict) As eResolveConflict
-    ResolveConflictAction = Scope.ResolveConflictAction(intRequested)
-End Function
-
-
-'---------------------------------------------------------------------------------------
 ' Procedure : RecordDecision
 ' Author    : Josh
 ' Date      : 09/29/2026
@@ -877,18 +873,6 @@ Private Function ApplyBlockedResult() As Boolean
         Me.Result = eorDecisionRequired
         ApplyBlockedResult = True
     End If
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : DecisionsJson
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : JSON array of prompts recorded in the current scope.
-'---------------------------------------------------------------------------------------
-'
-Public Function DecisionsJson() As String
-    DecisionsJson = Scope.DecisionsJson()
 End Function
 
 

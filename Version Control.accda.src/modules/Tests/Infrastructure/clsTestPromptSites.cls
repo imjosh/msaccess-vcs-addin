@@ -101,20 +101,20 @@ Public Sub TestConflictActionAppliesRequestedActionOnlyForPreferSource()
     Dim lngToken As Long
 
     lngToken = Operation.PushInteractionScope(eimNonInteractive, edpPreferSource, False)
-    TestAssert Operation.ResolveConflictAction(ercSkip) = ercSkip, "prefer_source applies the conflict's requested action"
-    TestAssert Operation.ResolveConflictAction(ercNone) = ercOverwrite, "prefer_source falls back to overwrite"
+    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercSkip) = ercSkip, "prefer_source applies the conflict's requested action"
+    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercNone) = ercOverwrite, "prefer_source falls back to overwrite"
     Operation.CloseInteractionScope lngToken
 
     lngToken = Operation.PushInteractionScope(eimNonInteractive, edpPreferDatabase, False)
-    TestAssert Operation.ResolveConflictAction(ercOverwrite) = ercSkip, "prefer_database keeps the database object"
+    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercOverwrite) = ercSkip, "prefer_database keeps the database object"
     Operation.CloseInteractionScope lngToken
 
     lngToken = Operation.PushInteractionScope(eimNonInteractive, edpSkip, False)
-    TestAssert Operation.ResolveConflictAction(ercOverwrite) = ercSkip, "skip is equivalent to prefer_database"
+    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercOverwrite) = ercSkip, "skip is equivalent to prefer_database"
     Operation.CloseInteractionScope lngToken
 
     lngToken = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
-    TestAssert Operation.ResolveConflictAction(ercOverwrite) = ercNone, "block leaves the conflict unresolved"
+    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercOverwrite) = ercNone, "block leaves the conflict unresolved"
     Operation.CloseInteractionScope lngToken
 
     TestAssert LiveStateUnchanged, "closing the scopes restores the live state"
