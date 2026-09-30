@@ -693,3 +693,45 @@ Private Function WebStatusString(ByVal lngStatus As Long) As String
     End Select
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : OverlayTestResultsSaveError
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Final synchronous test result: retain assertion details and any primary
+'           : decision/runtime error while reporting that results persistence failed.
+'           : The caller supplies only this run's save error; a passing control is unchanged.
+'---------------------------------------------------------------------------------------
+'
+Public Function OverlayTestResultsSaveError(ByVal strJson As String, _
+    ByVal strResultsError As String) As String
+
+    Dim dResult As Object
+
+    OverlayTestResultsSaveError = strJson
+    If Len(strResultsError) = 0 Then Exit Function
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    Set dResult = ParseJson(strJson)
+    dResult("success") = False
+    dResult("allPassed") = False
+    dResult("results_error") = strResultsError
+    If Not dResult.Exists("error") Then
+        dResult("error") = T("The test run finished, but its results file could not be written.")
+    End If
+    OverlayTestResultsSaveError = ConvertToJson(dResult)
+    Exit Function
+
+ErrHandler:
+    ' Keep the persistence failure visible even if the original payload is malformed.
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "allPassed", False
+    dResult.Add "results_error", strResultsError
+    dResult.Add "error", T("The test run finished, but its results file could not be written.")
+    OverlayTestResultsSaveError = ConvertToJson(dResult)
+
+End Function
