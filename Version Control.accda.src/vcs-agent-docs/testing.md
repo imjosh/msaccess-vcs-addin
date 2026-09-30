@@ -6,9 +6,8 @@ database is open. Tests assert with `TestAssert`, a drop-in replacement for
 
 ## Setup
 
-Run `VCS.InstallTestAssertModule` from the Immediate Window to inject the
-`modTestAssert` module. `VCS.MigrateDebugAssert` converts existing `Debug.Assert`
-calls in bulk.
+Run `VCS.InstallTestAssertModule` in the Immediate Window to inject `modTestAssert`.
+`VCS.MigrateDebugAssert` converts existing `Debug.Assert` calls in bulk.
 
 ## Writing tests
 
@@ -22,12 +21,11 @@ Option Private Module
 
 Public Sub TestDoubleInput()
     TestAssert MyFunction(42) = 84, "MyFunction should double input"
-    TestAssert MyFunction(0) = 0, "Zero input returns zero"
 End Sub
 ```
 
-The second `TestAssert` argument is optional context that identifies which
-assertion failed, which matters inside loops and shared helpers.
+The optional second `TestAssert` argument names the assertion, which matters
+inside loops and shared helpers.
 
 A module counts as a test module if it carries `'@Folder("...Tests...")` (in
 projects using `@Folder` at all) or its name contains `Test`. Within it, only
@@ -39,6 +37,10 @@ method gets a fresh instance, so `Class_Initialize` runs before it and
 `Class_Terminate` after. Use parameterless `Public Sub` or `Public Function`. Name
 test modules `modTest*` or `clsTest*`, and mark standard ones
 `Option Private Module`.
+
+An unhandled error in a standard-module test stops in the VBA debugger and the run
+never finishes (the runner calls it via `Application.Run`, which ignores Error
+Trapping). Class tests report ERROR instead; use one, or handle the error.
 
 ## Prompts during a run
 
@@ -56,8 +58,8 @@ installed before this feature will not have the flag.
 
 ## Running tests
 
-Run `?VCS.RunTests` from the Immediate Window, or use **Tools > Run Tests** on the
-ribbon. After a completed run the runner can re-run only the failures.
+Run `?VCS.RunTests` from the Immediate Window, or **Tools > Run Tests** on the
+ribbon; after a run it can re-run only the failures.
 
 `RunTests` takes an optional `ParamArray` of filters. Each argument resolves in
 priority order: exact module name, then suite or `@Folder` value (matching the full
@@ -76,10 +78,10 @@ exclusions starts from all tests.
 
 ## Tagging
 
-`'@Tag("name")` annotations categorize tests and are case-insensitive. A
-module-level tag sits in the first ~30 lines, before any procedure, and applies to
-every test in the module. A procedure-level tag sits at the very top of the
-procedure body, before any executable line including `Dim`. The two sets merge.
+`'@Tag("name")` annotations categorize tests (case-insensitive). A module-level tag
+sits in the first ~30 lines, before any procedure, and covers every test in it. A
+procedure-level tag sits at the top of the procedure body, before any executable
+line including `Dim`. The two sets merge.
 
 ## Global suite hooks
 
@@ -90,11 +92,10 @@ Public Sub GlobalTestSetup()    ' Before the first test, when at least one is se
 Public Sub GlobalTestTeardown() ' After all tests; the results JSON already exists
 ```
 
-`VCS.InstallTestAssertModule` writes empty stubs with inline guidance; if absent
-the runner skips them silently. They do not run when no tests are discovered or a
-filter matches nothing. An error inside a hook is non-fatal — it goes to the
-console, the run continues, and teardown still executes. Per-test
-`Class_Initialize` and `Class_Terminate` nest inside these hooks unchanged.
+`VCS.InstallTestAssertModule` writes empty stubs; absent hooks are skipped
+silently, and neither runs when no tests are selected. An error inside a hook is
+non-fatal: it goes to the console and teardown still executes. Per-test
+`Class_Initialize` and `Class_Terminate` nest inside these hooks.
 
 ## Where results land
 
@@ -106,5 +107,4 @@ console, the run continues, and teardown still executes. Per-test
 | `test-results/test-results.xml` | JUnit XML projection of the state file |
 | `test-results/test-results.html` | Self-contained HTML dashboard |
 
-Both folders are gitignored, so search tools will not find them. See
-`troubleshooting.md` for how to list and read them.
+Both folders are gitignored, so search tools miss them; see `troubleshooting.md`.
