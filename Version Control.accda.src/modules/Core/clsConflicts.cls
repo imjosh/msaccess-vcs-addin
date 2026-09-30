@@ -130,8 +130,8 @@ Private Sub ApplyNonInteractivePolicy()
         Next varKey
         Log.Add T("Merge blocked: {0} conflict(s) need a decision policy (prefer_source, prefer_database, or skip).", _
             var0:=Me.Count), False
-        Operation.RecordDecision DECISION_REQUIRED, "Merge conflicts", _
-            Me.Count & " conflict(s): " & strKeys, DECISION_BLOCKED, "policy=" & CStr(intPolicy)
+        Operation.RecordDecision NewDecision(DECISION_REQUIRED, "Merge conflicts", _
+            Me.Count & " conflict(s): " & strKeys, DECISION_BLOCKED, "policy=" & CStr(intPolicy))
         Me.ApproveResolutions = False
         MCP.Log "Conflict decision required (" & Me.Count & ")."
         Exit Sub
@@ -143,9 +143,9 @@ Private Sub ApplyNonInteractivePolicy()
     Next varKey
     Me.ApproveResolutions = True
     Log.Add T("Applied conflict policy to {0} conflict(s).", var0:=Me.Count), False
-    Operation.RecordDecision DECISION_APPLIED, "Merge conflicts", _
+    Operation.RecordDecision NewDecision(DECISION_APPLIED, "Merge conflicts", _
         Me.Count & " conflict(s)", ConflictResolutionName(intPolicy), _
-        "policy=" & CStr(intPolicy)
+        "policy=" & CStr(intPolicy))
     MCP.Log "Applied conflict policy to " & Me.Count & " conflict(s)."
 
 End Sub

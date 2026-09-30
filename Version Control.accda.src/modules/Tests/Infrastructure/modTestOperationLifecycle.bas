@@ -42,20 +42,19 @@ Public Sub TestBlockedPromptSetsDecisionRequiredResult()
 
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
-    Dim strResolution As String
 
     ' Both ways a prompt gets recorded mark the operation, and Finish keeps the mark
     ' even when the caller asks for success.
     Set cOp = NewOperation
     Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
-    TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Proceed?", strResolution) = vbNo, "the confirmation is not approved"
+    TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Proceed?").Result = vbNo, "the confirmation is not approved"
     TestAssert cOp.Result = eorDecisionRequired, "an unanswered prompt marks the result"
     cRoot.Complete eorSuccess
     TestAssert cOp.Result = eorDecisionRequired, "Finish does not report success for a blocked run"
 
     Set cOp = NewOperation
     Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
-    cOp.RecordDecision DECISION_REQUIRED, "Select Source Folder", "No folder", DECISION_BLOCKED
+    cOp.RecordDecision NewDecision(DECISION_REQUIRED, "Select Source Folder", "No folder", DECISION_BLOCKED)
     TestAssert cOp.Result = eorDecisionRequired, "a recorded decision_required marks the result"
     cRoot.Complete eorFailed
     TestAssert cOp.Result = eorDecisionRequired, "Finish reports decision_required rather than the failure"
@@ -68,14 +67,13 @@ Public Sub TestNestedScopeBlockSurvivesTheScopeClosing()
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim lngToken As Long
-    Dim strResolution As String
 
     ' Closing a scope restores the outer scope's blocked flag, so the result mark is
     ' what carries the block out to the operation that opened the scope.
     Set cOp = NewOperation
     Set cRoot = cOp.TryBeginRoot(eotOther, edpDecline)
     lngToken = cOp.PushInteractionScope(eimNonInteractive, edpBlock, False)
-    cOp.ResolvePrompt vbYesNo, "Confirm", "Proceed?", strResolution
+    cOp.ResolvePrompt vbYesNo, "Confirm", "Proceed?"
     cOp.CloseInteractionScope lngToken
     TestAssert Not cOp.DecisionBlocked, "the outer scope's flag is restored"
     TestAssert cOp.Result = eorDecisionRequired, "the block is still on the result"

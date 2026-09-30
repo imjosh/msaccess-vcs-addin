@@ -276,21 +276,19 @@ End Function
 '           : blocks the scope and raises the error level to critical.
 '---------------------------------------------------------------------------------------
 '
-Public Sub RecordDecision(ByVal strKind As String, ByVal strTitle As String, _
-    ByVal strMessage As String, ByVal strResolution As String, _
-    Optional ByVal strDetail As String)
+Public Sub RecordDecision(ByVal cRecord As clsDecisionRecord)
 
     Dim dItem As Dictionary
 
     Set dItem = New Dictionary
-    dItem.Add "kind", strKind
-    dItem.Add "title", strTitle
-    dItem.Add "message", strMessage
-    dItem.Add "resolution", strResolution
-    dItem.Add "detail", strDetail
+    dItem.Add "kind", cRecord.Kind
+    dItem.Add "title", cRecord.Title
+    dItem.Add "message", cRecord.Message
+    dItem.Add "resolution", cRecord.Resolution
+    dItem.Add "detail", cRecord.Detail
     this.Journal.Add dItem
 
-    If StrComp(strKind, DECISION_REQUIRED, vbTextCompare) = 0 Then
+    If StrComp(cRecord.Kind, DECISION_REQUIRED, vbTextCompare) = 0 Then
         this.Blocked = True
         If this.ErrorLevel < eelCritical Then this.ErrorLevel = eelCritical
     End If
@@ -303,28 +301,27 @@ End Sub
 ' Author    : Josh
 ' Date      : 09/29/2026
 ' Purpose   : Answer a message box for the current policy without showing it, and
-'           : record the outcome. Returns the button to report to the caller;
-'           : strResolution receives acknowledged, declined or decision_required.
+'           : record the outcome. The outcome holds the button to report to the
+'           : caller and the resolution: acknowledged, declined or decision_required.
 '---------------------------------------------------------------------------------------
 '
 Public Function ResolvePrompt(ByVal intButtons As Long, _
     Optional ByVal strTitle As String, _
-    Optional ByVal strMessage As String, _
-    Optional ByRef strResolution As String) As VbMsgBoxResult
+    Optional ByVal strMessage As String) As clsPromptOutcome
 
-    Dim intResult As VbMsgBoxResult
-    Dim blnBlocked As Boolean
+    Dim cOutcome As clsPromptOutcome
 
-    ResolveNonInteractivePrompt intButtons, this.Policy, intResult, strResolution, blnBlocked
-    If blnBlocked Then
-        RecordDecision DECISION_REQUIRED, strTitle, strMessage, strResolution, _
-            "buttons=" & CStr(intButtons And MB_BUTTON_STYLE_MASK)
-    ElseIf strResolution = DECISION_ACKNOWLEDGED Then
-        RecordDecision DECISION_ACKNOWLEDGED, strTitle, strMessage, strResolution
+    Set cOutcome = ResolveNonInteractivePrompt(intButtons, this.Policy)
+    If cOutcome.Blocked Then
+        RecordDecision NewDecision(DECISION_REQUIRED, strTitle, strMessage, cOutcome.Resolution, _
+            "buttons=" & CStr(intButtons And MB_BUTTON_STYLE_MASK))
+    ElseIf cOutcome.Resolution = DECISION_ACKNOWLEDGED Then
+        RecordDecision NewDecision(DECISION_ACKNOWLEDGED, strTitle, strMessage, cOutcome.Resolution)
     Else
-        RecordDecision DECISION_APPLIED, strTitle, strMessage, strResolution, "result=" & CStr(intResult)
+        RecordDecision NewDecision(DECISION_APPLIED, strTitle, strMessage, cOutcome.Resolution, _
+            "result=" & CStr(cOutcome.Result))
     End If
-    ResolvePrompt = intResult
+    Set ResolvePrompt = cOutcome
 
 End Function
 

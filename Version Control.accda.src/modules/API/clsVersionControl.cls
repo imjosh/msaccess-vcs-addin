@@ -3938,11 +3938,13 @@ End Sub
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
 
     Dim dResult As Dictionary
+    Dim strRefusal As String
 
     ' A running or staged operation keeps the policy it began with. Refuse without
     ' touching its scope, or the policy this call would replace.
-    If Operation.Status <> eosReady Then
-        SetOperationPolicy = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+    strRefusal = PolicyRequestRefusal(Operation)
+    If Len(strRefusal) > 0 Then
+        SetOperationPolicy = strRefusal
         Exit Function
     End If
 

@@ -191,35 +191,59 @@ End Sub
 '           : callers that proceed only on Yes/OK do not apply the change.
 '---------------------------------------------------------------------------------------
 '
-Public Sub ResolveNonInteractivePrompt(ByVal intButtons As Long, _
-    ByVal intPolicy As eDecisionPolicy, _
-    ByRef intResult As VbMsgBoxResult, _
-    ByRef strResolution As String, _
-    ByRef blnBlocked As Boolean)
+Public Function ResolveNonInteractivePrompt(ByVal intButtons As Long, _
+    ByVal intPolicy As eDecisionPolicy) As clsPromptOutcome
 
+    Dim cOutcome As clsPromptOutcome
     Dim intStyle As Long
 
     intStyle = intButtons And MB_BUTTON_STYLE_MASK
 
     ' The defaults answer an OK-only prompt: acknowledged, nothing blocked.
-    blnBlocked = False
-    strResolution = DECISION_ACKNOWLEDGED
-    intResult = vbOK
-    If intStyle = vbOKOnly Then Exit Sub
+    Set cOutcome = New clsPromptOutcome
+    cOutcome.Blocked = False
+    cOutcome.Resolution = DECISION_ACKNOWLEDGED
+    cOutcome.Result = vbOK
+    Set ResolveNonInteractivePrompt = cOutcome
+    If intStyle = vbOKOnly Then Exit Function
 
-    intResult = NonDestructiveResult(intStyle)
+    cOutcome.Result = NonDestructiveResult(intStyle)
 
     If intPolicy = edpDecline Then
-        strResolution = DECISION_DECLINED
-        Exit Sub
+        cOutcome.Resolution = DECISION_DECLINED
+        Exit Function
     End If
 
     ' prefer_source / prefer_database / skip apply to merge conflicts, not to a
     ' generic confirmation. block, ask, and those conflict policies all stop here.
-    strResolution = DECISION_REQUIRED
-    blnBlocked = True
+    cOutcome.Resolution = DECISION_REQUIRED
+    cOutcome.Blocked = True
 
-End Sub
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : NewDecision
+' Date      : 09/30/2026
+' Purpose   : Build one decision journal entry. Kind, resolution and detail are wire
+'           : values; title and message are the text of the prompt or conflict.
+'---------------------------------------------------------------------------------------
+'
+Public Function NewDecision(ByVal strKind As String, ByVal strTitle As String, _
+    ByVal strMessage As String, ByVal strResolution As String, _
+    Optional ByVal strDetail As String) As clsDecisionRecord
+
+    Dim cRecord As clsDecisionRecord
+
+    Set cRecord = New clsDecisionRecord
+    cRecord.Kind = strKind
+    cRecord.Title = strTitle
+    cRecord.Message = strMessage
+    cRecord.Resolution = strResolution
+    cRecord.Detail = strDetail
+    Set NewDecision = cRecord
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -355,6 +379,22 @@ End Function
 '
 Public Function OperationRunningMessage() As String
     OperationRunningMessage = T("Another operation is already running.")
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PolicyRequestRefusal
+' Date      : 09/30/2026
+' Purpose   : The refusal JSON for a request to set a decision policy on this operation,
+'           : or an empty string when the operation is ready to take one. A running or
+'           : staged operation keeps the policy it began with. The operation is passed
+'           : in so the rule can be tested without touching the session operation.
+'---------------------------------------------------------------------------------------
+'
+Public Function PolicyRequestRefusal(ByVal cOp As clsOperation) As String
+    If cOp.Status <> eosReady Then
+        PolicyRequestRefusal = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+    End If
 End Function
 
 

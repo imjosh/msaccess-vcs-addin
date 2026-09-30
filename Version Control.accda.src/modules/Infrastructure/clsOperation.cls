@@ -834,8 +834,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function ResolvePrompt(ByVal intButtons As Long, ByVal strTitle As String, _
-    ByVal strMessage As String, ByRef strResolution As String) As VbMsgBoxResult
-    ResolvePrompt = Scope.ResolvePrompt(intButtons, strTitle, strMessage, strResolution)
+    ByVal strMessage As String) As clsPromptOutcome
+    Set ResolvePrompt = Scope.ResolvePrompt(intButtons, strTitle, strMessage)
     ApplyBlockedResult
 End Function
 
@@ -848,11 +848,9 @@ End Function
 '           : and prevents Finish from reporting success.
 '---------------------------------------------------------------------------------------
 '
-Public Sub RecordDecision(ByVal strKind As String, ByVal strTitle As String, _
-    ByVal strMessage As String, ByVal strResolution As String, _
-    Optional ByVal strDetail As String)
+Public Sub RecordDecision(ByVal cRecord As clsDecisionRecord)
 
-    Scope.RecordDecision strKind, strTitle, strMessage, strResolution, strDetail
+    Scope.RecordDecision cRecord
     ApplyBlockedResult
 
 End Sub
