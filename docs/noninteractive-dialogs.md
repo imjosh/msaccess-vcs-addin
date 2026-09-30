@@ -128,7 +128,8 @@ and export resources alone.
 - The source-folder picker when the project folder is unknown.
 - `frmVCSMain` being left visible as a results window. Every site that opens
   it goes through `ShowMainForm`, which opens it hidden for a noninteractive
-  run.
+  run. `Export`, `FullExport` and `ExportVBA` hide it through
+  `SetMainFormVisible`, including a form that was already visible.
 - A second cancel confirmation when a noninteractive run's window is closed.
   `ConfirmCancel` skips it: closing the window is the request to cancel, and no
   policy answers it. Silent mode does not skip it. `MsgBox2` shows it for a run
