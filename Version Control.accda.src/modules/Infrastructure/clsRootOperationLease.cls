@@ -79,6 +79,18 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : RecordRuntimeError
+' Date      : 09/30/2026
+' Purpose   : Keep the runtime error that is ending the root, for its terminal callback.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordRuntimeError(strDescription As String, lngNumber As Long)
+    If Not m_blnValid Then Exit Sub
+    m_objOp.RecordRootRuntimeError m_strToken, strDescription, lngNumber
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : DetachForContinuation
 ' Author    : Adam Waller
 ' Date      : 8/20/2026

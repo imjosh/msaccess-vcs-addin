@@ -47,6 +47,8 @@ Private Type udtRoot
     Detached As Boolean
     Completed As Boolean
     PauseDepth As Long
+    RuntimeError As String
+    RuntimeErrorNumber As Long
 End Type
 Private m_Root As udtRoot
 
@@ -58,6 +60,9 @@ Private m_SessionScope As Long
 
 ' Journal of the operation that finished last (see LastDecisions).
 Private m_LastDecisions As Collection
+
+' Terminal callback of the operation that finished last (see LastCompletion).
+Private m_LastCompletion As Dictionary
 
 ' Heartbeat value last copied to the registry, throttling Pulse's registry write.
 Private m_datRegistryPulse As Date
@@ -154,6 +159,26 @@ Public Sub CompleteRootLease(strToken As String, Optional intResult As eOperatio
     If StrComp(m_Root.Token, strToken, vbBinaryCompare) <> 0 Then Exit Sub
 
     FinishRootInternal intResult
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordRootRuntimeError
+' Date      : 09/30/2026
+' Purpose   : Keep the runtime error that ended the root, when the caller holds a
+'           : matching lease token. Finish puts it on the terminal callback, since an
+'           : async caller never sees the procedure's own return value.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordRootRuntimeError(strToken As String, strDescription As String, lngNumber As Long)
+
+    If m_Root.Completed Then Exit Sub
+    If Len(m_Root.Token) = 0 Then Exit Sub
+    If StrComp(m_Root.Token, strToken, vbBinaryCompare) <> 0 Then Exit Sub
+
+    m_Root.RuntimeError = strDescription
+    m_Root.RuntimeErrorNumber = lngNumber
 
 End Sub
 
@@ -511,10 +536,17 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     m_Root.Completed = False
     m_Root.PauseDepth = 0
     m_Root.AppHwnd = hWndAccessApp
+    m_Root.RuntimeError = vbNullString
+    m_Root.RuntimeErrorNumber = 0
 
     Me.ErrorLevel = eelNoError
     Me.Result = eorUnknown
     Set m_LastDecisions = Nothing
+    Set m_LastCompletion = Nothing
+
+    ' A test run's callback carries the results file, so a run that ends before it
+    ' saves must not find the previous run's path still set.
+    If intType = eotTestRun And IsSessionSingleton Then TestRunner.ClearLastResultsPath
 
     ' The policy scope opens only now that the root is granted. Finish closes it, and
     ' UpdateRegistry saves it so RestoreFromRegistry can reopen it. Under a caller-owned
@@ -536,6 +568,9 @@ End Sub
 Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnknown)
 
     Dim blnWasRunning As Boolean
+    Dim dExtra As Dictionary
+    Dim strType As String
+    Dim strMessage As String
 
     If m_Root.Completed Then Exit Sub
     If m_Root.State = eosReady And Len(m_Root.Token) = 0 Then Exit Sub
@@ -556,37 +591,57 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     UpdateRegistry
     If modTestRunnerDiag.DiagEnabled Then modTestRunnerDiag.DiagEnd "op.registry"
 
-    If MCP.IsActive And IsSessionSingleton Then
-        Dim dExtra As Dictionary
-        Set dExtra = New Dictionary
-        dExtra.Add "log_path", Log.SavedLogFilePath
-        If Scope.DecisionCount > 0 Then dExtra.Add "decisions", Scope.Decisions
-        ' Failed tests complete as eorFailed (MCP "error"), so the results file
-        ' has to ride on every terminal callback or the client only sees
-        ' "Operation failed" with no JSON to rerun from.
-        If m_Root.OperationType = eotTestRun Then
-            If Len(TestRunner.LastResultsPath) > 0 Then
-                dExtra.Add "results_path", TestRunner.LastResultsPath
-            End If
+    Set dExtra = New Dictionary
+    dExtra.Add "log_path", Log.SavedLogFilePath
+    If Scope.DecisionCount > 0 Then dExtra.Add "decisions", Scope.Decisions
+    ' Failed tests complete as eorFailed (MCP "error"), so the results file
+    ' has to ride on every terminal callback or the client only sees
+    ' "Operation failed" with no JSON to rerun from.
+    If m_Root.OperationType = eotTestRun Then
+        If Len(TestRunner.LastResultsPath) > 0 Then
+            dExtra.Add "results_path", TestRunner.LastResultsPath
         End If
-
-        Select Case Me.Result
-            Case eorSuccess
-                MCP.PostCallback "complete", 100, 100, "Operation completed successfully", dExtra
-            Case eorFailed
-                MCP.PostCallback "error", -1, -1, "Operation failed", dExtra
-            Case eorCanceled
-                MCP.PostCallback "cancelled", -1, -1, "Operation was cancelled", dExtra
-            Case eorTimeout
-                MCP.PostCallback "error", -1, -1, "Operation timed out", dExtra
-            Case eorDecisionRequired
-                dExtra.Add "decision_required", True
-                dExtra.Add "error_pattern", ERR_DECISION_REQUIRED
-                MCP.PostCallback "error", -1, -1, "Decision required", dExtra
-            Case Else
-                MCP.PostCallback "complete", 100, 100, "Operation completed", dExtra
-        End Select
     End If
+    ' The error text is otherwise only in the sync return, which an async caller
+    ' never reads.
+    If Len(m_Root.RuntimeError) > 0 Then
+        dExtra.Add "runtime_error", m_Root.RuntimeError
+        dExtra.Add "errorNumber", m_Root.RuntimeErrorNumber
+    End If
+
+    Select Case Me.Result
+        Case eorSuccess
+            strType = "complete"
+            strMessage = "Operation completed successfully"
+        Case eorFailed
+            strType = "error"
+            strMessage = "Operation failed"
+            If Len(m_Root.RuntimeError) > 0 Then strMessage = m_Root.RuntimeError
+        Case eorCanceled
+            strType = "cancelled"
+            strMessage = "Operation was cancelled"
+        Case eorTimeout
+            strType = "error"
+            strMessage = "Operation timed out"
+        Case eorDecisionRequired
+            strType = "error"
+            strMessage = "Decision required"
+            dExtra.Add "decision_required", True
+            dExtra.Add "error_pattern", ERR_DECISION_REQUIRED
+        Case Else
+            strType = "complete"
+            strMessage = "Operation completed"
+    End Select
+    If MCP.IsActive And IsSessionSingleton Then
+        If strType = "complete" Then
+            MCP.PostCallback strType, 100, 100, strMessage, dExtra
+        Else
+            MCP.PostCallback strType, -1, -1, strMessage, dExtra
+        End If
+    End If
+    dExtra.Add "type", strType
+    dExtra.Add "message", strMessage
+    Set m_LastCompletion = dExtra
 
     ' Restore interaction state after the callback has read the journal.
     Set m_LastDecisions = Scope.Decisions
@@ -935,6 +990,19 @@ End Function
 '
 Public Function LastDecisions() As Collection
     Set LastDecisions = m_LastDecisions
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : LastCompletion
+' Date      : 09/30/2026
+' Purpose   : Terminal callback fields of the operation that most recently finished,
+'           : plus its "type" and "message". Built whether or not MCP is active, so the
+'           : payload can be checked on a private instance. Nothing until one finishes.
+'---------------------------------------------------------------------------------------
+'
+Public Function LastCompletion() As Dictionary
+    Set LastCompletion = m_LastCompletion
 End Function
 
 
