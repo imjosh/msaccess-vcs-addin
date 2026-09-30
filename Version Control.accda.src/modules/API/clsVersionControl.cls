@@ -3180,6 +3180,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim blnUseWebRunner As Boolean
     Dim strJUnitPath As String
     Dim strJsonPath As String
+    Dim strResultsError As String
     Dim blnCanceled As Boolean
     Dim intPolicy As eDecisionPolicy
     Dim intResult As eOperationResult
@@ -3343,6 +3344,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         TestRunner.RunAll
     End If
     strJsonPath = TestRunner.SaveResults
+    strResultsError = TestRunner.ResultsSaveError
     modTestState.PersistAfterRun
 
     ' CI must always get the JUnit XML, regardless of the export option
@@ -3357,7 +3359,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     lngFailed = TestRunner.FailedCount
     lngErrored = TestRunner.ErroredCount
     lngEmpty = TestRunner.EmptyCount
-    blnAllPassed = (Not blnCanceled) And (lngFailed = 0 And lngErrored = 0 And lngPassed > 0)
+    blnAllPassed = (Not blnCanceled) And (lngFailed = 0 And lngErrored = 0 And lngPassed > 0) _
+        And Len(strResultsError) = 0
 
     Log.Flush
     DoCmd.Hourglass False
@@ -3376,11 +3379,12 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         FinalizeTestConsole blnAllPassed, Log.SavedLogFilePath, blnCanceled, strJsonPath
         ExecuteTests = TestRunner.GetResultsAsJson
     End If
-    If Operation.DecisionBlocked Then ExecuteTests = OverlayDecisionRequired(ExecuteTests)
 
     TestRunner.InvokeGlobalTestTeardown
 
-    If blnCanceled Then
+    If Len(strResultsError) > 0 Then
+        intResult = eorFailed
+    ElseIf blnCanceled Then
         intResult = eorCanceled
     ElseIf blnAllPassed Then
         intResult = eorSuccess
@@ -3389,6 +3393,11 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 CleanUp:
     On Error Resume Next
     DoCmd.Hourglass False
+    ExecuteTests = OverlayTestResultsSaveError(ExecuteTests, strResultsError)
+    If Len(strResultsError) > 0 Then intResult = eorFailed
+    If Not cRoot Is Nothing Then
+        If Operation.DecisionBlocked Then ExecuteTests = OverlayDecisionRequired(ExecuteTests)
+    End If
     If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
         ExecuteTests = DecisionRequiredJson()
     End If
