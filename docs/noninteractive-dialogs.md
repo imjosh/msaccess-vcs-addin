@@ -7,10 +7,12 @@ VCS.MergeBuild "block"
 VCS.RunFilteredTests "prefer_source"
 ```
 
-MCP passes the same strings from `vcs_import_objects` and `vcs_run_tests`.
-The mode applies only to that operation. `Operation.Finish` restores the
-previous interaction mode after success, failure, or cancellation. If the
-operation never starts, the caller pops the scope immediately.
+MCP passes the same strings from `vcs_import_objects` and `vcs_run_tests`,
+and sets a session policy around `vcs_import_object` and `vcs_export_object`
+(see Results). A policy passed to an entry point applies to that operation
+only. `Operation.Finish` restores the previous interaction mode after success,
+failure, or cancellation. A request that cannot begin (unknown policy, another
+operation running) opens no scope and changes nothing.
 
 ## Policies
 
@@ -36,10 +38,12 @@ array. It is not `complete`.
 
 ## Results
 
-`MergeBuild` and `RunFilteredTests` return a start result, not an outcome:
-`{"success":true,"started":true,"operation_id":...}`. The outcome arrives
-through the completion callback. A request that cannot start (unknown policy,
-another operation running, merge unavailable) returns
+`MergeBuild` returns a start result, not an outcome:
+`{"success":true,"started":true,"operation_id":...}`. The merge continues on a
+timer, and the outcome arrives through the completion callback.
+`RunFilteredTests` is synchronous: it runs the tests before it returns, and its
+return is the final results JSON. A request to either that cannot start
+(unknown policy, another operation running, merge unavailable) returns
 `{"success":false,"error_pattern":...,"error":...}` and posts the same payload
 as an `error` callback. The patterns are `invalid_decision_policy`,
 `merge_not_available`, `operation_already_running`, and `decision_required`.
@@ -69,7 +73,11 @@ returns `success: false` with the first logged error in `error`.
   it goes through `ShowMainForm`, which opens it hidden for a noninteractive
   run.
 - A second cancel confirmation when a noninteractive run's window is closed.
-  Silent mode does not skip it; `MsgBox2` answers it with the caller's default.
+  `ConfirmCancel` skips it: closing the window is the request to cancel, and no
+  policy answers it. Silent mode does not skip it. `MsgBox2` shows it for a run
+  a person started (it is a user-gesture prompt on an attended run). An
+  unattended silent run, such as automation or a test run, gets the default
+  answer, yes, and no window appears.
 - The one-time offers that headless test runs skip: `modTestAssert` is
   installed silently, and the "migrate `Debug.Assert`" offer is not shown, so
   it is never recorded as `decision_required`.

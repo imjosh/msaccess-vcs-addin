@@ -108,9 +108,11 @@ tests that prove the real prompt sites use it.
 21. As an interactive user, I want merges, builds, and test runs started from
     the ribbon to behave exactly as before, so that the hardening doesn't
     change my workflow.
-22. As an interactive user, I want closing a silent or noninteractive
-    operation's window to cancel without a second confirmation, and this
-    documented, so that the behaviour isn't surprising.
+22. As an interactive user, I want closing a noninteractive operation's
+    window to cancel without a second confirmation, and this documented, so
+    that the behaviour isn't surprising. A silent run keeps the confirmation
+    when a person started it; an unattended silent run takes the default
+    answer (yes) and shows no window.
 23. As an interactive user, I want an automated run that failed to leave
     Access in a normal state, so that I'm not stuck with a hidden form or a
     locked operation.
@@ -244,9 +246,11 @@ tests that prove the real prompt sites use it.
 - The raw message box in printer-settings import goes through `MsgBox2`.
 - Call sites use the single noninteractive predicate rather than comparing
   the mode directly.
-- Closing a silent or noninteractive run's window cancels without a second
-  confirmation. This stays, and the doc's statement that silent mode is
-  unchanged gets this exception.
+- Closing a noninteractive run's window cancels without a second
+  confirmation (`ConfirmCancel` skips it). This stays, and the doc's statement
+  that silent mode is unchanged gets this exception. Silent mode itself is
+  unchanged: `MsgBox2` shows the confirmation for an attended run and answers
+  the default (yes) for an unattended one.
 
 **Module boundaries and standards**
 
