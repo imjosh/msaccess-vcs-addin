@@ -514,8 +514,14 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     Set m_LastDecisions = Nothing
 
     ' The policy scope opens only now that the root is granted. Finish closes it, and
-    ' UpdateRegistry saves it so RestoreFromRegistry can reopen it.
-    If intPolicy <> edpAsk Then Scope.OpenScope eimNonInteractive, intPolicy, True
+    ' UpdateRegistry saves it so RestoreFromRegistry can reopen it. Under a caller-owned
+    ' session policy the root still opens its own scope, with that policy, so its
+    ' blocked flag and decisions start empty and do not carry into the next root.
+    If intPolicy <> edpAsk Then
+        Scope.OpenScope eimNonInteractive, intPolicy, True
+    ElseIf Scope.InNonInteractiveScope Then
+        Scope.OpenScope eimNonInteractive, Scope.DecisionPolicy, True
+    End If
 
     SetErrorTrapping
     UpdateRegistry
