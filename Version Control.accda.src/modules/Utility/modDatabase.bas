@@ -1035,6 +1035,47 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : GetSystemTableNames
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 8/21/2026
+' Purpose   : Return the names of the tables owned by the database engine or by Access,
+'           : which are left out of version control. A table qualifies only when its
+'           : name begins with MSys *and* it carries the system attribute. Neither test
+'           : is enough alone: the prefix is not reserved, so a user table may use it,
+'           : and setting dbSystemObject on a user table (an old way to hide it) stores
+'           : the same bits the engine uses on its own tables.
+'           : Test the attribute with <> 0: dbSystemObject is two bits (&H80000002), and
+'           : engine tables carry only &H80000000.
+'           : Built once per scan so callers can test names inside their loop.
+'---------------------------------------------------------------------------------------
+'
+Public Function GetSystemTableNames() As Dictionary
+
+    Dim dSysTables As Dictionary
+    Dim tdf As DAO.TableDef
+
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+
+    Set dSysTables = New Dictionary
+    dSysTables.CompareMode = TextCompare
+
+    For Each tdf In SharedDb.TableDefs
+        If tdf.Name Like "MSys*" Then
+            If (tdf.Attributes And dbSystemObject) <> 0 Then dSysTables.Add tdf.Name, True
+        End If
+    Next tdf
+
+    ' Left behind by a failed compact. Its attributes are unverified, so list it by name.
+    If Not dSysTables.Exists("MSysCompactError") Then dSysTables.Add "MSysCompactError", True
+
+    Set GetSystemTableNames = dSysTables
+
+    CatchAny eelError, T("Error reading the list of system tables"), ModuleName & ".GetSystemTableNames"
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : TableIndexesAvailable
 ' Author    : Adam Waller
 ' Date      : 7/27/2026
@@ -1659,8 +1700,8 @@ End Function
 ' Purpose   : Batch-load every local/linked table Type from MSysObjects into a module
 '           : cache in a single recordset pass, replacing hundreds of per-table Type
 '           : lookups during a table scan. Always rebuilds fresh so a cache from a
-'           : prior operation can never go stale. System and temporary tables are
-'           : skipped to match clsDbTableDef.GetAllFromDB enumeration.
+'           : prior operation can never go stale. Every table is cached, system tables
+'           : included: an entry is only read when a scan asks for that name.
 '---------------------------------------------------------------------------------------
 '
 Public Sub BuildTableTypeCache()
@@ -1684,11 +1725,7 @@ Public Sub BuildTableTypeCache()
 
     Do While Not rst.EOF
         strName = Nz(rst!Name, vbNullString)
-        If Len(strName) > 0 Then
-            If Not (strName Like "MSys*" Or strName Like "~*") Then
-                m_dTableTypeCache(strName) = Nz(rst!Type, 1)
-            End If
-        End If
+        If Len(strName) > 0 Then m_dTableTypeCache(strName) = Nz(rst!Type, 1)
         rst.MoveNext
     Loop
     rst.Close
