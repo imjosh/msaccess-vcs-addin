@@ -62,6 +62,22 @@ names `results_path` only when this run saved results. When the run finished but
 the results file could not be written, the callback carries `results_error`
 (the logged write error) instead.
 
+Every call `APIAsync` launches on the timer (`Export`, `FullExport`,
+`ExportVBA`, `Build`, `BuildAs`, `MergeBuild`, `RunFilteredTests`) posts exactly
+one terminal callback, even when it never acquired a root. When the call
+returns and nothing has posted one, the timer posts an `error` callback built
+from the method's own return (`PostUnreportedOutcome`): a JSON object keeps its
+fields (`error`, `errorNumber`, `error_pattern`, `decisions`) with
+`success: false`, and a runtime error also carries `runtime_error`, as a root's
+callback does. A test run that fails in its preflight before the root (for
+example, installing `modTestAssert` raises) therefore reports the real error
+instead of timing out. A Sub that returns Empty without posting, such as an
+export whose `Begin` was refused, gets an `error` saying the operation did not
+start. Nothing is added when a root completion or `RefusalJson` already posted
+(`clsMCP.TerminalPosted`), when completion released the MCP instance, or when
+the call left a staged root (a build or merge continuing on its timer), whose
+continuation posts. Synchronous `API` returns are unchanged.
+
 `SetOperationPolicy` sets a session policy. It stays in force across
 operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,
 replaces it; `Finish` does not close it. Each operation under it starts with
