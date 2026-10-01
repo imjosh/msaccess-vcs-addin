@@ -83,6 +83,23 @@ contradictory guidance.
 
 ---
 
+## 2026-10-01 — The capability probe is a procedure Access can refuse (X09)
+
+**Trigger**: Live check during X09. `API("NoSuchMethodX09")` on the installed add-in did not raise to the COM caller: it stopped on a modal "Run-time error '438': Object doesn't support this property or method" (Continue/End/Debug), and the call timed out holding Access. An add-in that predates `GetCapabilities` would do the same when probed through `API`, so the probe meant to refuse it safely would block it instead. `Application.Run "<add-in path>.NoSuchProcX09"` on the same instance returned at once with a COM error (2517, "cannot find the procedure") and left no dialog.
+
+**Options explored**:
+- **Probe through `API("GetCapabilities")`.** Works on a new add-in; blocks an old one on the 438 dialog. Rejected.
+- **Make `API` return JSON for an unknown method.** Only helps add-ins built after the change, which already have the probe. Rejected as the fix (it does not reach old add-ins).
+- **A standard-module procedure called directly (chosen).** `modAPI.APICapabilities` owns the list. Access resolves the name before any VBA runs, so an old add-in fails as a COM exception with no dialog.
+
+**Decision**: Clients probe `Application.Run "<add-in path>.APICapabilities"`. `clsVersionControl.GetCapabilities` returns `modAPI.APICapabilities`, so `API("GetCapabilities")` gives the same reply on add-ins that have it.
+
+**What this rules out**: Probing for any new API method through `API` on an add-in that may not have it. A future capability is added to `APICapabilities`, and a new probe-style entry point is a standard-module procedure.
+
+**Relevant files**: `modAPI.bas` (`APICapabilities`), `clsVersionControl.cls` (`GetCapabilities`), `modTestBuildAsPaths.bas`, `docs/noninteractive-dialogs.md`.
+
+---
+
 ## 2026-10-01 — Build As takes its source and output as arguments (X09)
 
 **Trigger**: X09 (interface review F13). MCP's `vcs_rebuild_database(output_path=...)` started `BuildAs` with no arguments. `BuildAs` opened the source-folder picker and the save-as picker, so the requested source and output were never used, and MCP reported the requested `output_path` without knowing where the build went. Reproduced live before the fix: the "Select Source Folder" picker opened in the hosting Access.
@@ -96,6 +113,8 @@ contradictory guidance.
 - With either, both are required, and `BuildAsPathRefusal` checks them before `Begin`: the source must hold `vcs-options.json`; the output must be a full path to a file, in a folder that exists, that is not the add-in. A bad pair returns `invalid_build_path` through `RefusalJson` and starts nothing. A good pair runs `modBuild.Build source, True, , output` and `CompleteBuildOperation`. No picker is reached on this path.
 - A successful full build records `Operation.RecordOutputPath CurrentProject.FullName`, and `Finish` adds it to the terminal callback as `output_path`. The path is what the build left open, not what the caller asked for. A failed, cancelled, or critical build records none. A record after `Finish` is ignored, and each root starts with none.
 - `GetCapabilities` returns `{"success":true,"capabilities":["build_as_paths"]}`. The version number does not change on a rebuild, so it cannot say whether `BuildAs` takes paths (M32/M40). An add-in without `GetCapabilities` has no capabilities.
+
+> **⚠ Partially superseded** (2026-10-01): probing `GetCapabilities` through `API` on an older add-in opens a run-time error 438 dialog. Clients call `modAPI.APICapabilities` directly instead. See "The capability probe is a procedure Access can refuse (X09)" above.
 
 **Tests**: `modTestBuildAsPaths` covers the refusals (none starts or ends an operation), `output_path` on a private `clsOperation`'s completion, and `GetCapabilities`. The no-argument form opens pickers when the operation is free, so a unit test cannot call it: the runner's root lives in the installed add-in, and this copy's operation is idle. `BuildAsWithoutPathsCheck`, run through `vcs_run_vba`, holds its own root and checks that the no-argument form returns no refusal and goes through `Begin`.
 

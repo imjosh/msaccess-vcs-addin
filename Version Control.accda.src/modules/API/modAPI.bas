@@ -199,6 +199,35 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : APICapabilities
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Name the API behaviours this build supports, so a client can refuse a
+'           : request before it starts. Clients call this directly through
+'           : Application.Run ("<add-in path>.APICapabilities"), not through API. On
+'           : an add-in that predates it, Access then refuses the call with a COM
+'           : error (2517, procedure not found). Asking API for a method the add-in
+'           : lacks instead stops on a modal "Run-time error 438" dialog, which holds
+'           : Access until a person dismisses it.
+'           : A rebuild does not change the version number, so the version cannot
+'           : answer this. Returns JSON: {"success":true,"capabilities":[...]}
+'           :   build_as_paths: BuildAs(source, output) builds without pickers and
+'           :   reports output_path on its completion callback.
+'---------------------------------------------------------------------------------------
+'
+Public Function APICapabilities() As String
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", True
+    dResult.Add "capabilities", Array("build_as_paths")
+    APICapabilities = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : WorkerCallback
 ' Author    : Adam Waller
 ' Date      : 3/2/2023

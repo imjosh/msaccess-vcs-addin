@@ -5,7 +5,7 @@
 ' Date      : 10/1/2026
 ' Purpose   : BuildAs with a source folder and an output file (X09). An invalid pair is
 '           : refused as JSON before anything starts, with no picker. The completion
-'           : callback names the file a build wrote, and GetCapabilities advertises
+'           : callback names the file a build wrote, and APICapabilities advertises
 '           : the feature so a caller can refuse an older add-in.
 '           :
 '           : Only refusals run here: a real build would close the database the tests
@@ -115,7 +115,9 @@ Public Sub TestCapabilitiesNameBuildAsPaths()
     Dim varName As Variant
     Dim blnFound As Boolean
 
-    Set dResult = ParseJson(VCS.GetCapabilities)
+    ' APICapabilities is the probe entry point; the API method gives the same reply.
+    TestAssert VCS.GetCapabilities = APICapabilities, "GetCapabilities matches APICapabilities"
+    Set dResult = ParseJson(APICapabilities)
     TestAssert Not dResult Is Nothing, "the capability reply is JSON"
     If dResult Is Nothing Then Exit Sub
     TestAssert CBool(dResult("success")), "the capability query succeeds"
