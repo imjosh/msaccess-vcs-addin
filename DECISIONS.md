@@ -83,6 +83,28 @@ contradictory guidance.
 
 ---
 
+## 2026-10-01 — Build As takes its source and output as arguments (X09)
+
+**Trigger**: X09 (interface review F13). MCP's `vcs_rebuild_database(output_path=...)` started `BuildAs` with no arguments. `BuildAs` opened the source-folder picker and the save-as picker, so the requested source and output were never used, and MCP reported the requested `output_path` without knowing where the build went. Reproduced live before the fix: the "Select Source Folder" picker opened in the hosting Access.
+
+**Options explored**:
+- **A. `BuildAs(source?, output?)`, with no pickers when the paths are given (chosen).** The completion callback names the file the build wrote. MCP checks a capability first and refuses an older add-in before it starts.
+- **B. Keep MCP's output limited to the default derived name and verify that file afterwards.** Rejected by the owner: it cannot honour an arbitrary output path, and a picker still opens.
+
+**Decision**:
+- `BuildAs` is a Function with two optional arguments. With neither, it is the ribbon command, unchanged.
+- With either, both are required, and `BuildAsPathRefusal` checks them before `Begin`: the source must hold `vcs-options.json`; the output must be a full path to a file, in a folder that exists, that is not the add-in. A bad pair returns `invalid_build_path` through `RefusalJson` and starts nothing. A good pair runs `modBuild.Build source, True, , output` and `CompleteBuildOperation`. No picker is reached on this path.
+- A successful full build records `Operation.RecordOutputPath CurrentProject.FullName`, and `Finish` adds it to the terminal callback as `output_path`. The path is what the build left open, not what the caller asked for. A failed, cancelled, or critical build records none. A record after `Finish` is ignored, and each root starts with none.
+- `GetCapabilities` returns `{"success":true,"capabilities":["build_as_paths"]}`. The version number does not change on a rebuild, so it cannot say whether `BuildAs` takes paths (M32/M40). An add-in without `GetCapabilities` has no capabilities.
+
+**Tests**: `modTestBuildAsPaths` covers the refusals (none starts or ends an operation), `output_path` on a private `clsOperation`'s completion, and `GetCapabilities`. The no-argument form opens pickers when the operation is free, so a unit test cannot call it: the runner's root lives in the installed add-in, and this copy's operation is idle. `BuildAsWithoutPathsCheck`, run through `vcs_run_vba`, holds its own root and checks that the no-argument form returns no refusal and goes through `Begin`.
+
+**What this rules out**: An unattended caller depending on a picker for either path, and a client trusting a requested output path that the add-in did not report.
+
+**Relevant files**: `clsVersionControl.cls` (`BuildAs`, `BuildAsPathRefusal`, `GetCapabilities`), `clsOperation.cls` (`RecordOutputPath`, `Finish`), `modBuild.bas` (`Build` CleanUp), `modDialogPolicy.bas` (`ERR_INVALID_BUILD_PATH`), `modTestBuildAsPaths.bas`, `docs/noninteractive-dialogs.md`.
+
+---
+
 ## 2026-10-01 — Automation test runs stay headless; no add-in change (X11)
 
 **Trigger**: X11 (interface review F5). MCP's `vcs_run_tests(noninteractive=False)` promised the console and `MsgBox2` prompts, but the add-in never honoured it: `modAPI` marks API calls as automation and `ExecuteTests` forces `blnHeadless`, selects `eimSilent`, and skips `PrepareTestConsole`, whatever interaction mode a caller selected.

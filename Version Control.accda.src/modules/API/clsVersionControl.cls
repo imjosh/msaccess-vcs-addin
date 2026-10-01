@@ -407,17 +407,33 @@ End Sub
 ' Author    : Adam Waller
 ' Date      : 7/8/2023
 ' Purpose   : Build the source files to a new file name or location.
-'           : If source files are identified for the currently open database, it will
-'           : build from those files. Otherwise it will ask the use to select a folder
-'           : with source files.
+'           : With no arguments (the ribbon), it builds from the open database's source
+'           : files if it has them, otherwise from a folder the user picks, and asks
+'           : for the new file name.
+'           : An unattended caller passes both the source folder and the output file
+'           : and sees no picker. A missing or invalid path is refused as JSON before
+'           : anything starts; otherwise this returns an empty string and the outcome,
+'           : with the output_path written, arrives through the completion callback.
 '---------------------------------------------------------------------------------------
 '
-Public Sub BuildAs()
+Public Function BuildAs(Optional ByVal strSourceFolder As String, _
+    Optional ByVal strOutputPath As String) As String
 
     Dim strNewDbPath As String
-    Dim strSourceFolder As String
 
-    If Not Operation.Begin(eotBuild) Then Exit Sub
+    If Len(strSourceFolder) > 0 Or Len(strOutputPath) > 0 Then
+        BuildAs = BuildAsPathRefusal(strSourceFolder, strOutputPath)
+        If Len(BuildAs) > 0 Then Exit Function
+        If Not Operation.Begin(eotBuild) Then
+            BuildAs = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            Exit Function
+        End If
+        modBuild.Build strSourceFolder, True, , strOutputPath
+        CompleteBuildOperation True
+        Exit Function
+    End If
+
+    If Not Operation.Begin(eotBuild) Then Exit Function
 
     ' See if we can find source files for the currently open database.
     If DatabaseFileOpen Then
@@ -446,12 +462,12 @@ Public Sub BuildAs()
                     MsgBox2 "Source files not found", "Required source files were not found in this folder.", _
                         "You selected: " & .SelectedItems(1), vbExclamation
                     Operation.Finish eorCanceled
-                    Exit Sub
+                    Exit Function
                 End If
             Else
                 ' Canceled dialog
                 Operation.Finish eorCanceled
-                Exit Sub
+                Exit Function
             End If
         End With
     End If
@@ -480,7 +496,42 @@ Public Sub BuildAs()
         Operation.Finish eorCanceled
     End If
 
-End Sub
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BuildAsPathRefusal
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Check the paths an unattended Build As was given. Returns the refusal
+'           : JSON, or an empty string when the build can start. Both paths are
+'           : required: a missing one would otherwise fall back to a picker.
+'---------------------------------------------------------------------------------------
+'
+Private Function BuildAsPathRefusal(ByVal strSourceFolder As String, _
+    ByVal strOutputPath As String) As String
+
+    Dim strMessage As String
+    Dim strFolder As String
+
+    If Len(strSourceFolder) = 0 Or Len(strOutputPath) = 0 Then
+        strMessage = T("Build As needs both a source folder and an output file path.")
+    ElseIf Not FolderHasVcsOptionsFile(strSourceFolder) Then
+        strMessage = T("Source files not found in folder: {0}", var0:=strSourceFolder)
+    Else
+        strFolder = FSO.GetParentFolderName(strOutputPath)
+        If Len(strFolder) = 0 Or Len(FSO.GetExtensionName(strOutputPath)) = 0 Then
+            strMessage = T("The output must be a full path to a database file: {0}", var0:=strOutputPath)
+        ElseIf Not FSO.FolderExists(strFolder) Then
+            strMessage = T("The output folder does not exist: {0}", var0:=strFolder)
+        ElseIf StrComp(FSO.GetAbsolutePathName(strOutputPath), CodeProject.FullName, vbTextCompare) = 0 Then
+            strMessage = T("Cannot build over the add-in itself. Use RebuildAddIn instead.")
+        End If
+    End If
+
+    If Len(strMessage) > 0 Then BuildAsPathRefusal = RefusalJson(ERR_INVALID_BUILD_PATH, strMessage)
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -2748,6 +2799,31 @@ End Property
 '
 Public Function GetVCSVersion() As String
     GetVCSVersion = modVCSUtility.GetVCSVersion
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : GetCapabilities
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Name the API behaviours this build supports, so a client can refuse a
+'           : request before it starts instead of reaching a picker or a missing
+'           : argument. A rebuild does not change the version number, so the version
+'           : cannot answer this. An add-in without this method has none of them.
+'           : Returns JSON: {"success":true,"capabilities":["build_as_paths"]}
+'           :   build_as_paths: BuildAs(source, output) builds without pickers and
+'           :   reports output_path on its completion callback.
+'---------------------------------------------------------------------------------------
+'
+Public Function GetCapabilities() As String
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", True
+    dResult.Add "capabilities", Array("build_as_paths")
+    GetCapabilities = ConvertToJson(dResult)
+
 End Function
 
 

@@ -62,6 +62,19 @@ names `results_path` only when this run saved results. When the run finished but
 the results file could not be written, the callback carries `results_error`
 (the logged write error) instead.
 
+`BuildAs(source, output)` builds the source folder to the output file with no
+picker. With no arguments (the ribbon) it keeps its pickers. Given only one path,
+or a path it cannot use, it starts nothing and returns `invalid_build_path`
+(posted as an `error` callback like any refusal): both paths are required, the
+source folder must hold `vcs-options.json`, and the output must be a full path to
+a file, in a folder that exists, that is not the add-in itself. Otherwise it
+returns an empty string and the outcome arrives through the completion callback.
+A successful full build adds `output_path`, the file it left open, to that
+callback. `GetCapabilities` returns
+`{"success":true,"capabilities":["build_as_paths"]}`. A rebuild does not change
+the version number, so a client checks this before calling `BuildAs` with paths
+and refuses an add-in that lacks the method or the name.
+
 Every call `APIAsync` launches on the timer (`Export`, `FullExport`,
 `ExportVBA`, `Build`, `BuildAs`, `MergeBuild`, `RunFilteredTests`) posts exactly
 one terminal callback, even when it never acquired a root. When the call
@@ -231,6 +244,8 @@ beside the installed add-in from adopting the installed add-in's test run.
   before the options load.
 - `frmVCSConflict` (merge conflicts).
 - The source-folder picker when the project folder is unknown.
+- The Build As source-folder and save-as pickers when the caller passes both
+  paths (`BuildAs(source, output)`).
 - `frmVCSMain` being left visible as a results window. Every site that opens
   it goes through `ShowMainForm`, which opens it hidden for a noninteractive
   run. `Export`, `FullExport` and `ExportVBA` hide it through
