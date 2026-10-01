@@ -316,7 +316,9 @@ Public Function EmitTestResultsJson(dTests As Dictionary, _
     Optional strJUnitPath As String = vbNullString, _
     Optional strStatePath As String = vbNullString, _
     Optional strLogPath As String = vbNullString, _
-    Optional strResultsPath As String = vbNullString) As String
+    Optional strResultsPath As String = vbNullString, _
+    Optional strRunError As String = vbNullString, _
+    Optional strRunErrorPattern As String = vbNullString) As String
 
     Dim buf As clsConcat
     Dim varKey As Variant
@@ -331,7 +333,12 @@ Public Function EmitTestResultsJson(dTests As Dictionary, _
     AppendStringField buf, "addinVersion", GetVCSVersion, False
     buf.Add ",""durationMs"":", CStr(lngDurationMs)
     AppendBoolField buf, "cancelled", blnCancelled
-    AppendBoolField buf, "allPassed", blnAllPassed
+    AppendBoolField buf, "allPassed", blnAllPassed And Len(strRunError) = 0
+    If Len(strRunError) > 0 Then
+        AppendBoolField buf, "success", False
+        AppendStringField buf, "error", strRunError, False
+        AppendOptionalStringField buf, "error_pattern", strRunErrorPattern
+    End If
     AppendOptionalStringField buf, "junitPath", strJUnitPath
     AppendOptionalStringField buf, "statePath", strStatePath
     AppendOptionalStringField buf, "logPath", strLogPath

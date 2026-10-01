@@ -83,6 +83,18 @@ contradictory guidance.
 
 ---
 
+## 2026-10-01 — A compile-gated test run fails without cancellation (A31)
+
+**Trigger**: The test runner used its cancelled state when the host project did not compile, so MCP replaced the compile explanation with "Test run was cancelled" on both transports.
+
+**Decision**: A failed compile check is a runner-level failure, not a failed assertion or a cancellation. The final JSON and error callback carry `success: false`, `cancelled: false`, `error_pattern: project_not_compiled`, and the translated "Project has compile errors. Please resolve before running tests." The runner owns the error and clears it when a run begins or counts reset. The existing results file carries the same error on callback and synchronous paths. The web runner finishes its root as failed too.
+
+**What this rules out**: Inferring cancellation from a run that executed no tests, counting a compile failure as an errored test, or requiring clients to parse translated text to distinguish an uncompilable project from failing tests. A real cancellation retains its existing state and contract. MCP already preserves explicit failure results and requires no code change.
+
+**Relevant files**: `clsTestRunner.cls`, `modJsonEmit.bas`, `clsVersionControl.cls`, `clsOperation.cls`, `modTestRunnerUI.bas`; shared spec section 2.
+
+---
+
 ## 2026-10-01 — The capability probe is a procedure Access can refuse (X09)
 
 **Trigger**: Live check during X09. `API("NoSuchMethodX09")` on the installed add-in did not raise to the COM caller: it stopped on a modal "Run-time error '438': Object doesn't support this property or method" (Continue/End/Debug), and the call timed out holding Access. An add-in that predates `GetCapabilities` would do the same when probed through `API`, so the probe meant to refuse it safely would block it instead. `Application.Run "<add-in path>.NoSuchProcX09"` on the same instance returned at once with a COM error (2517, "cannot find the procedure") and left no dialog.

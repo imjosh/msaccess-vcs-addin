@@ -26,6 +26,7 @@ Private Const GlobalTestSetupProc As String = "GlobalTestSetup"
 Private Const GlobalTestTeardownProc As String = "GlobalTestTeardown"
 Private Const MCP_SLOW_MS As Long = 1000
 Private Const MCP_DOT_FLUSH_SEC As Currency = 0.2
+Private Const ERR_PROJECT_NOT_COMPILED As String = "project_not_compiled"
 
 ' Runner state machine
 Public Enum eTestRunnerState
@@ -35,6 +36,7 @@ Public Enum eTestRunnerState
     etrsRunning = 3
     etrsComplete = 4
     etrsCancelled = 5
+    etrsFailed = 6
 End Enum
 
 ' Test result status
@@ -68,6 +70,8 @@ Private Type udtTestRunner
     LastRunKeys As Collection
     LastResultsPath As String
     ResultsSaveError As String
+    RunError As String
+    RunErrorPattern As String
     McpDots As String
     LastMcpDotFlush As Currency
 End Type
@@ -172,6 +176,16 @@ Public Property Get LastResultsPath() As String
 End Property
 
 
+' A runner failure belongs to the run, rather than to an individual test.
+Public Property Get RunError() As String
+    RunError = this.RunError
+End Property
+
+Public Property Get RunErrorPattern() As String
+    RunErrorPattern = this.RunErrorPattern
+End Property
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : ResultsSaveError
 ' Date      : 09/30/2026
@@ -187,12 +201,14 @@ End Property
 '---------------------------------------------------------------------------------------
 ' Procedure : ClearLastResultsPath
 ' Date      : 09/30/2026
-' Purpose   : Forget the previous run's results file and save error. clsOperation
+' Purpose   : Forget the previous run's results file, save error, and runner error. clsOperation
 '           : calls this when a test-run root begins, so a run that fails before Scan
 '           : cannot report them.
 '---------------------------------------------------------------------------------------
 '
 Public Sub ClearLastResultsPath()
+    this.RunError = vbNullString
+    this.RunErrorPattern = vbNullString
     this.LastResultsPath = vbNullString
     this.ResultsSaveError = vbNullString
 End Sub
@@ -348,12 +364,14 @@ Public Sub RunSelected(colTestKeys As Collection)
     If modTestRunnerUI.WebRunnerActive() Then modTestRunnerUI.RefocusWebRunner
     If Not Application.IsCompiled Then
         modTestRunnerDiag.Diag "run.skip", "not compiled"
-        Log.Add T("Project has compile errors. Please resolve before running tests."), , , "red"
+        this.RunError = T("Project has compile errors. Please resolve before running tests.")
+        this.RunErrorPattern = ERR_PROJECT_NOT_COMPILED
+        Log.Add this.RunError, , , "red"
         ' Notify the web runner (no-op in console mode); this path exits before the
         ' normal StreamRunCancelled/StreamRunComplete events, so without it the page
         ' gets no feedback at all.
-        modTestRunnerUI.StreamRunError T("Project has compile errors. Please resolve before running tests.")
-        this.State = etrsCancelled
+        modTestRunnerUI.StreamRunError this.RunError
+        this.State = etrsFailed
         GoTo CleanUp
     End If
 
@@ -931,11 +949,11 @@ Public Function GetResultsAsJson(Optional ByVal strJUnitPath As String = vbNullS
     modTestRunnerDiag.DiagBegin "results.json"
     GetResultsAsJson = modJsonEmit.EmitTestResultsJson(this.Tests, RunDurationMs, _
         (this.State = etrsCancelled), _
-        (this.State <> etrsCancelled) And _
+        (this.State <> etrsCancelled And this.State <> etrsFailed) And _
             (this.FailedCount = 0 And this.ErroredCount = 0 And this.PassedCount > 0), _
         this.PassedCount, this.FailedCount, this.ErroredCount, this.EmptyCount, _
         this.TotalAssertions, this.PassedAssertions, this.FailedAssertions, _
-        strJUnitPath, strStatePath, strLogPath, strResultsPath)
+        strJUnitPath, strStatePath, strLogPath, strResultsPath, this.RunError, this.RunErrorPattern)
     modTestRunnerDiag.DiagEnd "results.json", "chars=" & Len(GetResultsAsJson)
     modTestRunnerDiag.DiagSize "results.json", Len(GetResultsAsJson)
 
@@ -2372,6 +2390,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Private Sub ResetCounts()
+    this.RunError = vbNullString
+    this.RunErrorPattern = vbNullString
     this.PassedCount = 0
     this.FailedCount = 0
     this.ErroredCount = 0

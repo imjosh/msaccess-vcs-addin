@@ -3425,7 +3425,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     lngFailed = TestRunner.FailedCount
     lngErrored = TestRunner.ErroredCount
     lngEmpty = TestRunner.EmptyCount
-    blnAllPassed = (Not blnCanceled) And (lngFailed = 0 And lngErrored = 0 And lngPassed > 0) _
+    blnAllPassed = (Not blnCanceled) And TestRunner.State <> etrsFailed _
+        And (lngFailed = 0 And lngErrored = 0 And lngPassed > 0) _
         And Len(strResultsError) = 0
 
     Log.Flush
@@ -3448,7 +3449,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 
     TestRunner.InvokeGlobalTestTeardown
 
-    If Len(strResultsError) > 0 Then
+    If Len(strResultsError) > 0 Or TestRunner.State = etrsFailed Then
         intResult = eorFailed
     ElseIf blnCanceled Then
         intResult = eorCanceled

@@ -726,6 +726,13 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
         If Len(TestRunner.LastResultsPath) > 0 Then
             dExtra.Add "results_path", TestRunner.LastResultsPath
         End If
+        ' Pre-test failures are errors, never confirmations of a cancel request.
+        If Len(TestRunner.RunError) > 0 Then
+            dExtra.Add "success", False
+            dExtra.Add "cancelled", False
+            dExtra.Add "error", TestRunner.RunError
+            dExtra.Add "error_pattern", TestRunner.RunErrorPattern
+        End If
         ' A run that finished but could not save its results file says why.
         If Len(TestRunner.ResultsSaveError) > 0 Then
             dExtra.Add "results_error", TestRunner.ResultsSaveError
