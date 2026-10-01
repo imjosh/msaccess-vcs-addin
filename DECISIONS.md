@@ -83,6 +83,22 @@ contradictory guidance.
 
 ---
 
+## 2026-10-01 — Automation test runs stay headless; no add-in change (X11)
+
+**Trigger**: X11 (interface review F5). MCP's `vcs_run_tests(noninteractive=False)` promised the console and `MsgBox2` prompts, but the add-in never honoured it: `modAPI` marks API calls as automation and `ExecuteTests` forces `blnHeadless`, selects `eimSilent`, and skips `PrepareTestConsole`, whatever interaction mode a caller selected.
+
+**Options explored**:
+- **A. Honour the confirmed mode for an automation `RunFilteredTests`.** Rejected: a visible prompt could hold the Access gate on an unattended call.
+- **B. Keep automation test runs headless (chosen).** MCP refuses `noninteractive=False` for tests before any add-in call (`interactive_tests_unsupported`). See the MCP `DECISIONS.md` entry of the same date.
+
+**Decision**: `ExecuteTests` is unchanged. `Operation.AutomationSource` means headless for a test run.
+
+**Known gap, not changed**: with no decision policy, `TestRunPreflight` runs before `Operation.InteractionMode = eimSilent`, so a direct API `RunFilteredTests` with no policy, an ambient interactive mode, and a missing helper installs `modTestAssert` and then shows the "Test Helper Installed" `MsgBox2` (seen live, X11). MCP no longer reaches it. Fix it only if another caller needs it.
+
+**What this rules out**: An interactive console for an API-initiated test run. Revisit with the MCP entry.
+
+**Relevant files**: `clsVersionControl.cls` (`ExecuteTests`, `TestRunPreflight`), `modAPI.bas`.
+
 ## 2026-09-30 — Policy set and clear are acknowledged by their return values
 
 **Trigger**: M40. The MCP server read any non-refusal `SetOperationPolicy` reply as success, including the `Empty` an older add-in returns on reentry.
