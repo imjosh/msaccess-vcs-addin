@@ -156,6 +156,21 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : SetCancelPollForTest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Test seam for user projects. The running operation sees an MCP cancel
+'           : request on the Nth cancel check from now, so a test can stop its own run
+'           : through the path a real request takes. Pass 0 to disarm. Must live in a
+'           : standard module so Application.Run can reach it.
+'---------------------------------------------------------------------------------------
+'
+Public Sub SetCancelPollForTest(ByVal lngCancelOnCheck As Long)
+    Operation.SetCancelPollForTest lngCancelOnCheck
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : VCS
 ' Author    : Adam Waller
 ' Date      : 3/28/2022

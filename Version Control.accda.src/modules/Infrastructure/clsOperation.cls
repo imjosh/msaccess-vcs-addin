@@ -24,6 +24,7 @@ Private Const HEARTBEAT_TIMEOUT_SECONDS As Integer = 60 * 10
 Private Const REGISTRY_PULSE_SECONDS As Integer = 60
 Private Const REG_KEY_ROOT_TOKEN As String = "RootToken"
 Private Const REG_KEY_ROOT_TYPE As String = "RootOperationType"
+Private Const REG_KEY_ROOT_PROJECT As String = "RootProject"
 
 
 Public Heartbeat As Date
@@ -49,6 +50,7 @@ Private Type udtRoot
     PauseDepth As Long
     RuntimeError As String
     RuntimeErrorNumber As Long
+    CancelRequested As Boolean
 End Type
 Private m_Root As udtRoot
 
@@ -71,6 +73,11 @@ Private m_datRegistryPulse As Date
 ' released while the root is still active abandons it (clsRootOperationLease.
 ' Class_Terminate), and Begin's caller does not complete until Finish.
 Private m_cSyncLease As clsRootOperationLease
+
+' Test seam for the cancel poll (see SetCancelPollForTest). Zero when disarmed. Roots
+' do not reset it, so a test can arm it before the run it is meant to stop.
+Private m_lngFakeCancelOnCheck As Long
+Private m_lngFakeCancelChecks As Long
 
 
 '---------------------------------------------------------------------------------------
@@ -365,6 +372,93 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : CheckCancelRequest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The one checkpoint for an MCP cancel request. The test loop and the
+'           : per-object loops of export and build/merge call it at their safe points.
+'           : A request is routed into the signal closing the main form sends:
+'           : TestRunner.Cancel for a test run, and a critical error for export, build
+'           : and merge, whose loops stop on that level. Finish then reports the root
+'           : cancelled. Only a running root polls: a paused one is in foreign code.
+'           : Returns True once this root has seen a request.
+'---------------------------------------------------------------------------------------
+'
+Public Function CheckCancelRequest() As Boolean
+
+    If m_Root.CancelRequested Then
+        CheckCancelRequest = True
+        Exit Function
+    End If
+    If m_Root.State <> eosRunning Then Exit Function
+    If Not CancelPolled() Then Exit Function
+
+    m_Root.CancelRequested = True
+    CheckCancelRequest = True
+    If m_Root.OperationType = eotTestRun Then
+        If IsSessionSingleton Then TestRunner.Cancel
+    ElseIf IsSessionSingleton Then
+        Log.Error eelCritical, T("Canceled Operation"), "clsOperation.CheckCancelRequest"
+    Else
+        ' A private instance must not write to the running operation's log.
+        Me.ErrorLevel = eelCritical
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CancelRequested
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : True once CheckCancelRequest has seen an MCP cancel request for this
+'           : root. Kept after Finish until the next root begins.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get CancelRequested() As Boolean
+    CancelRequested = m_Root.CancelRequested
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetCancelPollForTest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Test seam. The cancel poll reports a request on the Nth check from now,
+'           : once, in place of asking MCP. Pass 0 to disarm. Arm a private instance
+'           : unless the test means to cancel the session's running operation.
+'---------------------------------------------------------------------------------------
+'
+Friend Sub SetCancelPollForTest(ByVal lngCancelOnCheck As Long)
+    m_lngFakeCancelOnCheck = IIf(lngCancelOnCheck > 0, lngCancelOnCheck, 0)
+    m_lngFakeCancelChecks = 0
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CancelPolled
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The seam around the cancel poll. An armed fake answers in place of MCP.
+'           : Otherwise only the session operation asks, and CheckCancelled returns at
+'           : once, with no HTTP request, when MCP holds no callback.
+'---------------------------------------------------------------------------------------
+'
+Private Function CancelPolled() As Boolean
+
+    If m_lngFakeCancelOnCheck > 0 Then
+        m_lngFakeCancelChecks = m_lngFakeCancelChecks + 1
+        If m_lngFakeCancelChecks < m_lngFakeCancelOnCheck Then Exit Function
+        SetCancelPollForTest 0
+        CancelPolled = True
+    ElseIf IsSessionSingleton Then
+        CancelPolled = MCP.CheckCancelled
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : IsActive
 ' Author    : Josh
 ' Date      : 09/29/2026
@@ -545,6 +639,7 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     m_Root.AppHwnd = hWndAccessApp
     m_Root.RuntimeError = vbNullString
     m_Root.RuntimeErrorNumber = 0
+    m_Root.CancelRequested = False
 
     Me.ErrorLevel = eelNoError
     Me.Result = eorUnknown
@@ -583,7 +678,14 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     If m_Root.State = eosReady And Len(m_Root.Token) = 0 Then Exit Sub
 
     ' An unresolved prompt is not a successful or merely cancelled run.
-    If Not ApplyBlockedResult() And intResult > eorUnknown Then Me.Result = intResult
+    If Not ApplyBlockedResult() Then
+        If intResult > eorUnknown Then Me.Result = intResult
+        ' An export, build or merge stopped by an MCP cancel request reports the cancel,
+        ' not the failure its loop logged to stop. A runtime error still fails. A test
+        ' run reports its own result, which keeps the results it saved.
+        If m_Root.CancelRequested And m_Root.OperationType <> eotTestRun _
+            And Len(m_Root.RuntimeError) = 0 Then Me.Result = eorCanceled
+    End If
     blnWasRunning = (m_Root.State = eosRunning)
 
     m_Root.Completed = True
@@ -717,6 +819,7 @@ Private Sub UpdateRegistry()
         CheckSetting "ErrorTrapping", m_Root.ErrorTrapping
         CheckSetting REG_KEY_ROOT_TOKEN, m_Root.Token
         CheckSetting REG_KEY_ROOT_TYPE, m_Root.OperationType
+        CheckSetting REG_KEY_ROOT_PROJECT, CodeProject.FullName
         CheckSetting "InteractionMode", Scope.InteractionMode
         CheckSetting "DecisionPolicy", Scope.DecisionPolicy
     End If
@@ -732,25 +835,47 @@ End Sub
 
 Private Function RestoreFromRegistry() As Boolean
 
-    If ReadReg("AppHwnd") = CStr(hWndAccessApp) Then
-        If DateAdd("s", HEARTBEAT_TIMEOUT_SECONDS, CDate(Nz2(ReadReg("Heartbeat"), 0))) > Now Then
-            ' The heartbeat came from the same registry value the timeout check above
-            ' just accepted; without it Status would see a zero heartbeat and report the
-            ' restored operation as timed out.
-            Me.Heartbeat = CDate(ReadReg("Heartbeat"))
-            Me.Result = ReadReg("Result")
-            m_Root.StartTime = ReadReg("StartTime")
-            m_Root.FinishTime = ReadReg("FinishTime")
-            m_Root.State = ReadReg("State")
-            m_Root.AppHwnd = ReadReg("AppHwnd")
-            m_Root.ErrorTrapping = CInt(ReadReg("ErrorTrapping"))
-            m_Root.Token = ReadReg(REG_KEY_ROOT_TOKEN)
-            m_Root.OperationType = Val(ReadReg(REG_KEY_ROOT_TYPE))
-            m_Root.Completed = False
-            RestoreScopeFromRegistry
-            RestoreFromRegistry = True
-        End If
+    If CanAdoptRegistryState(ReadReg("AppHwnd"), ReadReg("Heartbeat"), ReadReg(REG_KEY_ROOT_PROJECT)) Then
+        ' The heartbeat came from the same registry value the timeout check just
+        ' accepted; without it Status would see a zero heartbeat and report the
+        ' restored operation as timed out.
+        Me.Heartbeat = CDate(ReadReg("Heartbeat"))
+        Me.Result = ReadReg("Result")
+        m_Root.StartTime = ReadReg("StartTime")
+        m_Root.FinishTime = ReadReg("FinishTime")
+        m_Root.State = ReadReg("State")
+        m_Root.AppHwnd = ReadReg("AppHwnd")
+        m_Root.ErrorTrapping = CInt(ReadReg("ErrorTrapping"))
+        m_Root.Token = ReadReg(REG_KEY_ROOT_TOKEN)
+        m_Root.OperationType = Val(ReadReg(REG_KEY_ROOT_TYPE))
+        m_Root.Completed = False
+        RestoreScopeFromRegistry
+        RestoreFromRegistry = True
     End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CanAdoptRegistryState
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : True when the saved state belongs to this Access window, has a heartbeat
+'           : inside the timeout, and was written by this add-in file. Every copy of the
+'           : add-in shares one registry key, so a development copy loaded beside the
+'           : installed add-in would otherwise adopt the installed add-in's running test
+'           : run - one it can never finish - and refuse to close frmVCSMain until the
+'           : heartbeat timed out. State saved before the project was recorded is
+'           : not adopted.
+'---------------------------------------------------------------------------------------
+'
+Friend Function CanAdoptRegistryState(ByVal strAppHwnd As String, ByVal strHeartbeat As String, _
+    ByVal strProject As String) As Boolean
+
+    If strAppHwnd <> CStr(hWndAccessApp) Then Exit Function
+    If Not IsDate(strHeartbeat) Then Exit Function
+    If DateAdd("s", HEARTBEAT_TIMEOUT_SECONDS, CDate(strHeartbeat)) <= Now Then Exit Function
+    CanAdoptRegistryState = (StrComp(strProject, CodeProject.FullName, vbTextCompare) = 0)
 
 End Function
 

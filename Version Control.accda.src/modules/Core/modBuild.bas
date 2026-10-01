@@ -548,6 +548,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                 cBatch.ImportFast CStr(varFile)
                 CapturePrinterRestoreWarnings lngErrorJournalStart, CStr(varFile), dPrinterWarnings
                 CatchAny eelError, T("Build error in: {0}", var0:=varFile), FunctionName, True, True
+                Operation.CheckCancelRequest
                 If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
             Next varFile
 
@@ -580,7 +581,9 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                 CatchAny eelError, T(IIf(blnFullBuild, "Build error in: {0}", "Merge error in: {0}"), _
                     var0:=varFile), FunctionName, True, True
 
-                ' Bail out if we hit a critical error.
+                ' Bail out if we hit a critical error or a cancel request. A merge
+                ' (MergeBuild) runs this loop too.
+                Operation.CheckCancelRequest
                 If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
 
             Next varFile

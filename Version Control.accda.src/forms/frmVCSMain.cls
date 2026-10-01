@@ -411,6 +411,9 @@ Public Sub cmdExport_Click()
     txtLog.ScrollBars = 2
     Log.Flush
 
+    ' An MCP cancel request stops the export the same way closing this form does.
+    If Operation.CancelRequested Then m_blnCancelRequested = True
+
     ' Don't attempt to access controls if we are in the process of closing the form.
     If FormLoaded(Me) Then
         If m_blnCancelRequested Then
@@ -718,7 +721,8 @@ Private Sub Form_Unload(Cancel As Integer)
 
     ' Check to see if we have an active job running. Staged (paused) roots are
     ' left alone: pause scopes close forms without meaning the user canceled.
-    If Operation.Status = eosRunning Then
+    If MainFormWaitsForRoot(Operation.Status, Operation.OperationType, _
+        (TestRunner.State = etrsRunning)) Then
         ' Keep the form open either way so the owning procedure can finish
         ' the root after the loop observes the cancel signal.
         Cancel = True

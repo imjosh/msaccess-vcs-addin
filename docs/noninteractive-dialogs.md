@@ -133,6 +133,64 @@ the call itself began. An error before its `Begin` succeeded, such as an
 overflowing type value, leaves another caller's running root, policy, log
 and export resources alone.
 
+## Cancelling from MCP
+
+`vcs_cancel_operation` records the request on the MCP server and returns
+`cancel_requested: true`. The add-in finds it at its next checkpoint,
+`Operation.CheckCancelRequest`, which asks `clsMCP.CheckCancelled`
+(`GET /cancel-status/{operation_id}`), at most once every 500 ms. The request
+takes the path closing `frmVCSMain` takes:
+
+- A test run calls `TestRunner.Cancel`. The loop checks before each test,
+  stops, and returns `cancelled: true` with the results so far.
+- Export, build and merge log a critical "Canceled Operation", the level their
+  loops already stop on. Export checks after each category scan and each
+  object. Build checks after each fast-imported file and each component of the
+  build loop. `MergeBuild` runs that same loop, so a merge is covered. The root
+  then finishes `eorCanceled` and the callback is `cancelled`, not `error`. A
+  blocked prompt still reports `decision_required`, and a runtime error still
+  fails the root.
+
+The entry points that run these loops can be cancelled: `Export`,
+`FullExport`, `ExportVBA`, `Build`, `BuildAs`, `MergeBuild`, and
+`RunFilteredTests`. These have no checkpoint and run to the end:
+`ImportObject`, `ExportObject`, `ImportByType`, `ExportByType`,
+`MergeAllSource`, `LoadSelected`, `RebuildAddIn`, `BuildHeadless`, and the
+other synchronous single calls. The MCP server reports `cancel_not_honored`
+for them.
+
+Only a running root polls. A paused root (a user hook such as `AfterExport`,
+or a form closing) does not, and neither does a private `clsOperation`. With
+no MCP callback registered, `CheckCancelled` returns at once and sends no
+request, so interactive use is unchanged. A failed poll reads as "not
+cancelled". The first failure for a callback is logged, and later failures
+are counted in `cancelPolls` and `cancelPollErrors` but not logged.
+
+The poll uses `MSXML2.XMLHTTP` with `Cache-Control: no-cache` and an old
+`If-Modified-Since`. Without those headers WinINet answers every later poll
+with the first response, so a request made after the first check is never
+seen. `ServerXMLHTTP` skips that cache, but it cannot connect while one of the
+async log posts is in flight. That post finishes on the VBA thread the poll is
+blocking, and the single-threaded callback server waits on it, so each poll
+took about 2.5 s.
+
+The test seam is `SetCancelPollForTest n`: a public procedure in `modAPI`
+that a user project reaches through `Application.Run`, and
+`Operation.SetCancelPollForTest` on a private instance. The Nth check from
+now reports a request once, without asking MCP. 0 disarms it.
+
+### Closing frmVCSMain over a root
+
+`frmVCSMain` asks "Cancel Current Operation?" only for a running root that
+closing it can stop (`MainFormWaitsForRoot`). A test run counts only while this
+project's `TestRunner` is running it. Before this, a test-run root that nothing
+in the project was running made the form refuse every close until the
+heartbeat timed out, even after Yes. All copies of the add-in share one
+registry key for operation state. `UpdateRegistry` now writes `RootProject`,
+and a new `Operation` singleton adopts saved state only if its own add-in
+file wrote it (`CanAdoptRegistryState`). This keeps a development copy loaded
+beside the installed add-in from adopting the installed add-in's test run.
+
 ## Dialogs this mode prevents
 
 - `MsgBox2` (the add-in's message boxes), including the printer-settings
