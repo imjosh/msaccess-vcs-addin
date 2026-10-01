@@ -70,10 +70,15 @@ source folder must hold `vcs-options.json`, and the output must be a full path t
 a file, in a folder that exists, that is not the add-in itself. Otherwise it
 returns an empty string and the outcome arrives through the completion callback.
 A successful full build adds `output_path`, the file it left open, to that
-callback. `GetCapabilities` returns
+callback. `APICapabilities` returns
 `{"success":true,"capabilities":["build_as_paths"]}`. A rebuild does not change
 the version number, so a client checks this before calling `BuildAs` with paths
-and refuses an add-in that lacks the method or the name.
+and refuses an add-in that lacks the procedure or the name. Call it directly with
+`Application.Run "<add-in path>.APICapabilities"`, not through `API`: on an
+add-in that predates it, Access refuses the call with a COM error (2517),
+whereas `API` asked for a missing method stops on a modal "Run-time error 438"
+dialog. `GetCapabilities` through `API` returns the same reply for callers that
+already know the add-in has it.
 
 Every call `APIAsync` launches on the timer (`Export`, `FullExport`,
 `ExportVBA`, `Build`, `BuildAs`, `MergeBuild`, `RunFilteredTests`) posts exactly

@@ -2806,24 +2806,14 @@ End Function
 ' Procedure : GetCapabilities
 ' Author    : Josh
 ' Date      : 10/01/2026
-' Purpose   : Name the API behaviours this build supports, so a client can refuse a
-'           : request before it starts instead of reaching a picker or a missing
-'           : argument. A rebuild does not change the version number, so the version
-'           : cannot answer this. An add-in without this method has none of them.
-'           : Returns JSON: {"success":true,"capabilities":["build_as_paths"]}
-'           :   build_as_paths: BuildAs(source, output) builds without pickers and
-'           :   reports output_path on its completion callback.
+' Purpose   : The API behaviours this build supports (see modAPI.APICapabilities).
+'           : A client probing an add-in that may predate them should call
+'           : APICapabilities directly: asking API for this method on an older
+'           : add-in opens a run-time error dialog.
 '---------------------------------------------------------------------------------------
 '
 Public Function GetCapabilities() As String
-
-    Dim dResult As Dictionary
-
-    Set dResult = New Dictionary
-    dResult.Add "success", True
-    dResult.Add "capabilities", Array("build_as_paths")
-    GetCapabilities = ConvertToJson(dResult)
-
+    GetCapabilities = modAPI.APICapabilities
 End Function
 
 
