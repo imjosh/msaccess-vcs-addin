@@ -484,6 +484,286 @@ Public Sub TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired()
 End Sub
 
 
+' The prompts a policy answers without stopping the operation: an OK-only box
+' acknowledged under block, a conflict applied by prefer_source, and a confirmation
+' declined by decline.
+Private Function AnsweredPromptScenarios() As Variant
+    AnsweredPromptScenarios = Array("acknowledged", "applied", "declined")
+End Function
+
+
+' A private operation begun under the policy that answers the scenario's prompt, with
+' that answer in its journal. strResolution returns the resolution the journal holds.
+Private Function BeginWithAnsweredPrompt(ByVal strScenario As String, _
+    ByVal intType As eOperationType, ByRef strResolution As String) As clsOperation
+
+    Dim cOp As clsOperation
+    Dim strPolicy As String
+
+    Select Case strScenario
+        Case "acknowledged": strPolicy = "block"
+        Case "applied":      strPolicy = "prefer_source"
+        Case Else:           strPolicy = "decline"
+    End Select
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, strPolicy
+    TestAssert cOp.Begin(intType), strScenario & ": the operation begins under " & strPolicy
+
+    Select Case strScenario
+        Case "acknowledged"
+            cOp.ResolvePrompt vbOKOnly, "Notice", "Finished."
+            strResolution = DECISION_ACKNOWLEDGED
+        Case "applied"
+            cOp.RecordDecision NewDecision(DECISION_APPLIED, "Merge conflicts", "2 conflict(s)", _
+                ConflictResolutionName(edpPreferSource), "policy=" & CStr(edpPreferSource))
+            strResolution = ConflictResolutionName(edpPreferSource)
+        Case Else
+            cOp.ResolvePrompt vbYesNo, "Confirm", "Overwrite?"
+            strResolution = DECISION_DECLINED
+    End Select
+    Set BeginWithAnsweredPrompt = cOp
+
+End Function
+
+
+' The result reports the one answered prompt, and still reports the outcome itself.
+Private Sub AssertJournalCarried(ByVal strJson As String, ByVal strResolution As String, _
+    ByVal strLabel As String)
+
+    Dim dResult As Dictionary
+
+    Set dResult = ParseJson(strJson)
+    TestAssert dResult.Exists("decisions"), strLabel & ": the result carries decisions"
+    If dResult.Exists("decisions") Then
+        TestAssert dResult("decisions").Count = 1, strLabel & ": one prompt was answered"
+        TestAssert dResult("decisions")(1)("resolution") = strResolution, _
+            strLabel & ": the journal holds the answer (" & strResolution & ")"
+    End If
+    TestAssert Not dResult.Exists("decision_required"), strLabel & ": an answered prompt is not decision_required"
+
+End Sub
+
+
+Public Sub TestAnsweredPromptsAreInSingleObjectImportResult()
+
+    Dim cOp As clsOperation
+    Dim colErrors As Collection
+    Dim dEntry As Dictionary
+    Dim dResult As Dictionary
+    Dim varScenario As Variant
+    Dim strResolution As String
+    Dim strJson As String
+
+    Set dEntry = New Dictionary
+    dEntry.Add "level", "error"
+    dEntry.Add "message", "ERROR: Merging not supported for add-in forms."
+    Set colErrors = New Collection
+    colErrors.Add dEntry
+
+    For Each varScenario In AnsweredPromptScenarios
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
+        strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", New Collection)
+        AssertJournalCarried strJson, strResolution, "import success, " & varScenario
+        TestAssert ParseJson(strJson)("success") = True, varScenario & ": the import still succeeds"
+        TestAssert InStr(strJson, "Merge_1.log") > 0, varScenario & ": the result names the log"
+        ClearSessionPolicy cOp
+
+        ' A plain failure after the answered prompt keeps the journal too.
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
+        cOp.ErrorLevel = eelError
+        strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors)
+        AssertJournalCarried strJson, strResolution, "import failure, " & varScenario
+        Set dResult = ParseJson(strJson)
+        TestAssert dResult("success") = False, varScenario & ": the failure is still a failure"
+        TestAssert InStr(dResult("error"), "Merging not supported") > 0, varScenario & ": the error is kept"
+        ClearSessionPolicy cOp
+
+        ' So does a cancel.
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
+        cOp.ErrorLevel = eelCritical
+        strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, True)
+        AssertJournalCarried strJson, strResolution, "import cancel, " & varScenario
+        TestAssert ParseJson(strJson)("cancelled") = True, varScenario & ": the cancel is kept"
+        ClearSessionPolicy cOp
+    Next varScenario
+
+End Sub
+
+
+Public Sub TestAnsweredPromptsAreInSingleObjectExportResult()
+
+    Dim cOp As clsOperation
+    Dim dFailed As Dictionary
+    Dim varScenario As Variant
+    Dim strResolution As String
+    Dim strJson As String
+
+    For Each varScenario In AnsweredPromptScenarios
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotExport, strResolution)
+        strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary)
+        AssertJournalCarried strJson, strResolution, "export success, " & varScenario
+        TestAssert ParseJson(strJson)("success") = True, varScenario & ": the export still succeeds"
+        TestAssert InStr(strJson, "Export_1.log") > 0, varScenario & ": the result names the log"
+        ClearSessionPolicy cOp
+
+        ' An export that stopped early arrives with its own failure.
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotExport, strResolution)
+        cOp.ErrorLevel = eelCritical
+        strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", OpenObjectRefusal("frmOrders", True))
+        AssertJournalCarried strJson, strResolution, "export cancel, " & varScenario
+        Set dFailed = ParseJson(strJson)
+        TestAssert dFailed("success") = False, varScenario & ": the stopped export is still a failure"
+        TestAssert dFailed("cancelled") = True, varScenario & ": the cancel is kept"
+        ClearSessionPolicy cOp
+    Next varScenario
+
+End Sub
+
+
+Public Sub TestAnsweredPromptsAreInScopedSyncResult()
+
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim varScenario As Variant
+    Dim strResolution As String
+    Dim strJson As String
+
+    For Each varScenario In AnsweredPromptScenarios
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
+        Set dResult = New Dictionary
+        dResult.Add "success", True
+        dResult.Add "logPath", "C:\src\logs\Merge_1.log"
+        strJson = FinishScopedOperation(cOp, dResult, eorSuccess, "C:\src\logs\Merge_1.log")
+        AssertJournalCarried strJson, strResolution, "scoped success, " & varScenario
+        TestAssert ParseJson(strJson)("success") = True, varScenario & ": the sync still succeeds"
+        TestAssert InStr(strJson, "Merge_1.log") > 0, varScenario & ": the result names the log"
+        ClearSessionPolicy cOp
+
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotExport, strResolution)
+        Set dResult = New Dictionary
+        dResult.Add "success", False
+        dResult.Add "error", "Operation completed with errors. Check the log for details."
+        strJson = FinishScopedOperation(cOp, dResult, eorFailed, "C:\src\logs\Export_1.log")
+        AssertJournalCarried strJson, strResolution, "scoped failure, " & varScenario
+        TestAssert ParseJson(strJson)("success") = False, varScenario & ": the failure is still a failure"
+        ClearSessionPolicy cOp
+
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotExport, strResolution)
+        Set dResult = New Dictionary
+        dResult.Add "success", False
+        dResult.Add "error", "Operation was canceled."
+        strJson = FinishScopedOperation(cOp, dResult, eorCanceled, "C:\src\logs\Export_1.log")
+        AssertJournalCarried strJson, strResolution, "scoped cancel, " & varScenario
+        ClearSessionPolicy cOp
+    Next varScenario
+
+End Sub
+
+
+Public Sub TestScopedDecisionRequiredKeepsLogPath()
+
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    cOp.ResolvePrompt vbOKOnly, "Notice", "Finished."
+    TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Overwrite?").Blocked, "the policy blocks the prompt"
+
+    Set dResult = ParseJson(FinishScopedOperation(cOp, New Dictionary, eorDecisionRequired, _
+        "C:\src\logs\Merge_1.log"))
+    TestAssert dResult("decision_required") = True, "the blocked prompt is primary"
+    TestAssert dResult("logPath") = "C:\src\logs\Merge_1.log", "the decision-required result names the log"
+    TestAssert dResult("decisions").Count = 2, "the journal holds the acknowledged and the blocked prompt"
+    ClearSessionPolicy cOp
+
+End Sub
+
+
+Public Sub TestSingleObjectErrorAfterAnsweredPromptKeepsJournal()
+
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim varScenario As Variant
+    Dim strResolution As String
+    Dim strJson As String
+
+    For Each varScenario In AnsweredPromptScenarios
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
+        strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set")
+        AssertJournalCarried strJson, strResolution, "runtime error, " & varScenario
+        Set dResult = ParseJson(strJson)
+        TestAssert dResult("success") = False, varScenario & ": the runtime error is a failure"
+        TestAssert dResult("error") = "Object variable not set", varScenario & ": the error is kept"
+        TestAssert dResult("errorNumber") = 91, varScenario & ": the error number is kept"
+        ClearSessionPolicy cOp
+    Next varScenario
+
+End Sub
+
+
+Public Sub TestTestRunResultCarriesAnsweredPrompts()
+
+    Dim cOp As clsOperation
+    Dim varScenario As Variant
+    Dim strResolution As String
+    Dim strRun As String
+
+    ' The synchronous test JSON as ExecuteTests builds it, a passed run and a failed one.
+    For Each varScenario In AnsweredPromptScenarios
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotTestRun, strResolution)
+        strRun = "{""success"":true,""allPassed"":true,""passed"":3}"
+        AssertJournalCarried OverlayDecisionJournal(strRun, cOp.Decisions), strResolution, _
+            "test run passed, " & varScenario
+        strRun = "{""success"":false,""allPassed"":false,""error"":""A test failed.""}"
+        AssertJournalCarried OverlayDecisionJournal(strRun, cOp.Decisions), strResolution, _
+            "test run failed, " & varScenario
+        TestAssert InStr(OverlayDecisionJournal(strRun, cOp.Decisions), "A test failed.") > 0, _
+            varScenario & ": the failure text is kept"
+        cOp.Finish eorSuccess
+        ClearSessionPolicy cOp
+    Next varScenario
+
+End Sub
+
+
+Public Sub TestEmptyJournalLeavesResultShapeUnchanged()
+
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim strRun As String
+
+    Set cOp = NewUnattendedOperation
+    SetSessionPolicy cOp, "block"
+    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert InStr(FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", New Collection), "decisions") = 0, _
+        "an import that met no prompt has no decisions key"
+
+    TestAssert cOp.Begin(eotExport), "the export begins under the session policy"
+    TestAssert InStr(FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary), "decisions") = 0, _
+        "an export that met no prompt has no decisions key"
+
+    TestAssert cOp.Begin(eotExport), "the scoped export begins under the session policy"
+    Set dResult = New Dictionary
+    dResult.Add "success", True
+    TestAssert InStr(FinishScopedOperation(cOp, dResult, eorSuccess, "C:\src\logs\Export_1.log"), "decisions") = 0, _
+        "a scoped sync that met no prompt has no decisions key"
+
+    TestAssert cOp.Begin(eotMerge), "the failing import begins under the session policy"
+    TestAssert InStr(FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set"), "decisions") = 0, _
+        "a runtime error that met no prompt has no decisions key"
+
+    TestAssert cOp.Begin(eotTestRun), "the test run begins under the session policy"
+    strRun = "{""success"":true,""allPassed"":true}"
+    TestAssert OverlayDecisionJournal(strRun, cOp.Decisions) = strRun, "an empty journal leaves the test JSON as it was"
+    TestAssert OverlayDecisionJournal(strRun, Nothing) = strRun, "no journal leaves the test JSON as it was"
+    cOp.Finish eorSuccess
+    ClearSessionPolicy cOp
+
+End Sub
+
+
 Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
 
     Dim cOp As clsOperation

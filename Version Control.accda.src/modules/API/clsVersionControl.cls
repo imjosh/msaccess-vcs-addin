@@ -1748,6 +1748,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Dim blnUserCanceled As Boolean
     Dim intResult As eOperationResult
     Dim strColor As String
+    Dim strLogPath As String
 
     blnUserCanceled = VCSIndex.Conflicts.UserCanceled
     blnCritical = (Operation.ErrorLevel = eelCritical)
@@ -1792,6 +1793,8 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
         intResult = eorSuccess
     End If
 
+    ' Finish releases the Log singleton, so read the path first.
+    strLogPath = Log.SavedLogFilePath
     If Not dResult.Exists("success") Then
         dResult.Add "success", (intResult = eorSuccess)
         If intResult <> eorSuccess Then
@@ -1799,15 +1802,10 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
                 "Operation was canceled.", _
                 "Operation completed with errors. Check the log for details.")
         End If
-        dResult.Add "logPath", Log.SavedLogFilePath
+        dResult.Add "logPath", strLogPath
     End If
 
-    Operation.Finish intResult
-    If intResult = eorDecisionRequired Then
-        FinishScopedSync = DecisionRequiredJson(Operation.LastDecisions)
-    Else
-        FinishScopedSync = ConvertToJson(dResult)
-    End If
+    FinishScopedSync = FinishScopedOperation(Operation, dResult, intResult, strLogPath)
 
 End Function
 
@@ -3398,7 +3396,12 @@ CleanUp:
     ExecuteTests = OverlayTestResultsSaveError(ExecuteTests, strResultsError)
     If Len(strResultsError) > 0 Then intResult = eorFailed
     If Not cRoot Is Nothing Then
-        If Operation.DecisionBlocked Then ExecuteTests = OverlayDecisionRequired(ExecuteTests)
+        If Operation.DecisionBlocked Then
+            ExecuteTests = OverlayDecisionRequired(ExecuteTests)
+        Else
+            ' Acknowledged and applied prompts are reported too, as the callback does.
+            ExecuteTests = OverlayDecisionJournal(ExecuteTests, Operation.Decisions)
+        End If
     End If
     If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
         ExecuteTests = DecisionRequiredJson()
