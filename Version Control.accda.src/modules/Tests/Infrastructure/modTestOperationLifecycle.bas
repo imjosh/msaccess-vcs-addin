@@ -510,3 +510,33 @@ Public Sub TestHeadlessBuildRefusalLeavesSessionRootIntact()
     TestAssert Not CBool(dResult("success")), "invalid folder fails"
     TestAssert Operation.CurrentRootToken = strTokenBefore, "session root untouched"
 End Sub
+
+
+Public Sub TestRegistryStateAdoptedOnlyByItsOwnProject()
+    Dim cOp As clsOperation
+    Dim strHwnd As String
+    Dim strFresh As String
+    Dim strStale As String
+
+    ' Every copy of the add-in shares one registry key. A development copy loaded
+    ' beside the installed add-in must not adopt the installed add-in's running
+    ' root, or its main form refuses to close until the heartbeat times out.
+    Set cOp = NewOperation
+    strHwnd = CStr(Application.hWndAccessApp)
+    strFresh = CStr(Now)
+    strStale = CStr(DateAdd("n", -30, Now))
+    TestAssert cOp.CanAdoptRegistryState(strHwnd, strFresh, CodeProject.FullName), _
+        "this project's fresh state in this window is adopted"
+    TestAssert cOp.CanAdoptRegistryState(strHwnd, strFresh, UCase$(CodeProject.FullName)), _
+        "the path compares without case"
+    TestAssert Not cOp.CanAdoptRegistryState(strHwnd, strFresh, CodeProject.FullName & ".other.accda"), _
+        "another add-in copy's state is not adopted"
+    TestAssert Not cOp.CanAdoptRegistryState(strHwnd, strFresh, vbNullString), _
+        "state that does not name its project is not adopted"
+    TestAssert Not cOp.CanAdoptRegistryState(CStr(Application.hWndAccessApp + 1), strFresh, CodeProject.FullName), _
+        "another Access window's state is not adopted"
+    TestAssert Not cOp.CanAdoptRegistryState(strHwnd, strStale, CodeProject.FullName), _
+        "a timed-out heartbeat is not adopted"
+    TestAssert Not cOp.CanAdoptRegistryState(strHwnd, vbNullString, CodeProject.FullName), _
+        "a missing heartbeat is not adopted"
+End Sub

@@ -221,3 +221,18 @@ Public Sub TestMCPCallBeforeRootKeepsLoggedErrorsOutOfBoxes()
     TestAssert Not MCPCallBeforeRoot(False, True), "a root without MCP is unchanged"
 
 End Sub
+
+
+Public Sub TestMainFormWaitsOnlyForARootItCanCancel()
+
+    ' Closing frmVCSMain asks to cancel only a root that closing can stop. A test
+    ' run counts only while this project's runner is driving it.
+    TestAssert MainFormWaitsForRoot(eosRunning, eotExport, False), "a running export waits"
+    TestAssert MainFormWaitsForRoot(eosRunning, eotBuild, False), "a running build waits"
+    TestAssert MainFormWaitsForRoot(eosRunning, eotTestRun, True), "a test run this runner is running waits"
+    TestAssert Not MainFormWaitsForRoot(eosRunning, eotTestRun, False), _
+        "a test run nothing here is running does not block the close"
+    TestAssert Not MainFormWaitsForRoot(eosStaged, eotExport, False), "a paused root does not block the close"
+    TestAssert Not MainFormWaitsForRoot(eosReady, eotTestRun, True), "no root, no wait"
+
+End Sub

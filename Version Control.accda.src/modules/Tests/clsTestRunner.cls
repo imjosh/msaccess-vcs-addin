@@ -397,6 +397,8 @@ Public Sub RunSelected(colTestKeys As Collection)
         ' Allow pending UI events (e.g. form close) to fire
         DoEvents
         modTestRunnerUI.PollBridgeCancel
+        ' An MCP cancel request arrives through Cancel, like a form close.
+        Operation.CheckCancelRequest
 
         ' Check both internal flag and operation-level cancellation
         If this.CancelRequested Or (Operation.Status <> eosRunning) Then

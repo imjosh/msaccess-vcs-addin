@@ -244,6 +244,31 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : MainFormWaitsForRoot
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : True when closing frmVCSMain must ask to cancel the running root first.
+'           : A test run only counts while this project's runner is running it: closing
+'           : the form cannot stop a run that nothing here is driving, so asking would
+'           : refuse every close until the heartbeat timed out.
+'           : Pass Operation.Status, Operation.OperationType, and whether
+'           : TestRunner.State is etrsRunning.
+'---------------------------------------------------------------------------------------
+'
+Public Function MainFormWaitsForRoot(ByVal intStatus As eOperationState, ByVal intType As eOperationType, _
+    ByVal blnRunnerRunning As Boolean) As Boolean
+
+    If intStatus <> eosRunning Then Exit Function
+    If intType = eotTestRun Then
+        MainFormWaitsForRoot = blnRunnerRunning
+    Else
+        MainFormWaitsForRoot = True
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : InteractionIsNormal
 ' Author    : Josh
 ' Date      : 09/29/2026
