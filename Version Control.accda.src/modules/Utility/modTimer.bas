@@ -177,7 +177,8 @@ End Sub
 ' Author    : Adam Waller
 ' Date      : 1/23/2026
 ' Purpose   : Handle async operation with MCP callbacks. Reads callback info from
-'           : registry, registers with MCP, then starts the operation.
+'           : registry, registers with MCP, then starts the operation. Posts exactly
+'           : one terminal callback for the call, even when no root was acquired.
 '---------------------------------------------------------------------------------------
 '
 Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strCallbackInfo As String)
@@ -189,6 +190,9 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
     Dim strArg1 As String
     Dim strArg2 As String
     Dim lngPipePos As Long
+    Dim varResult As Variant
+    Dim intStatusBefore As eOperationState
+    Dim blnRootPending As Boolean
 
     ' Register callback with MCP if provided
     MCPDebugLog "HandleAPIAsyncOperation: Method=" & strMethod & ", CallbackInfo length=" & Len(strCallbackInfo)
@@ -215,23 +219,30 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
 
     ' Start the operation via API
     ' Log.Add automatically routes to MCP when MCP.IsActive
+    intStatusBefore = Operation.Status
     If Len(strArg2) > 0 Then
-        API strMethod, strArg1, strArg2
+        varResult = API(strMethod, strArg1, strArg2)
     ElseIf Len(strArg1) > 0 Then
-        API strMethod, strArg1
+        varResult = API(strMethod, strArg1)
     Else
-        API strMethod
+        varResult = API(strMethod)
     End If
 
     ' Completion callback is sent from the root operation's completion, before ReleaseObjects
     MCPDebugLog "HandleAPIAsyncOperation: Operation complete, Result=" & Operation.Result
 
+    ' A call that ended before a root posted its outcome (a pre-root error, or a Sub
+    ' whose Begin was refused) is reported here, from its own return. A root this
+    ' call left staged posts when its continuation finishes.
+    blnRootPending = (intStatusBefore = eosReady And Operation.Status <> eosReady)
+    PostUnreportedOutcome MCP, strMethod, varResult, blnRootPending
+
     RestoreErrorBreaks
     Exit Sub
 
 ErrHandler:
-    ' Post error callback if MCP is active
-    If MCP.IsActive Then
+    ' Post error callback if MCP is active and nothing has reported the outcome yet
+    If MCP.IsActive And Not MCP.TerminalPosted Then
         MCP.PostCallback "error", -1, -1, strMethod & " failed: " & Err.Description
     End If
 

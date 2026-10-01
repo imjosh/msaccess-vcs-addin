@@ -25,6 +25,7 @@ Private Type udtThis
     CallbackUrl As String
     OperationId As String
     IsActive As Boolean
+    TerminalPosted As Boolean
     LastCancelCheck As Double
     CancelPolls As Long
     CancelPollErrors As Long
@@ -59,6 +60,7 @@ Public Sub RegisterCallback(strCallbackInfo As String)
     Dim strJson As String
 
     ResetDiagnostics
+    this.TerminalPosted = False
 
     ' Parse the callback info JSON
     strJson = Trim(strCallbackInfo)
@@ -171,6 +173,7 @@ Public Sub PostCallback(strType As String, _
     strJson = modJsonConverter.ConvertToJson(dPayload)
 
     blnAsync = IsStreamingCallback(strType)
+    If Not blnAsync Then this.TerminalPosted = True
     strSubmitOperation = CallbackSubmitOperation(strType)
     CountPostAttempt strType
 
@@ -473,6 +476,20 @@ End Property
 '
 Public Property Get OperationId() As String
     If this.IsActive Then OperationId = this.OperationId
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TerminalPosted
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : True once a complete, error or cancelled callback has been attempted for
+'           : the registered operation. The timer reads it so a launched call that
+'           : already reported its outcome is not reported twice.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get TerminalPosted() As Boolean
+    TerminalPosted = this.TerminalPosted
 End Property
 
 

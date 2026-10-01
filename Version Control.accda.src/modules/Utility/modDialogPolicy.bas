@@ -621,6 +621,105 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : PostUnreportedOutcome
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Post the terminal callback for a timer-launched call that finished
+'           : without one, so an async caller gets the failure instead of a timeout.
+'           : Nothing is posted when the call already posted (a root completion or a
+'           : RefusalJson refusal), when completion released the MCP instance, or when
+'           : the call left a staged root, whose continuation posts later. The MCP
+'           : instance is passed in so the rule can be tested without the session one.
+'---------------------------------------------------------------------------------------
+'
+Public Sub PostUnreportedOutcome(ByVal cMCP As clsMCP, ByVal strMethod As String, _
+    ByVal varResult As Variant, ByVal blnRootPending As Boolean)
+
+    Dim dPayload As Dictionary
+    Dim strMessage As String
+
+    If Not cMCP.IsActive Then Exit Sub
+    If cMCP.TerminalPosted Then Exit Sub
+    If blnRootPending Then Exit Sub
+
+    Set dPayload = UnreportedOutcome(strMethod, varResult, strMessage)
+    cMCP.PostCallback "error", -1, -1, strMessage, dPayload
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : UnreportedOutcome
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : The error payload for a call that finished without posting. A JSON object
+'           : return keeps its own fields (error, errorNumber, error_pattern, decisions)
+'           : with success false, and a runtime error also carries runtime_error, as a
+'           : root's callback does. Plain text is the error. Empty, from a Sub that did
+'           : not start, says the operation did not start. strMessage is set to the
+'           : callback message.
+'---------------------------------------------------------------------------------------
+'
+Public Function UnreportedOutcome(ByVal strMethod As String, ByVal varResult As Variant, _
+    ByRef strMessage As String) As Dictionary
+
+    Dim dResult As Dictionary
+    Dim varKey As Variant
+
+    Set dResult = ParsedResultObject(varResult)
+    If dResult Is Nothing Then
+        ' Plain text, such as the dispatcher's refusal, is the error itself.
+        Set dResult = New Dictionary
+        If VarType(varResult) = vbString Then dResult("error") = varResult
+    End If
+
+    ' PostCallback sets these itself.
+    For Each varKey In Array("operation_id", "type", "message", "progress", "total")
+        If dResult.Exists(varKey) Then dResult.Remove varKey
+    Next varKey
+
+    strMessage = vbNullString
+    If dResult.Exists("error") Then strMessage = Nz(dResult("error"), vbNullString)
+    If Len(strMessage) = 0 Then
+        strMessage = T("The {0} operation did not start.", var0:=strMethod)
+        dResult("error") = strMessage
+    End If
+    dResult("success") = False
+    If dResult.Exists("errorNumber") And Not dResult.Exists("runtime_error") Then
+        dResult("runtime_error") = strMessage
+    End If
+
+    Set UnreportedOutcome = dResult
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ParsedResultObject
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : A method return parsed as a JSON object, or Nothing when it is not one.
+'---------------------------------------------------------------------------------------
+'
+Private Function ParsedResultObject(ByVal varResult As Variant) As Dictionary
+
+    Dim objParsed As Object
+
+    If VarType(varResult) <> vbString Then Exit Function
+    If Left$(Trim$(varResult), 1) <> "{" Then Exit Function
+
+    LogUnhandledErrors
+    On Error GoTo NotJson
+    Set objParsed = ParseJson(varResult)
+    If TypeOf objParsed Is Dictionary Then Set ParsedResultObject = objParsed
+    Exit Function
+
+NotJson:
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : NonDestructiveResult
 ' Author    : Josh
 ' Date      : 09/29/2026
