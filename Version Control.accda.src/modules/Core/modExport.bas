@@ -687,6 +687,32 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : OpenObjectRefusal
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The API result for an export that stopped because the object is still
+'           : open after the close. A native Cancel adds cancelled: true, as a single-
+'           : object import does (A30).
+'---------------------------------------------------------------------------------------
+'
+Public Function OpenObjectRefusal(strName As String, blnCanceled As Boolean) As Dictionary
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    If blnCanceled Then
+        dResult.Add "error", T("{0} is open and closing it was canceled, so it was not exported.", var0:=strName)
+        dResult.Add "cancelled", True
+    Else
+        dResult.Add "error", T("{0} is open and could not be closed, so it was not exported.", var0:=strName)
+    End If
+    Set OpenObjectRefusal = dResult
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ExportSingleObject
 ' Author    : Adam Waller
 ' Date      : 2/22/2023
@@ -698,7 +724,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_frmVCSMain, _
-    Optional blnNoIndex As Boolean = False)
+    Optional blnNoIndex As Boolean = False, Optional ByRef dResult As Dictionary)
 
     Dim dCategories As Dictionary
     Dim dCategory As Dictionary
@@ -706,6 +732,8 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     Dim cDbObject As IDbComponent
     Dim cDisabledIndex As clsVCSIndex
     Dim strTempFile As String
+    Dim blnClosed As Boolean
+    Dim blnCanceled As Boolean
 
     ' Guard clause
     If objItem Is Nothing Then Exit Sub
@@ -713,15 +741,9 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     ' Use inline error handling functions to trap and log errors.
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
 
-    ' Make sure the object is currently closed
-    With objItem
-        Select Case .Type
-            Case acForm, acMacro, acModule, acQuery, acReport, acTable
-                If SysCmd(acSysCmdGetObjectState, .Type, .Name) <> adStateClosed Then
-                    DoCmd.Close .Type, .Name, acSavePrompt
-                End If
-        End Select
-    End With
+    ' Make sure the object is currently closed. The result is reported after Log.Clear
+    ' below, which would otherwise discard it.
+    blnClosed = CloseObjectBeforeOperation(objItem.Type, objItem.Name, blnCanceled)
 
     If blnNoIndex Then
         ' Skip expensive index conflict work, but still reload options so
@@ -767,6 +789,15 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     ' Cache persistent connections to Access back-end databases
     CacheBackEndConnections
     PrepareTableDataSortExport
+
+    ' An object that is still open would raise a second native save prompt, or export
+    ' its last saved design, so stop here. A canceled close is reported as such.
+    If Not blnClosed Then
+        Set dResult = OpenObjectRefusal(objItem.Name, blnCanceled)
+        Log.Error eelError, CStr(dResult("error")), ModuleName & ".ExportSingleObject"
+        Operation.ErrorLevel = eelCritical
+        GoTo CleanUp
+    End If
 
     ' Get a database component class from the item
     Set cDbObject = GetClassFromObject(objItem)

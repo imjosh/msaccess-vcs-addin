@@ -145,7 +145,7 @@ Public Sub TestCloseBeforeImportLeavesLoadedAddInFormAlone()
     ' Left loaded and hidden, as Build and MergeBuild leave it.
     If Not IsLoaded(acForm, "frmVCSMain", False) Then DoCmd.OpenForm "frmVCSMain", , , , , acHidden
 
-    blnClosed = CloseObjectBeforeImport(acForm, "frmVCSMain")
+    blnClosed = CloseObjectBeforeOperation(acForm, "frmVCSMain")
     TestAssert Err.Number = 0, "no error is left in Err for the next DebugMode(True) to log"
     TestAssert blnClosed, "an add-in form name is left for clsDbForm.Merge to refuse"
     TestAssert IsLoaded(acForm, "frmVCSMain", False), "the main form is still loaded"
