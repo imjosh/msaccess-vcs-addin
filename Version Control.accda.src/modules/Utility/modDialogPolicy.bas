@@ -21,6 +21,7 @@ Public Const ERR_INTERACTION_MODE_REFUSED As String = "interaction_mode_refused"
 Public Const ERR_INVALID_INTERACTION_MODE As String = "invalid_interaction_mode"
 Public Const ERR_MERGE_NOT_AVAILABLE As String = "merge_not_available"
 Public Const ERR_OPERATION_ALREADY_RUNNING As String = "operation_already_running"
+Public Const ERR_INVALID_BUILD_PATH As String = "invalid_build_path"
 Public Const ERR_DECISION_REQUIRED As String = DECISION_REQUIRED
 
 

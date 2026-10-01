@@ -51,6 +51,7 @@ Private Type udtRoot
     RuntimeError As String
     RuntimeErrorNumber As Long
     CancelRequested As Boolean
+    OutputPath As String
 End Type
 Private m_Root As udtRoot
 
@@ -194,6 +195,20 @@ Public Sub RecordRootRuntimeError(strToken As String, strDescription As String, 
     m_Root.RuntimeError = strDescription
     m_Root.RuntimeErrorNumber = lngNumber
 
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordOutputPath
+' Date      : 10/01/2026
+' Purpose   : Keep the database file a build wrote. Finish reports it as output_path,
+'           : so an async caller learns where the build went from the add-in rather
+'           : than assuming its own request was used.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordOutputPath(ByVal strPath As String)
+    If m_Root.Completed Then Exit Sub
+    m_Root.OutputPath = strPath
 End Sub
 
 
@@ -640,6 +655,7 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     m_Root.RuntimeError = vbNullString
     m_Root.RuntimeErrorNumber = 0
     m_Root.CancelRequested = False
+    m_Root.OutputPath = vbNullString
 
     Me.ErrorLevel = eelNoError
     Me.Result = eorUnknown
@@ -721,6 +737,7 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
         dExtra.Add "runtime_error", m_Root.RuntimeError
         dExtra.Add "errorNumber", m_Root.RuntimeErrorNumber
     End If
+    If Len(m_Root.OutputPath) > 0 Then dExtra.Add "output_path", m_Root.OutputPath
 
     Select Case Me.Result
         Case eorSuccess

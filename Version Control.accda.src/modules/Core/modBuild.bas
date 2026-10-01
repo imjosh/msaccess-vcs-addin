@@ -810,6 +810,12 @@ CleanUp:
         End With
     End If
 
+    ' A successful full build leaves the database it wrote open. Its terminal callback
+    ' names that file, so a caller never has to assume where the build went.
+    If blnFullBuild And blnSuccess And Operation.ErrorLevel <> eelCritical Then
+        If DatabaseFileOpen Then Operation.RecordOutputPath CurrentProject.FullName
+    End If
+
     ' Wrap up build.
     DoCmd.Hourglass False
     If IsLoaded(acForm, "frmVCSMain") Then
