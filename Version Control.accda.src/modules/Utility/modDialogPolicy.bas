@@ -443,6 +443,59 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : AddDecisionJournal
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Attach the decision journal to a synchronous result, as the terminal
+'           : callback does: only when the journal is not empty, so a run that met no
+'           : prompt keeps its result shape. A decision_required result already carries
+'           : its journal and is left alone.
+'---------------------------------------------------------------------------------------
+'
+Public Sub AddDecisionJournal(dResult As Object, ByVal colDecisions As Collection)
+
+    If colDecisions Is Nothing Then Exit Sub
+    If colDecisions.Count = 0 Then Exit Sub
+    If dResult.Exists("decisions") Then Exit Sub
+    dResult.Add "decisions", colDecisions
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : OverlayDecisionJournal
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Add a decision journal to a JSON result. The result is returned as it
+'           : came when the journal is empty, so the shape only changes for a run that
+'           : met a prompt. If the payload cannot be parsed it is returned unchanged
+'           : rather than lose it.
+'---------------------------------------------------------------------------------------
+'
+Public Function OverlayDecisionJournal(ByVal strJson As String, _
+    ByVal colDecisions As Collection) As String
+
+    Dim dParsed As Object
+
+    OverlayDecisionJournal = strJson
+    If Len(strJson) = 0 Then Exit Function
+    If colDecisions Is Nothing Then Exit Function
+    If colDecisions.Count = 0 Then Exit Function
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    Set dParsed = ParseJson(strJson)
+    AddDecisionJournal dParsed, colDecisions
+    OverlayDecisionJournal = ConvertToJson(dParsed)
+
+ErrHandler:
+    ' Nothing to add when the payload was malformed; the caller keeps the original.
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : OverlayDecisionRequired
 ' Author    : Josh
 ' Date      : 09/29/2026

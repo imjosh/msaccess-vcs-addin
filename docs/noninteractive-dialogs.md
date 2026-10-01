@@ -149,6 +149,15 @@ the call itself began. An error before its `Begin` succeeded, such as an
 overflowing type value, leaves another caller's running root, policy, log
 and export resources alone.
 
+Synchronous results report the decision journal the way the terminal
+callback does. `ImportObject`, `ExportObject`, `ImportByType`, `ExportByType`
+and the `RunFilteredTests` return carry `decisions` on every outcome
+(success, failure, runtime error, cancel) when the journal is not empty: an
+acknowledged OK-only prompt, an applied conflict policy, or a declined
+prompt. An empty journal adds no key, so a run that met no prompt keeps its
+old shape. `decision_required` stays primary when a prompt was blocked, and a
+scoped `decision_required` result keeps `logPath`.
+
 ## Cancelling from MCP
 
 `vcs_cancel_operation` records the request on the MCP server and returns

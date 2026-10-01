@@ -1629,6 +1629,7 @@ Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As Stri
         If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
         If blnCanceled Then dResult.Add "cancelled", True
     End If
+    AddDecisionJournal dResult, cOp.LastDecisions
     dResult.Add "logPath", strLogPath
     FinishSingleObjectImport = ConvertToJson(dResult)
 
@@ -1665,8 +1666,38 @@ Public Function FinishSingleObjectExport(cOp As clsOperation, strLogPath As Stri
             End If
         End If
     End If
+    AddDecisionJournal dFinal, cOp.LastDecisions
     If Len(strLogPath) > 0 And Not dFinal.Exists("logPath") Then dFinal.Add "logPath", strLogPath
     FinishSingleObjectExport = ConvertToJson(dFinal)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishScopedOperation
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Complete the root operation after an API ImportByType or ExportByType and
+'           : return the JSON result. A prompt the policy blocked makes the result
+'           : decision_required and keeps the log path, which the caller read before the
+'           : log was released. Any other outcome carries the decision journal when it
+'           : is not empty.
+'---------------------------------------------------------------------------------------
+'
+Public Function FinishScopedOperation(cOp As clsOperation, dResult As Dictionary, _
+    ByVal intResult As eOperationResult, strLogPath As String) As String
+
+    Dim dFinal As Dictionary
+
+    cOp.Finish intResult
+    If intResult = eorDecisionRequired Then
+        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
+        If Len(strLogPath) > 0 Then dFinal.Add "logPath", strLogPath
+    Else
+        Set dFinal = dResult
+        AddDecisionJournal dFinal, cOp.LastDecisions
+    End If
+    FinishScopedOperation = ConvertToJson(dFinal)
 
 End Function
 
@@ -1702,6 +1733,7 @@ Public Function FailSingleObjectOperation(cOp As clsOperation, strLogPath As Str
         Set dResult = New Dictionary
         dResult.Add "success", False
         dResult.Add "error", strDescription
+        If Not cOp Is Nothing Then AddDecisionJournal dResult, cOp.LastDecisions
     End If
     dResult.Add "errorNumber", lngNumber
     If Len(strLogPath) > 0 Then dResult.Add "logPath", strLogPath
