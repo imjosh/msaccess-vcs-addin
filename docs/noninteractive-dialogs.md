@@ -14,6 +14,11 @@ only. `Operation.Finish` restores the previous interaction mode after success,
 failure, or cancellation. A request that cannot begin (unknown policy, another
 operation running) opens no scope and changes nothing.
 
+A test run through automation is always headless: it shows no console and
+answers prompts under its policy. MCP refuses `vcs_run_tests(noninteractive=False)`
+with `interactive_tests_unsupported` before calling the add-in (X11). The
+interactive test console is the ribbon's.
+
 ## Policies
 
 | Name | Effect |
@@ -101,7 +106,21 @@ operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,
 replaces it; `Finish` does not close it. Each operation under it starts with
 no decisions and no blocked prompt. `SetOperationPolicy` refuses with
 `operation_already_running` while an operation runs. `ClearOperationPolicy`
-is always safe to call, including twice.
+is always safe to call, including twice. The acknowledgment is part of the
+contract: `SetOperationPolicy` returns `{"success":true,"policy":"<lower-cased name>"}`
+and `ClearOperationPolicy` returns `{"success":true}`. MCP requires exactly
+these and reports anything else, such as the Empty an older add-in returns, as
+`policy_unconfirmed` without starting the operation (M40). Like
+`APICapabilities`, this is how a client checks the add-in build; the version
+number does not change on a rebuild.
+
+`API` refuses a call that arrives while another API command is still running
+(a reentrant call). It returns a string starting `VCS_API_REFUSED: `, and
+`APIAsync` returns `{"success":false,"error":"VCS_API_REFUSED: ..."}`. MCP
+treats that as a failure on every call, with `error_pattern:
+operation_already_running` and `api_refused: true`. When the refusal text says
+the call arrived back in the project that sent it, the pattern is
+`api_self_dispatch`, an add-in defect that a retry cannot fix (M39).
 
 `SetInteractionMode` returns a JSON string through both the VBA function and
 `VCS.API("SetInteractionMode", mode)`. Modes are 0 (normal/interactive), 1 (silent),
@@ -275,7 +294,11 @@ repository's `docs/DIALOGS.md`.
 
 The same tools also cover a `MsgBox2` box the add-in shows on an interactive
 run. Access draws that box (the `@`-separated bold `MsgBox` form) as a NetUI
-`NUIDialog`, not a standard Win32 dialog.
+`NUIDialog`, not a standard Win32 dialog. The inspector classifies it by window
+class before it looks at the add-in's caption, so the box is listed as blocking
+and `ready` is false (M36). An OK-only box is a `vba_msgbox`, which the `safe`
+policy acknowledges unless its text is destructive. A box with two or more
+buttons, such as the cancel confirmation, is `unknown` and is only reported.
 
 - VBA `MsgBox` in the database under test.
 - Microsoft Access error and warning dialogs.
