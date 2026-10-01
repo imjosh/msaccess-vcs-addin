@@ -83,6 +83,16 @@ contradictory guidance.
 
 ---
 
+## 2026-09-30 — Policy set and clear are acknowledged by their return values
+
+**Trigger**: M40. The MCP server read any non-refusal `SetOperationPolicy` reply as success, including the `Empty` an older add-in returns on reentry.
+
+**Decision**: The add-in's contract is the acknowledgment: `SetOperationPolicy` returns `{"success":true,"policy":"<lower-cased name>"}`, and `ClearOperationPolicy` returns `{"success":true}`. Callers must require exactly that. No add-in code change; this is a capability check, not a version number (rebuilding does not increment the version). MCP reports anything else as `policy_unconfirmed`.
+
+**What this rules out**: Treating `Empty` or a reply without `policy` as acceptance.
+
+---
+
 ## 2026-09-30 — Interaction scopes: owner tokens, opened after Begin, `skip` equals `prefer_database`
 
 **Trigger**: A review of the first noninteractive-policy commit (`cd22aa3`) found policy scopes leaking between operations: `Finish` could pop a scope it had not opened, a policy applied while another operation ran changed that operation, and a test module switching to silent mode could turn a `block` run into one that approved defaults. `prefer_database` and `skip` were documented as different but behaved the same.

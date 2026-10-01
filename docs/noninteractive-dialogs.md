@@ -101,6 +101,13 @@ that ignore the return value continue to work. Rebuilding does not increment the
 add-in's version, so its current version number alone cannot identify this
 capability. M32 owns consumption of this contract on the MCP side.
 
+`SetOperationPolicy` follows the same rule: callers dispatch only on
+`{success: true, policy: <the requested policy, lower-cased>}`, and
+`ClearOperationPolicy` counts as cleared only on `{success: true}`. An older
+add-in returns VBA `Empty` (for example while busy), which acknowledges neither;
+MCP reports that as `policy_unconfirmed` (M40). This too is capability
+detection, not a version gate.
+
 `ImportObject` and `ExportObject` take no policy argument; they run under
 the session policy. The MCP sets it around each call. `ImportObject` reads
 its outcome before `Finish`, which restores the error level from before the
