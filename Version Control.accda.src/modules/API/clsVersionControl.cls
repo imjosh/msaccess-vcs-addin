@@ -1216,7 +1216,8 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
             blnBegun = True
 
             modExport.ExportSingleObject objItem, , _
-                blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)
+                blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
+                dResult:=dResult
             Set objItem = Nothing
 
         Case Else
@@ -1367,6 +1368,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim strLogPath As String
     Dim blnFound As Boolean
     Dim blnBegun As Boolean
+    Dim blnCanceled As Boolean
     Dim dResult As Dictionary
 
     LogUnhandledErrors
@@ -1476,8 +1478,8 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     ' back through the out-param, and the error journal has to be read before it.
     LoadSingleObject cComponent, strObjectName, strSourceFile, _
         blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
-        strSavedLogPath:=strLogPath
-    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0))
+        strSavedLogPath:=strLogPath, blnCanceled:=blnCanceled
+    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0), blnCanceled)
     Exit Function
 
 ErrHandler:

@@ -117,6 +117,16 @@ the policy blocked during either call returns `decision_required` with the
 decisions, like the multi-object calls, and a raised error after it goes
 under `runtime_error`.
 
+Both calls close the object first, which can raise Access's native
+save/discard prompt. The policy does not answer that prompt: a caller (or
+`vcs_dismiss_dialog`) does. When the close is cancelled and the object is
+still open, the call does not replace or export it. It returns
+`success: false`, an `error` naming the object and the reason, `logPath`, and
+`"cancelled": true`. `cancelled` is set only for a native Cancel (error 2501),
+on import and export alike. A close that fails for any other reason and leaves
+the object open returns the same `success: false` and `error`, without
+`cancelled`. A normal call with no prompt is unchanged.
+
 `ImportByType` and `ExportByType` share that error path. A raised error
 returns the original `error` and `errorNumber`, and finishes only a root
 the call itself began. An error before its `Begin` succeeded, such as an

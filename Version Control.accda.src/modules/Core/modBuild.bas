@@ -28,6 +28,16 @@ Private m_blnInPlaceResetFailed As Boolean
 ' clients, so that a merge which then imports nothing can skip the post-merge check.
 Private m_blnVerifiedAccessible As Boolean
 
+' How CloseObjectBeforeOperation behaves. Real closes the object. The others replace the
+' close with a fixed outcome, so tests can cover a canceled close without a native prompt.
+Public Enum eCloseOutcome
+    ecoReal = 0
+    ecoClosed = 1
+    ecoCanceled = 2
+    ecoFailed = 3
+End Enum
+Private m_eCloseOutcome As eCloseOutcome
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : ShouldCheckBuildNameConflict
@@ -1288,13 +1298,15 @@ End Sub
 '
 Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, _
     strSourceFilePath As String, Optional blnNoIndex As Boolean = False, _
-    Optional ByRef strSavedLogPath As String)
+    Optional ByRef strSavedLogPath As String, Optional ByRef blnCanceled As Boolean)
 
     Dim dCategories As Dictionary
     Dim dCategory As Dictionary
     Dim dSourceFiles As Dictionary
     Dim intResult As eOperationResult
     Dim blnClosed As Boolean
+
+    blnCanceled = False
 
     ' Guard clauses
     If cComponentClass Is Nothing Then Exit Sub
@@ -1305,7 +1317,7 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     ' Make sure the object is currently closed. (This is really important, since we
     ' will be deleting the object before adding it from source.) The result is
     ' reported after Log.Clear below, which would otherwise discard it.
-    blnClosed = CloseObjectBeforeImport(cComponentClass.ComponentType, strName)
+    blnClosed = CloseObjectBeforeOperation(cComponentClass.ComponentType, strName, blnCanceled)
 
     If blnNoIndex Then
         ' Skip the expensive index load and options reload. The caller has already
@@ -1358,8 +1370,13 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     End If
 
     If Not blnClosed Then
-        Log.Error eelError, T("{0} is open and could not be closed, so it was not replaced from source.", _
-            var0:=strName), ModuleName & ".LoadSingleObject"
+        If blnCanceled Then
+            Log.Error eelError, T("{0} is open and closing it was canceled, so it was not replaced from source.", _
+                var0:=strName), ModuleName & ".LoadSingleObject"
+        Else
+            Log.Error eelError, T("{0} is open and could not be closed, so it was not replaced from source.", _
+                var0:=strName), ModuleName & ".LoadSingleObject"
+        End If
         Operation.ErrorLevel = eelCritical
         intResult = eorFailed
         GoTo CleanUp
@@ -1450,11 +1467,14 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : CloseObjectBeforeImport
+' Procedure : CloseObjectBeforeOperation
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : Close an open object so LoadSingleObject can replace it from source.
-'           : Returns False when the object is still open afterwards.
+' Purpose   : Close an open object so LoadSingleObject can replace it from source, or
+'           : ExportSingleObject can export its saved design.
+'           : Returns False when the object is still open afterwards. blnCanceled is
+'           : True when that is because the native save/discard prompt was canceled
+'           : (error 2501), which callers report apart from other close failures (A30).
 '           : A form that shares its name with an add-in form is left alone, since
 '           : clsDbForm.Merge refuses those names anyway. When the database is the
 '           : add-in itself, that form can be the add-in's own frmVCSMain, which Build,
@@ -1465,19 +1485,30 @@ End Sub
 '           : reported that error instead of the merge's own refusal (A14).
 '---------------------------------------------------------------------------------------
 '
-Public Function CloseObjectBeforeImport(ByVal intType As AcObjectType, strName As String) As Boolean
+Public Function CloseObjectBeforeOperation(ByVal intType As AcObjectType, strName As String, _
+    Optional ByRef blnCanceled As Boolean) As Boolean
+
+    Dim lngErr As Long
+
+    blnCanceled = False
+
+    If m_eCloseOutcome <> ecoReal Then
+        blnCanceled = (m_eCloseOutcome = ecoCanceled)
+        CloseObjectBeforeOperation = (m_eCloseOutcome = ecoClosed)
+        Exit Function
+    End If
 
     Select Case intType
         Case acForm, acMacro, acModule, acQuery, acReport, acTable
             ' Objects that can be open in the database
         Case Else
-            CloseObjectBeforeImport = True
+            CloseObjectBeforeOperation = True
             Exit Function
     End Select
 
     If intType = acForm Then
         If ObjectExists(acForm, strName, True) Then
-            CloseObjectBeforeImport = True
+            CloseObjectBeforeOperation = True
             Exit Function
         End If
     End If
@@ -1487,13 +1518,28 @@ Public Function CloseObjectBeforeImport(ByVal intType As AcObjectType, strName A
         On Error Resume Next
         DoCmd.Close intType, strName, acSavePrompt
         ' A canceled close (2501) or any other failure shows up in the state check.
+        lngErr = Err.Number
         If Err Then Err.Clear
         On Error GoTo 0
     End If
 
-    CloseObjectBeforeImport = (SysCmd(acSysCmdGetObjectState, intType, strName) = adStateClosed)
+    CloseObjectBeforeOperation = (SysCmd(acSysCmdGetObjectState, intType, strName) = adStateClosed)
+    blnCanceled = (Not CloseObjectBeforeOperation) And (lngErr = 2501)
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetCloseOutcomeForTest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Test seam for CloseObjectBeforeOperation. Pass ecoReal to restore the
+'           : normal close. Tests must restore it, since the setting is module-wide.
+'---------------------------------------------------------------------------------------
+'
+Public Sub SetCloseOutcomeForTest(ByVal eOutcome As eCloseOutcome)
+    m_eCloseOutcome = eOutcome
+End Sub
 
 
 '---------------------------------------------------------------------------------------
@@ -1559,7 +1605,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
-    colErrors As Collection) As String
+    colErrors As Collection, Optional blnCanceled As Boolean = False) As String
 
     Dim dResult As Dictionary
     Dim intLevel As eErrorLevel
@@ -1578,6 +1624,7 @@ Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As Stri
         Set dResult = New Dictionary
         dResult.Add "success", (intLevel < eelError)
         If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+        If blnCanceled Then dResult.Add "cancelled", True
     End If
     dResult.Add "logPath", strLogPath
     FinishSingleObjectImport = ConvertToJson(dResult)
