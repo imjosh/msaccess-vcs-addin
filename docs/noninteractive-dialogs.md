@@ -180,6 +180,11 @@ on import and export alike. A close that fails for any other reason and leaves
 the object open returns the same `success: false` and `error`, without
 `cancelled`. A normal call with no prompt is unchanged.
 
+`ImportByType` and `ExportByType` also report a confirmed conflict-dialog
+Cancel with `success: false`, `error: "Operation was canceled."`, `logPath`,
+and `cancelled: true`. Both use the same scoped wrap-up. An ordinary failure
+has no `cancelled` field; a blocked decision remains `decision_required`.
+
 `ImportByType` and `ExportByType` share that error path. A raised error
 returns the original `error` and `errorNumber`, and finishes only a root
 the call itself began. An error before its `Begin` succeeded, such as an

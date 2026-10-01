@@ -93,6 +93,7 @@ Private Sub CheckOverflowBeforeBegin(blnImport As Boolean)
     TestAssert Not CBool(dResult("success")), "an overflowing type fails"
     TestAssert CStr(dResult("error")) = OverflowDescription, "the result carries the original error"
     TestAssert CLng(dResult("errorNumber")) = 6, "the result carries the original error number"
+    TestAssert Not dResult.Exists("cancelled"), "an error is not a cancel"
     TestAssert Operation.CurrentRootToken = strToken, "the running root is untouched"
     TestAssert Operation.Status = intStatus, "the running root is not finished"
     TestAssert Operation.LastCompletion Is dCompletion, "no completion is emitted"
@@ -204,4 +205,64 @@ Private Function ErrorDescription(lngNumber As Long) As String
     Err.Raise lngNumber
     ErrorDescription = Err.Description
     Err.Clear
+End Function
+
+
+' A32: run outside the test runner, which owns a root. For export, load this
+' development project as a library in a disposable database (export preflight
+' deliberately refuses to export the running code project).
+Public Function ScopedSyncCancelCheck(Optional blnExport As Boolean = False) As String
+    Dim cVcs As clsVersionControl
+    Dim dResult As Dictionary
+    Dim strFailed As String
+    Dim lngErr As Long
+    Dim strErr As String
+
+    On Error GoTo ErrHandler
+    If Operation.Status = eosRunning Then
+        ScopedSyncCancelCheck = "Not run: an operation is already running."
+        Exit Function
+    End If
+    VCS.SetOperationPolicy "block"
+    Set cVcs = New clsVersionControl
+    cVcs.CancelAfterBegin = True
+    If blnExport Then
+        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+    Else
+        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    End If
+    Check strFailed, Not CBool(dResult("success")), "cancel fails the call"
+    Check strFailed, dResult.Exists("cancelled"), "cancel carries cancelled"
+    If dResult.Exists("cancelled") Then
+        Check strFailed, CBool(dResult("cancelled")), "cancelled is true"
+    End If
+    Check strFailed, CStr(dResult("error")) = "Operation was canceled.", "cancel keeps its error"
+    Check strFailed, Len(CStr(dResult("logPath"))) > 0, "cancel names its log"
+    Check strFailed, Operation.Result = eorCanceled, "root finishes as cancelled"
+    Check strFailed, Operation.Status <> eosRunning, "cancel releases the root"
+
+    ' The same public entry point's owned failure must remain an ordinary error.
+    Set cVcs = New clsVersionControl
+    cVcs.FaultAfterBegin = 5
+    If blnExport Then
+        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+    Else
+        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    End If
+    Check strFailed, Not CBool(dResult("success")), "error fails the call"
+    Check strFailed, Not dResult.Exists("cancelled"), "error has no cancelled field"
+    Check strFailed, CLng(dResult("errorNumber")) = 5, "error keeps its number"
+    Check strFailed, Operation.Result = eorFailed, "error finishes as failed"
+
+CleanUp:
+    On Error Resume Next
+    VCS.ClearOperationPolicy
+    If lngErr <> 0 Then strFailed = strFailed & "ERROR: " & lngErr & ": " & strErr
+    If Len(strFailed) = 0 Then strFailed = "OK"
+    ScopedSyncCancelCheck = strFailed
+    Exit Function
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 End Function

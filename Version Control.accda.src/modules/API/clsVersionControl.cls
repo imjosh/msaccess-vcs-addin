@@ -21,8 +21,9 @@ Option Explicit
 
 Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 
-' Test seam for ImportByType / ExportByType; see FaultAfterBegin.
+' Instance-owned test seams for scoped calls; see the Friend properties below.
 Private m_lngFaultAfterBegin As Long
+Private m_blnCancelAfterBegin As Boolean
 
 
 '---------------------------------------------------------------------------------------
@@ -1646,7 +1647,11 @@ Public Function ExportByType(ByVal varTypes As Variant, _
 
     BeginScopedSyncLog T("Beginning Category Export")
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
-    modExport.ExportScoped colContainers, blnFullExport
+    If m_blnCancelAfterBegin Then
+        VCSIndex.Conflicts.UserCanceled = True
+    Else
+        modExport.ExportScoped colContainers, blnFullExport
+    End If
     ExportByType = FinishScopedSync(dResult, colContainers, True)
     Exit Function
 
@@ -1723,7 +1728,11 @@ Public Function ImportByType(ByVal varTypes As Variant, _
 
     BeginScopedSyncLog T("Beginning Category Import")
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
-    modBuild.MergeScoped colContainers, blnFullImport
+    If m_blnCancelAfterBegin Then
+        VCSIndex.Conflicts.UserCanceled = True
+    Else
+        modBuild.MergeScoped colContainers, blnFullImport
+    End If
     ImportByType = FinishScopedSync(dResult, colContainers, False)
     Exit Function
 
@@ -1746,6 +1755,13 @@ End Function
 '
 Friend Property Let FaultAfterBegin(ByVal lngNumber As Long)
     m_lngFaultAfterBegin = lngNumber
+End Property
+
+
+' Test seam: simulate the conflict dialog's Cancel before any scoped work writes
+' objects. Instance-owned and unavailable through COM or CallByName.
+Friend Property Let CancelAfterBegin(ByVal blnCancel As Boolean)
+    m_blnCancelAfterBegin = blnCancel
 End Property
 
 
@@ -1855,6 +1871,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
         End If
         dResult.Add "logPath", strLogPath
     End If
+    If intResult = eorCanceled Then dResult.Add "cancelled", True
 
     FinishScopedSync = FinishScopedOperation(Operation, dResult, intResult, strLogPath)
 
