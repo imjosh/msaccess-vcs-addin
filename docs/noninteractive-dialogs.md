@@ -101,6 +101,17 @@ start. Nothing is added when a root completion or `RefusalJson` already posted
 the call left a staged root (a build or merge continuing on its timer), whose
 continuation posts. Synchronous `API` returns are unchanged.
 
+Async admission keeps the first caller's identity (A33). A launch made while a
+timer is pending, an API is dispatching, or a root is running or staged returns
+`success: false`, `error_pattern: operation_already_running`, and `api_refused:
+true`, and posts one error to that incoming request's callback. Its refusal uses
+a separate MCP instance, with no running journal or log attached. The admitted
+method, arguments, callback, operation ID, cancellation URL, lease, interaction
+state, journal and log remain with their owner. Timer dispatch repeats admission
+before registering the callback, covering a timer delivered during a later
+synchronous operation. Admission and dispatch errors also report to their own
+caller, with `errorNumber` and `runtime_error`, and leave admission available.
+
 `SetOperationPolicy` sets a session policy. It stays in force across
 operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,
 replaces it; `Finish` does not close it. Each operation under it starts with

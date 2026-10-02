@@ -49,11 +49,7 @@ Public Sub WinAPITimerCallback()
     MCPDebugLog "WinAPITimerCallback: Command=" & strCommand & ", CallbackInfo length=" & Len(strCallbackInfo)
 
     ' Clear values from registry (In case an operation sets another timer)
-    SaveSetting PROJECT_NAME, "Timer", "Operation", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", "Param1", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", "Param2", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, vbNullString
+    ClearTimerRequest
 
     ' Now, run the desired operation. Root ownership crosses this boundary in strOpToken,
     ' never in mutable global state: a continuation resumes only the root it was armed
@@ -131,26 +127,75 @@ Public Sub SetTimer(strOperation As String, _
     Optional strParam1 As String, Optional strParam2 As String, _
     Optional strOpToken As String, Optional sngSeconds As Single = 0.5)
 
-    If Len(strOpToken) = 0 Then strOpToken = Operation.CurrentRootToken
-
-    ' Make sure we are not trying to stack timer operations
-    If m_lngTimerID <> 0 Then
-        MsgBox2 "Failed to Set Callback Timer", _
-            "Multiple callback timers are not currently supported.", _
-            "Please ensure that any previous timer was completed or killed first.", vbExclamation
-        Exit Sub
+    If Not TrySetTimer(strOperation, strParam1, strParam2, strOpToken, sngSeconds) Then
+        MsgBox2 T("Failed to Set Callback Timer"), _
+            T("Multiple callback timers are not currently supported."), _
+            T("Please ensure that any previous timer was completed or killed first."), vbExclamation
     End If
 
-    ' Save parameter values
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TimerIsPending
+' Purpose   : Read admission state without changing the pending request.
+'---------------------------------------------------------------------------------------
+Public Function TimerIsPending() As Boolean
+    TimerIsPending = (m_lngTimerID <> 0)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TrySetTimer
+' Purpose   : Admit the whole timer request, including its callback, in one place.
+'           : A refused request writes nothing. APIAsync handles refusal without a UI.
+'---------------------------------------------------------------------------------------
+Public Function TrySetTimer(ByVal strOperation As String, _
+    Optional ByVal strParam1 As String, Optional ByVal strParam2 As String, _
+    Optional ByVal strOpToken As String, Optional ByVal sngSeconds As Single = 0.5, _
+    Optional ByVal strCallbackInfo As String) As Boolean
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strSource As String
+
+    On Error GoTo ErrHandler
+    If TimerIsPending Then Exit Function
+    If Len(strOpToken) = 0 Then strOpToken = Operation.CurrentRootToken
+
     SaveSetting PROJECT_NAME, "Timer", "Param1", strParam1
     SaveSetting PROJECT_NAME, "Timer", "Param2", strParam2
+    SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
     SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, strOpToken
-
-    ' Save ID to registry before setting the timer
     SaveSetting PROJECT_NAME, "Timer", "Operation", strOperation
-    SaveSetting PROJECT_NAME, "Timer", "TimerID", m_lngTimerID
     m_lngTimerID = ApiSetTimer(0, 0, 1000 * sngSeconds, AddressOf WinAPITimerCallback)
+    SaveSetting PROJECT_NAME, "Timer", "TimerID", m_lngTimerID
+    TrySetTimer = TimerIsPending
+    If Not TrySetTimer Then ClearTimerRequest
+    Exit Function
 
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    strSource = Err.Source
+    On Error Resume Next
+    KillTimer
+    ClearTimerRequest
+    On Error GoTo 0
+    Err.Raise lngErr, strSource, strErr
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearTimerRequest
+' Purpose   : Consume or roll back the admitted request before another can be armed.
+'---------------------------------------------------------------------------------------
+Private Sub ClearTimerRequest()
+    SaveSetting PROJECT_NAME, "Timer", "Operation", vbNullString
+    SaveSetting PROJECT_NAME, "Timer", "Param1", vbNullString
+    SaveSetting PROJECT_NAME, "Timer", "Param2", vbNullString
+    SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", vbNullString
+    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, vbNullString
 End Sub
 
 
@@ -193,16 +238,25 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
     Dim varResult As Variant
     Dim intStatusBefore As eOperationState
     Dim blnRootPending As Boolean
+    Dim cCallback As clsMCP
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim dError As Dictionary
 
-    ' Register callback with MCP if provided
-    MCPDebugLog "HandleAPIAsyncOperation: Method=" & strMethod & ", CallbackInfo length=" & Len(strCallbackInfo)
+    ' A timer admitted earlier can arrive while a synchronous API/root is running.
+    ' Refuse before registering its callback or changing the owner's source.
+    If APIDispatchBusy Or Operation.IsActive Then
+        RefuseAsyncRequest strCallbackInfo, strMethod
+        RestoreErrorBreaks
+        Exit Sub
+    End If
+
+    ' Keep the admitted emitter alive across ReleaseObjects, including exception cleanup.
+    Set cCallback = MCP
+    cCallback.RegisterCallback strCallbackInfo
     If Len(strCallbackInfo) > 0 Then
-        MCPDebugLog "HandleAPIAsyncOperation: Registering callback..."
-        MCP.RegisterCallback strCallbackInfo
-        MCPDebugLog "HandleAPIAsyncOperation: MCP.IsActive=" & MCP.IsActive
         Operation.Source = eosMCPTool
     Else
-        MCPDebugLog "HandleAPIAsyncOperation: No callback info, using External API source"
         Operation.Source = eosExternalAPI
     End If
 
@@ -235,20 +289,27 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
     ' whose Begin was refused) is reported here, from its own return. A root this
     ' call left staged posts when its continuation finishes.
     blnRootPending = (intStatusBefore = eosReady And Operation.Status <> eosReady)
-    PostUnreportedOutcome MCP, strMethod, varResult, blnRootPending
+    PostUnreportedOutcome cCallback, strMethod, varResult, blnRootPending
 
     RestoreErrorBreaks
     Exit Sub
 
 ErrHandler:
-    ' Post error callback if MCP is active and nothing has reported the outcome yet
-    If MCP.IsActive And Not MCP.TerminalPosted Then
-        MCP.PostCallback "error", -1, -1, strMethod & " failed: " & Err.Description
+    lngErr = Err.Number
+    strErr = Err.Description
+    Err.Clear
+    If Not cCallback Is Nothing Then
+        If cCallback.IsActive And Not cCallback.TerminalPosted Then
+            Set dError = New Dictionary
+            dError.Add "success", False
+            dError.Add "error", strErr
+            dError.Add "runtime_error", strErr
+            dError.Add "errorNumber", lngErr
+            cCallback.PostCallback "error", -1, -1, strMethod & " failed: " & strErr, dError
+        End If
+    Else
+        AsyncRequestFailure strCallbackInfo, strErr, lngNumber:=lngErr
     End If
-
     RestoreErrorBreaks
-
-    ' Re-throw error
-    Err.Raise Err.Number, Err.Source, Err.Description, Err.HelpFile, Err.HelpContext
-
+    ' Never raise from a Windows timer callback after reporting its terminal outcome.
 End Sub

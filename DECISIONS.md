@@ -83,6 +83,23 @@ contradictory guidance.
 
 ---
 
+
+## 2026-10-02 — Async refusal belongs to the incoming caller (A33)
+
+**Trigger**: Pending launches overwrote timer callback information, and dispatch during a running API registered the new MCP identity before reentry was refused. The original caller then lost its completion and polled the refused caller's cancellation channel.
+
+**Options explored**:
+- Temporarily swap the shared MCP identity to emit a refusal, then restore it: a synchronous HTTP post can yield, exposing the swap to cancellation checks and completion.
+- Rely on Python's Access gate: M47 protects the apartment worker, but direct VBA/API callers and already admitted timers still reach this boundary.
+- Admit the timer request together and give refusals a separate emitter: keeps the owner's state untouched at launch and dispatch. Chosen.
+
+**Decision**: APIAsync checks API dispatch, pending timers and active roots before changing shared state. TrySetTimer stores the callback with the admitted method/arguments. Timer dispatch checks again before MCP registration. Refusals use a fresh clsMCP and an outcome dictionary built without the running operation's journal, result or log. An admitted dispatch retains its emitter through root teardown and exception cleanup.
+
+**What this rules out**: Shared-identity swaps for refusals, posting them through RefusalJson/RuntimeErrorJson, or considering M47 gate ownership sufficient for add-in admission. M48/M49/M51 remain Python result/fallback work; A33 changes no Python runtime behavior.
+
+**Relevant files**: modAPI.bas, modTimer.bas, modTestAsyncCallerIdentity.bas; shared spec section 2 and ../verification/A33/.
+
+---
 ## 2026-10-01 — A compile-gated test run fails without cancellation (A31)
 
 **Trigger**: The test runner used its cancelled state when the host project did not compile, so MCP replaced the compile explanation with "Test run was cancelled" on both transports.

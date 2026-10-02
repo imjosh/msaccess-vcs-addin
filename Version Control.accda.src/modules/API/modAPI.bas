@@ -18,6 +18,10 @@ Private m_strMCPDebugLogPath As String
 ' RedirectTargetIsSelf exists to make that unreachable; this reports it if it ever is not.
 Private m_blnRedirecting As Boolean
 
+' Shared with timer admission: APIAsync can arrive while API is yielding, before a
+' root exists. An APIAsync-local flag alone cannot see that dispatcher.
+Private m_blnAPIRunning As Boolean
+
 ' Why an API entry point turned a call away. The two cases need opposite advice, and the
 ' wrong one costs the caller the whole diagnosis -- see RefuseReentrantCall.
 Private Enum eRefusalReason
@@ -418,7 +422,6 @@ Public Function API(strMethod As String, _
     ' want it to be, since a nested call would run against Operation state the outer call
     ' owns. Refuse it, and say so in the return value rather than coming back Empty --
     ' see RefuseReentrantCall for why silence was worse and why this is not an Err.Raise.
-    Static IsRunning As Boolean
     Dim varResult As Variant
     Dim strLibName As String
     Dim strRunCmd As String
@@ -427,13 +430,13 @@ Public Function API(strMethod As String, _
     LogUnhandledErrors
     On Error GoTo ErrHandler
 
-    If IsRunning Then
+    If m_blnAPIRunning Then
         API = RefuseReentrantCall(strMethod, "API", RefusalReason)
         RestoreErrorBreaks
         Exit Function
     End If
 
-    IsRunning = True
+    m_blnAPIRunning = True
 
     ' Set operation source before any operations
     Operation.Source = eosExternalAPI
@@ -489,7 +492,7 @@ Public Function API(strMethod As String, _
     API = varResult
 
 CleanUp:
-    IsRunning = False
+    m_blnAPIRunning = False
     m_blnRedirecting = False
     RestoreErrorBreaks
     Exit Function
@@ -497,7 +500,7 @@ CleanUp:
 ErrHandler:
     ' An error occurred so we need to make it available for further attempts
     ' but do not handle the error.
-    IsRunning = False
+    m_blnAPIRunning = False
     m_blnRedirecting = False
     RestoreErrorBreaks
 
@@ -527,32 +530,24 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     Dim varResult As Variant
     Dim strLibName As String
     Dim strRunCmd As String
-    Dim strJsonResult As String
     Dim dResult As Dictionary
     Dim lngTimeoutMs As Long
+    Dim blnOwnsEntry As Boolean
+    Dim lngErr As Long
+    Dim strErr As String
 
     SuppressErrorBreaks
     LogUnhandledErrors
     On Error GoTo ErrHandler
 
-    If IsRunning Then
-        ' Callers parse this return value as JSON, so the refusal has to arrive as JSON.
-        Set dResult = New Dictionary
-        dResult.Add "success", False
-        dResult.Add "error", RefuseReentrantCall(strMethod, "APIAsync", RefusalReason)
-        APIAsync = modJsonConverter.ConvertToJson(dResult)
+    If IsRunning Or m_blnAPIRunning Then
+        APIAsync = RefuseAsyncRequest(strCallbackInfo, strMethod)
         RestoreErrorBreaks
         Exit Function
     End If
 
     IsRunning = True
-
-    ' Set operation source - MCP if callback provided, otherwise external API
-    If Len(strCallbackInfo) > 0 Then
-        Operation.Source = eosMCPTool
-    Else
-        Operation.Source = eosExternalAPI
-    End If
+    blnOwnsEntry = True
 
     ' Make sure we are not attempting to run this from the current database when making
     ' changes to the add-in itself. (It will re-run the command through the add-in.)
@@ -575,15 +570,23 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
         GoTo CleanUp
     End If
 
+    ' Admission precedes every change to the shared operation or timer request.
+    ' A staged root owns its callback too, even though its API stack has unwound.
+    If Operation.IsActive Or TimerIsPending Then
+        APIAsync = RefuseAsyncRequest(strCallbackInfo, strMethod)
+        GoTo CleanUp
+    End If
+
+    If Len(strCallbackInfo) > 0 Then
+        Operation.Source = eosMCPTool
+    Else
+        Operation.Source = eosExternalAPI
+    End If
+
     ' Determine if this is an async operation or should fall back to sync
     Select Case strMethod
         Case "Export", "FullExport", "ExportVBA", "Build", "BuildAs", "MergeBuild", "RunFilteredTests"
             ' These are async operations - spawn via timer with callback support
-
-            ' Store callback info in registry for timer callback to retrieve
-            SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
-            MCPDebugLog "APIAsync: Method=" & strMethod & ", CallbackInfo length=" & Len(strCallbackInfo)
-            MCPDebugLog "APIAsync: CallbackInfo=" & Left$(strCallbackInfo, 200)
 
             ' Determine timeout based on operation type
             Select Case strMethod
@@ -599,14 +602,16 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
                     lngTimeoutMs = 300000  ' 5 minutes
             End Select
 
-            ' Use timer to spawn async operation
-            ' The timer callback will read the callback info and start the operation
+            ' The callback is stored with the admitted timer, never before admission.
             If Not IsMissing(varArg2) Then
-                SetTimer "APIAsyncOperation", strMethod, CStr(varArg1) & "|" & CStr(varArg2)
+                If Not TrySetTimer("APIAsyncOperation", strMethod, CStr(varArg1) & "|" & CStr(varArg2), _
+                    strCallbackInfo:=strCallbackInfo) Then GoTo TimerFailed
             ElseIf Not IsMissing(varArg1) Then
-                SetTimer "APIAsyncOperation", strMethod, CStr(varArg1)
+                If Not TrySetTimer("APIAsyncOperation", strMethod, CStr(varArg1), _
+                    strCallbackInfo:=strCallbackInfo) Then GoTo TimerFailed
             Else
-                SetTimer "APIAsyncOperation", strMethod, vbNullString
+                If Not TrySetTimer("APIAsyncOperation", strMethod, vbNullString, _
+                    strCallbackInfo:=strCallbackInfo) Then GoTo TimerFailed
             End If
 
             ' Return async response immediately
@@ -633,21 +638,78 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
             APIAsync = modJsonConverter.ConvertToJson(dResult)
     End Select
 
+    GoTo CleanUp
+
+TimerFailed:
+    APIAsync = AsyncRequestFailure(strCallbackInfo, _
+        T("Unable to start the callback timer for {0}.", var0:=strMethod))
+
 CleanUp:
-    IsRunning = False
-    m_blnRedirecting = False
+    If blnOwnsEntry Then
+        IsRunning = False
+        m_blnRedirecting = False
+    End If
     RestoreErrorBreaks
     Exit Function
 
 ErrHandler:
-    ' An error occurred so we need to make it available for further attempts
-    ' but do not handle the error.
-    IsRunning = False
-    m_blnRedirecting = False
-    RestoreErrorBreaks
+    ' Admission errors belong to this incoming caller, never the running MCP singleton.
+    lngErr = Err.Number
+    strErr = Err.Description
+    Err.Clear
+    APIAsync = AsyncRequestFailure(strCallbackInfo, strErr, lngNumber:=lngErr)
+    Resume CleanUp
 
-    ' Re-throw
-    Err.Raise Err.Number, Err.Source, Err.Description, Err.HelpFile, Err.HelpContext
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : APIDispatchBusy
+' Purpose   : Timer admission must also see a synchronous API that is yielding.
+'---------------------------------------------------------------------------------------
+Public Function APIDispatchBusy() As Boolean
+    APIDispatchBusy = m_blnAPIRunning
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RefuseAsyncRequest
+' Purpose   : Return and post this request's refusal without borrowing a running root,
+'           : callback, journal, terminal flag, or log path.
+'---------------------------------------------------------------------------------------
+Public Function RefuseAsyncRequest(ByVal strCallbackInfo As String, ByVal strMethod As String) As String
+    Dim strPattern As String
+    strPattern = ERR_OPERATION_ALREADY_RUNNING
+    If RefusalReason = rrSelfDispatch Then strPattern = "api_self_dispatch"
+    RefuseAsyncRequest = AsyncRequestFailure(strCallbackInfo, _
+        RefuseReentrantCall(strMethod, "APIAsync", RefusalReason), strPattern)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : AsyncRequestFailure
+' Purpose   : An incoming request owns its failure emitter. Do not use RefusalJson or
+'           : RuntimeErrorJson here: they read or post through the shared operation.
+'---------------------------------------------------------------------------------------
+Public Function AsyncRequestFailure(ByVal strCallbackInfo As String, ByVal strMessage As String, _
+    Optional ByVal strPattern As String, Optional ByVal lngNumber As Long) As String
+
+    Dim dResult As New Dictionary
+    Dim cCallback As New clsMCP
+
+    dResult.Add "success", False
+    dResult.Add "error", strMessage
+    If Len(strPattern) > 0 Then
+        dResult.Add "error_pattern", strPattern
+        dResult.Add "api_refused", True
+    End If
+    If lngNumber <> 0 Then
+        dResult.Add "errorNumber", lngNumber
+        dResult.Add "runtime_error", strMessage
+    End If
+    AsyncRequestFailure = ConvertToJson(dResult)
+    cCallback.RegisterCallback strCallbackInfo
+    If cCallback.IsActive Then cCallback.PostCallback "error", -1, -1, strMessage, dResult
 
 End Function
 
