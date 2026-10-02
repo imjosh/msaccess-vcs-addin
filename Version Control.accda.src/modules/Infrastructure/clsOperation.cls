@@ -670,9 +670,10 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     ' UpdateRegistry saves it so RestoreFromRegistry can reopen it. Under a caller-owned
     ' session policy the root still opens its own scope, with that policy, so its
     ' blocked flag and decisions start empty and do not carry into the next root.
+    ' Mode-only noninteractive callers need the same ownership even without a frame.
     If intPolicy <> edpAsk Then
         Scope.OpenScope eimNonInteractive, intPolicy, True
-    ElseIf Scope.InNonInteractiveScope Then
+    ElseIf Scope.InteractionMode = eimNonInteractive Or Scope.InNonInteractiveScope Then
         Scope.OpenScope eimNonInteractive, Scope.DecisionPolicy, True
     End If
 

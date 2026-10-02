@@ -1,6 +1,7 @@
 # Noninteractive add-in operations
 
-Interactive use is unchanged. A caller opts in by passing a decision policy.
+Interactive use is unchanged. A caller opts in by passing a decision policy
+or selecting noninteractive mode with `SetInteractionMode(2)`.
 
 ```vba
 VCS.MergeBuild "block"
@@ -138,6 +139,13 @@ the call arrived back in the project that sent it, the pattern is
 and 2 (noninteractive). Every response includes `success`, `requested_mode`, and
 `effective_mode`; success means the requested mode is effective when the call
 returns. Selecting a mode starts no operation and posts no completion callback.
+
+An operation acquired after `SetInteractionMode(2)` opens its own interaction
+scope even when no policy frame exists. Its blocked flag and decision journal
+are isolated and released on completion, cancellation, or runtime error. The
+terminal result retains that operation's decisions; the next operation starts
+without them. Mode-only operations finish in normal mode. A caller-owned session
+policy stays noninteractive until explicitly cleared or replaced, as above.
 
 ```json
 {"success":true,"requested_mode":0,"effective_mode":0}
