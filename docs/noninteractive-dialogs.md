@@ -1,5 +1,7 @@
 # Noninteractive add-in operations
 
+> Release compatibility policy (owner decision, 2026-10-02): every add-in release changes its version. The supported release version defines the API contract; capability probing is not required to establish release compatibility. The spec assumes the server checks the installed add-in version and refuses unsupported releases before starting operations. The minimum supported release version must be stated when the release is assigned; do not infer it from a development rebuild. Per-call mode and policy acknowledgments still confirm the requested state and remain required. This policy supersedes earlier statements requiring capability checks instead of a version gate. It is a specification change, not evidence that version enforcement is already implemented.
+
 Interactive use is unchanged. A caller opts in by passing a decision policy
 or selecting noninteractive mode with `SetInteractionMode(2)`.
 
@@ -88,9 +90,10 @@ a file, in a folder that exists, that is not the add-in itself. Otherwise it
 returns an empty string and the outcome arrives through the completion callback.
 A successful full build adds `output_path`, the file it left open, to that
 callback. `APICapabilities` returns
-`{"success":true,"capabilities":["build_as_paths"]}`. A rebuild does not change
-the version number, so a client checks this before calling `BuildAs` with paths
-and refuses an add-in that lacks the procedure or the name. Call it directly with
+`{"success":true,"capabilities":["build_as_paths"]}`. This probe remains available
+for development builds and clients that use feature discovery. Released add-ins
+are identified by their release version; this probe is not required to establish
+release compatibility. Call it directly with
 `Application.Run "<add-in path>.APICapabilities"`, not through `API`: on an
 add-in that predates it, Access refuses the call with a COM error (2517),
 whereas `API` asked for a missing method stops on a modal "Run-time error 438"
@@ -176,20 +179,19 @@ leaves the state intact.
 
 Callers that depend on confirmed interactive mode require an **A24 build or
 later** and must check the structured result before starting work. Earlier builds
-return VBA `Empty`, which does not establish acceptance. This development
-contract uses capability detection rather than a numeric release-version gate:
-require `success: true` and `effective_mode` equal to the requested mode; missing,
-empty, or malformed responses require an add-in upgrade. Existing VBA calls
-that ignore the return value continue to work. Rebuilding does not increment the
-add-in's version, so its current version number alone cannot identify this
-capability. M32 owns consumption of this contract on the MCP side.
+return VBA `Empty`, which does not establish acceptance. Require `success: true`
+and `effective_mode` equal to the requested mode to confirm the requested state;
+missing, empty, or malformed responses do not confirm it. Existing VBA calls
+that ignore the return value continue to work. Release compatibility is based
+on the supported release version. M32 owns consumption of the acknowledgment
+contract on the MCP side.
 
 `SetOperationPolicy` follows the same rule: callers dispatch only on
 `{success: true, policy: <the requested policy, lower-cased>}`, and
 `ClearOperationPolicy` counts as cleared only on `{success: true}`. An older
 add-in returns VBA `Empty` (for example while busy), which acknowledges neither;
-MCP reports that as `policy_unconfirmed` (M40). This too is capability
-detection, not a version gate.
+MCP reports that as `policy_unconfirmed` (M40). This acknowledgment confirms
+operation state independently of release compatibility.
 
 `ImportObject` and `ExportObject` take no policy argument; they run under
 the session policy. The MCP sets it around each call. `ImportObject` reads
