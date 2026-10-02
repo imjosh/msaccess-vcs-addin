@@ -68,6 +68,17 @@ names `results_path` only when this run saved results. When the run finished but
 the results file could not be written, the callback carries `results_error`
 (the logged write error) instead.
 
+A compile-gated test run alone reports `project_not_compiled`, `success: false`
+and `cancelled: false`. If a setup prompt was blocked, `decision_required` is
+primary and the compile text/pattern survive as `run_error` and
+`run_error_pattern: project_not_compiled`, as defined in the shared contract
+section 2 (A35). Callbacks also keep available partial results inline when a
+results file cannot be saved. `results_error`, the journal and this operation's
+log remain attached. Completion captures them before restoring owned scopes,
+trapping and infrastructure; its retained callback emitter submits once after
+restoration. A payload-construction fault adds `completion_error` and
+`completion_error_number` without replacing the operation's primary diagnosis.
+
 `BuildAs(source, output)` builds the source folder to the output file with no
 picker. With no arguments (the ribbon) it keeps its pickers. Given only one path,
 or a path it cannot use, it starts nothing and returns `invalid_build_path`

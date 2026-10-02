@@ -742,3 +742,29 @@ ErrHandler:
     OverlayTestResultsSaveError = ConvertToJson(dResult)
 
 End Function
+
+' Propagate a completion-construction failure to the synchronous test caller.
+' Preserve its primary decision/runner error and available test results.
+Public Function OverlayTestCompletionFailure(ByVal strJson As String, _
+    ByVal dCompletion As Dictionary) As String
+    Dim dResult As Object
+    OverlayTestCompletionFailure = strJson
+    If dCompletion Is Nothing Then Exit Function
+    If Not dCompletion.Exists("completion_error") Then Exit Function
+    LogUnhandledErrors
+    On Error GoTo Fallback
+    Set dResult = ParseJson(strJson)
+    GoTo ApplyFailure
+Fallback:
+    Resume MinimalResult
+MinimalResult:
+    On Error Resume Next
+    Set dResult = New Dictionary
+ApplyFailure:
+    dResult("success") = False
+    dResult("allPassed") = False
+    dResult("completion_error") = dCompletion("completion_error")
+    dResult("completion_error_number") = dCompletion("completion_error_number")
+    If Not dResult.Exists("error") Then dResult("error") = dCompletion("error")
+    OverlayTestCompletionFailure = ConvertToJson(dResult)
+End Function

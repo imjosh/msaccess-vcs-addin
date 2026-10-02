@@ -3497,7 +3497,10 @@ CleanUp:
         Log.Active = blnLogWasActive
         Log.SuppressDebugOutput = False
     End If
-    If Not cRoot Is Nothing Then cRoot.Complete intResult
+    If Not cRoot Is Nothing Then
+        cRoot.Complete intResult
+        ExecuteTests = OverlayTestCompletionFailure(ExecuteTests, Operation.LastCompletion)
+    End If
     Exit Function
 
 ErrHandler:

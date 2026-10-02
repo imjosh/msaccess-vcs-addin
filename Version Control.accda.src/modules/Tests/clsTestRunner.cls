@@ -26,7 +26,6 @@ Private Const GlobalTestSetupProc As String = "GlobalTestSetup"
 Private Const GlobalTestTeardownProc As String = "GlobalTestTeardown"
 Private Const MCP_SLOW_MS As Long = 1000
 Private Const MCP_DOT_FLUSH_SEC As Currency = 0.2
-Private Const ERR_PROJECT_NOT_COMPILED As String = "project_not_compiled"
 
 ' Runner state machine
 Public Enum eTestRunnerState
@@ -76,6 +75,11 @@ Private Type udtTestRunner
     LastMcpDotFlush As Currency
 End Type
 Private this As udtTestRunner
+
+' Instance-owned, one-shot seams for orchestration regressions. Arm in setup;
+' no loaded-project mutation or invalid VBA is needed to reach the compile gate.
+Private m_blnCompileFailureForTest As Boolean
+Private m_strResultsFileForTest As String
 
 
 '---------------------------------------------------------------------------------------
@@ -362,7 +366,7 @@ Public Sub RunSelected(colTestKeys As Collection)
     DoEvents
     On Error GoTo 0
     If modTestRunnerUI.WebRunnerActive() Then modTestRunnerUI.RefocusWebRunner
-    If Not Application.IsCompiled Then
+    If CompileCheckFailed() Then
         modTestRunnerDiag.Diag "run.skip", "not compiled"
         this.RunError = T("Project has compile errors. Please resolve before running tests.")
         this.RunErrorPattern = ERR_PROJECT_NOT_COMPILED
@@ -673,6 +677,20 @@ End Function
 '           : No-op when the procedure is absent. Hook errors are logged and non-fatal.
 '---------------------------------------------------------------------------------------
 '
+Friend Property Let CompileFailureForTest(ByVal blnFail As Boolean)
+    m_blnCompileFailureForTest = blnFail
+End Property
+
+Friend Property Let ResultsFileForTest(ByVal strPath As String)
+    m_strResultsFileForTest = strPath
+End Property
+
+Private Function CompileCheckFailed() As Boolean
+    CompileCheckFailed = m_blnCompileFailureForTest Or Not Application.IsCompiled
+    m_blnCompileFailureForTest = False
+End Function
+
+
 Public Sub InvokeGlobalTestSetup()
     InvokeOptionalGlobalHook GlobalTestSetupProc
 End Sub
@@ -1026,6 +1044,8 @@ Public Function SaveResults() As String
         Format$(Now, "yyyymmdd\_hhnnss") & "_" & _
         Format$(Timer * 1000 Mod 1000, "000") & ".json"
 
+    If Len(m_strResultsFileForTest) > 0 Then strFile = m_strResultsFileForTest
+    m_strResultsFileForTest = vbNullString
     this.LastResultsPath = vbNullString
     modTestRunnerDiag.DiagBegin "save.results"
     If WriteFileVerified(GetResultsAsJson, strFile, this.ResultsSaveError) Then

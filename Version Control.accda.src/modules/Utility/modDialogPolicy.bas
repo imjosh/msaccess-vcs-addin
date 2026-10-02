@@ -23,6 +23,7 @@ Public Const ERR_MERGE_NOT_AVAILABLE As String = "merge_not_available"
 Public Const ERR_OPERATION_ALREADY_RUNNING As String = "operation_already_running"
 Public Const ERR_INVALID_BUILD_PATH As String = "invalid_build_path"
 Public Const ERR_DECISION_REQUIRED As String = DECISION_REQUIRED
+Public Const ERR_PROJECT_NOT_COMPILED As String = "project_not_compiled"
 
 
 ' The low bits of a MsgBox style select the button set (vbOKOnly to vbRetryCancel).
@@ -504,6 +505,23 @@ End Function
 '           : a prompt must not leave success true.
 '---------------------------------------------------------------------------------------
 '
+Public Sub SetDecisionRequiredOutcome(ByVal dResult As Object, ByVal colDecisions As Collection)
+    ' Preserve the runner failure before assigning the primary decision fields.
+    ' Runtime exceptions already have runtime_error/errorNumber and keep that shape.
+    If dResult.Exists("error_pattern") Then
+        If dResult("error_pattern") = ERR_PROJECT_NOT_COMPILED Then
+            dResult("run_error_pattern") = dResult("error_pattern")
+            If dResult.Exists("error") Then dResult("run_error") = dResult("error")
+        End If
+    End If
+    dResult("success") = False
+    dResult("error_pattern") = ERR_DECISION_REQUIRED
+    dResult("decision_required") = True
+    dResult("error") = DecisionRequiredMessage()
+    Set dResult("decisions") = colDecisions
+End Sub
+
+
 Public Function OverlayDecisionRequired(ByVal strJson As String) As String
 
     Dim dParsed As Object
@@ -517,11 +535,7 @@ Public Function OverlayDecisionRequired(ByVal strJson As String) As String
     End If
 
     Set dParsed = ParseJson(strJson)
-    dParsed("success") = False
-    dParsed("error_pattern") = ERR_DECISION_REQUIRED
-    dParsed("decision_required") = True
-    dParsed("error") = DecisionRequiredMessage()
-    Set dParsed("decisions") = Operation.Decisions
+    SetDecisionRequiredOutcome dParsed, Operation.Decisions
     OverlayDecisionRequired = ConvertToJson(dParsed)
     Exit Function
 
