@@ -42,7 +42,7 @@ vcs_rebuild_addin("<source folder>")
 The MCP server derives the development copy beside that folder, launches
 `RebuildAddIn`, and registers a callback operation. The callback URL and
 operation ID pass through `Worker.vbs` to the builder Access process, which
-invokes the same `APIAsync(..., "Build", source)` entry point as an ordinary
+establishes its own mutual session and invokes `APIExecuteAsync(session, callback, "Build", source)` as an ordinary
 database build. `Log.Add` and `Log.Progress` therefore provide detailed output
 without a second logging implementation. Internally, the tool uses the status
 file for the later compile/install phases and terminal result. For guaranteed
@@ -217,3 +217,9 @@ says so.
   building from source.
 - It does not close, quit, or terminate any Access process. If another one holds
   a file it needs, it refuses and names both the process and the file.
+
+## X17 compatibility admission
+
+The launcher must obtain mutual admission before registering its rebuild callback. The disconnected builder establishes a fresh session for its own Access/add-in incarnation; it does not inherit launcher approval. An automated builder without callbacks uses the same handshake and synchronous session envelope. Manual rebuilds retain their manual route.
+
+The coordinated development identities are add-in `6.0.0-dev.17` and MCP `0.3.0-dev.17`, protocol `msaccess-vcs.session/1`. They are assigned, unpublished versions. To migrate from the X16 development pair, use its recorded server source to perform the documented exported-source rebuild once; then reconnect using the X17 server. Do not disable admission or patch a loaded library. See [compatibility guidance](../../msaccess-vcs-mcp/docs/RELEASE_COMPATIBILITY.md) and [X17 evidence](../../verification/X17/README.md).

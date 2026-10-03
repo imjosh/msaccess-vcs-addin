@@ -4134,6 +4134,23 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
 End Function
 
 
+ ' X17: even raw target calls enter through the accepted command dispatcher.
+Public Function CallVBA(ByVal strFunction As String, ByVal strArguments As String) As Variant
+    Dim arguments As Collection
+    If DebugMode(True) Then On Error GoTo 0 Else On Error GoTo Failed
+    Set arguments = ParseJson(strArguments)
+    Select Case arguments.Count
+        Case 0: CallVBA = Application.Run(strFunction)
+        Case 1: CallVBA = Application.Run(strFunction, arguments(1))
+        Case 2: CallVBA = Application.Run(strFunction, arguments(1), arguments(2))
+        Case 3: CallVBA = Application.Run(strFunction, arguments(1), arguments(2), arguments(3))
+        Case Else: CallVBA = AsyncRequestFailure(vbNullString, T("At most three arguments are supported."))
+    End Select
+    Exit Function
+Failed:
+    CallVBA = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
+End Function
+
 '---------------------------------------------------------------------------------------
 ' Procedure : Class_Initialize
 ' Author    : Adam Waller

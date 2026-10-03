@@ -45,8 +45,9 @@ Public Sub WinAPITimerCallback()
     ' Read callback info before clearing (needed for APIAsyncOperation)
     Dim strCallbackInfo As String
     strCallbackInfo = GetSetting(PROJECT_NAME, "Timer", "CallbackInfo")
+    Dim strAdmission As String
+    strAdmission = GetSetting(PROJECT_NAME, "Timer", "CompatibilityEnvelope")
     strOpToken = GetSetting(PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN)
-    MCPDebugLog "WinAPITimerCallback: Command=" & strCommand & ", CallbackInfo length=" & Len(strCallbackInfo)
 
     ' Clear values from registry (In case an operation sets another timer)
     ClearTimerRequest
@@ -88,7 +89,7 @@ Public Sub WinAPITimerCallback()
 
         Case "APIAsyncOperation"
             ' Handle async operation with MCP callbacks
-            HandleAPIAsyncOperation strParam1, strParam2, strCallbackInfo
+            HandleAPIAsyncOperation strParam1, strParam2, strCallbackInfo, strAdmission
 
         Case "QuitForRebuild"
             ' Close this instance so the rebuild worker can replace the files it holds.
@@ -165,6 +166,7 @@ Public Function TrySetTimer(ByVal strOperation As String, _
 
     SaveSetting PROJECT_NAME, "Timer", "Param1", strParam1
     SaveSetting PROJECT_NAME, "Timer", "Param2", strParam2
+    SaveSetting PROJECT_NAME, "Timer", "CompatibilityEnvelope", CurrentCompatibilityEnvelope
     SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
     SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, strOpToken
     SaveSetting PROJECT_NAME, "Timer", "Operation", strOperation
@@ -191,6 +193,7 @@ End Function
 ' Purpose   : Consume or roll back the admitted request before another can be armed.
 '---------------------------------------------------------------------------------------
 Private Sub ClearTimerRequest()
+    SaveSetting PROJECT_NAME, "Timer", "CompatibilityEnvelope", vbNullString
     SaveSetting PROJECT_NAME, "Timer", "Operation", vbNullString
     SaveSetting PROJECT_NAME, "Timer", "Param1", vbNullString
     SaveSetting PROJECT_NAME, "Timer", "Param2", vbNullString
@@ -226,7 +229,20 @@ End Sub
 '           : one terminal callback for the call, even when no root was acquired.
 '---------------------------------------------------------------------------------------
 '
-Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strCallbackInfo As String)
+Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strCallbackInfo As String, strAdmission As String)
+
+    Dim strRefused As String
+    strRefused = EnterCompatibilitySession(strAdmission)
+    If Len(strRefused) > 0 Then
+        PostCompatibilityRefusal strCallbackInfo, strRefused
+        Exit Sub
+    End If
+    strRefused = CompatibilityCommandRefusal(strMethod)
+    If Len(strRefused) > 0 Then
+        PostCompatibilityRefusal strCallbackInfo, strRefused
+        LeaveCompatibilitySession
+        Exit Sub
+    End If
 
     SuppressErrorBreaks
     LogUnhandledErrors
@@ -247,6 +263,7 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
     ' Refuse before registering its callback or changing the owner's source.
     If APIDispatchBusy Or Operation.IsActive Then
         RefuseAsyncRequest strCallbackInfo, strMethod
+        LeaveCompatibilitySession
         RestoreErrorBreaks
         Exit Sub
     End If
@@ -291,6 +308,7 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
     blnRootPending = (intStatusBefore = eosReady And Operation.Status <> eosReady)
     PostUnreportedOutcome cCallback, strMethod, varResult, blnRootPending
 
+    LeaveCompatibilitySession
     RestoreErrorBreaks
     Exit Sub
 
@@ -310,6 +328,7 @@ ErrHandler:
     Else
         AsyncRequestFailure strCallbackInfo, strErr, lngNumber:=lngErr
     End If
+    LeaveCompatibilitySession
     RestoreErrorBreaks
     ' Never raise from a Windows timer callback after reporting its terminal outcome.
 End Sub

@@ -426,6 +426,19 @@ Public Function API(strMethod As String, _
     Dim strLibName As String
     Dim strRunCmd As String
 
+    If strMethod = "GetVCSVersion" Then
+        API = CStr(CodeDb.Properties("AppVersion"))
+        Exit Function
+    End If
+    If strMethod = "GetCapabilities" Then
+        API = APICapabilities()
+        Exit Function
+    End If
+    If Not CompatibilityDispatchAllowed Then
+        API = SessionFailure("missing_stale_or_foreign_session")
+        Exit Function
+    End If
+
     SuppressErrorBreaks
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -436,17 +449,28 @@ Public Function API(strMethod As String, _
         Exit Function
     End If
 
+    If Operation.IsActive Or TimerIsPending Then
+        Select Case strMethod
+            Case "GetOption", "GetLogContent", "GetExportFolder", "GetProjectName", "IsVBACompiled", "IsDatabaseOpen"
+                ' Read without changing the active owner's source or policy.
+            Case Else
+                API = RefuseReentrantCall(strMethod, "API", rrNested)
+                RestoreErrorBreaks
+                Exit Function
+        End Select
+    End If
+    CountCompatibilityDispatch
     m_blnAPIRunning = True
 
-    ' Set operation source before any operations
-    Operation.Source = eosExternalAPI
+    ' An active root retains its own attribution even during admitted reads.
+    If Not Operation.IsActive Then Operation.Source = eosExternalAPI
 
     ' Make sure we are not attempting to run this from the current database when making
     ' changes to the add-in itself. (It will re-run the command through the add-in.)
     ' Only redirect when the installed add-in is a *different* file than the one running:
     ' where they are the same, the redirect re-enters this function and refuses itself.
     ' See RedirectTargetIsSelf.
-    If RunningOnLocal() And Not RedirectTargetIsSelf() Then
+    If RunningOnLocal() And Not RedirectTargetIsSelf() And Not CompatibilityDispatchAllowed Then
         ' When running from within the add-in database, we need to use the full path
         ' to ensure we call the add-in version, not a local version.
         strLibName = GetRunCmdAddInFullLibName
@@ -490,6 +514,7 @@ Public Function API(strMethod As String, _
 
     ' Return the result (will be Empty for Subs)
     API = varResult
+    RememberCompatibilityPolicy strMethod, varResult
 
 CleanUp:
     m_blnAPIRunning = False
@@ -536,6 +561,11 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     Dim lngErr As Long
     Dim strErr As String
 
+    If Not CompatibilityDispatchAllowed Then
+        APIAsync = PostCompatibilityRefusal(strCallbackInfo, SessionFailure("missing_stale_or_foreign_session"))
+        Exit Function
+    End If
+
     SuppressErrorBreaks
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -552,7 +582,7 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     ' Make sure we are not attempting to run this from the current database when making
     ' changes to the add-in itself. (It will re-run the command through the add-in.)
     ' Same self-dispatch guard as API -- see RedirectTargetIsSelf.
-    If RunningOnLocal() And Not RedirectTargetIsSelf() Then
+    If RunningOnLocal() And Not RedirectTargetIsSelf() And Not CompatibilityDispatchAllowed Then
         ' When running from within the add-in database, we need to use the full path
         ' to ensure we call the add-in version, not a local version.
         strLibName = GetRunCmdAddInFullLibName

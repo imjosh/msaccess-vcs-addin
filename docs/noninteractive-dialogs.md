@@ -359,3 +359,9 @@ open `frmVCS*` forms when Access is responsive. Refusals use the patterns
   finished results window.
 
 `DoCmd.SetWarnings` is not used to hide these dialogs.
+
+## X17 session admission
+
+Automation uses `APIExecute` / `APIExecuteAsync` with an accepted session envelope. Missing, stale or foreign sessions fail before operation, policy, mode or timer state changes. Deferred dispatch validates again before it starts. Handshake approval does not replace per-call policy/mode acknowledgments. A foreign session cannot clear another caller’s idle operation policy; disconnect clears only the owning idle policy; expiry preserves policy-owner entries. Running work retains its existing callback, cancellation and root ownership.
+
+Legacy `API` / `APIAsync` operational calls refuse without admission; version/capability metadata remain diagnostic exceptions. Manual/ribbon and direct class/helper routes remain manual and have an explicit unfinished automation-bypass qualification in [X17](../../verification/X17/README.md).
