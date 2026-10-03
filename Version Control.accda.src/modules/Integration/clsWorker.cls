@@ -1562,7 +1562,9 @@ Function BuildAndInstall(strSourcePath, strUnattended, strStatusFile, _
             Else
                 strBuildResult = objNewAccess.Run(strInstalledLib & ".APIExecute", _
                     strEnvelope, "Build", strSourcePath)
-                If Not JsonSuccess(strBuildResult) Then
+                ' Build is a Sub: Empty acknowledges dispatch. The completed build
+                ' log below remains the outcome gate; a structured refusal fails here.
+                If Len(CStr(strBuildResult)) > 0 And Not JsonSuccess(strBuildResult) Then
                     Err.Raise 1001, "BuildAndInstall", "The admitted build failed: " & strBuildResult
                 End If
             End If

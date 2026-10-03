@@ -222,4 +222,6 @@ says so.
 
 The launcher must obtain mutual admission before registering its rebuild callback. The disconnected builder establishes a fresh session for its own Access/add-in incarnation; it does not inherit launcher approval. An automated builder without callbacks uses the same handshake and synchronous session envelope. Manual rebuilds retain their manual route.
 
+The callback-free `Build` call returns Empty because it is a VBA Sub. That confirms dispatch only. The worker waits for its completed build log and compile result before advancing; structured admission or dispatch refusals stop it immediately.
+
 The coordinated development identities are add-in `6.0.0-dev.17` and MCP `0.3.0-dev.17`, protocol `msaccess-vcs.session/1`. They are assigned, unpublished versions. To migrate from the X16 development pair, use its recorded server source to perform the documented exported-source rebuild once; then reconnect using the X17 server. Do not disable admission or patch a loaded library. See [compatibility guidance](../../msaccess-vcs-mcp/docs/RELEASE_COMPATIBILITY.md) and [X17 evidence](../../verification/X17/README.md).

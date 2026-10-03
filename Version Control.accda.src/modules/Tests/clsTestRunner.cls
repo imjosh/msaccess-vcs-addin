@@ -477,7 +477,9 @@ Public Sub RunSelected(colTestKeys As Collection)
             End If
 
             On Error Resume Next
-            CallByName obj, strProcName, VbMethod
+            ' Resolve class/form types in the tested project. Cross-project CallByName
+            ' can fail before a form-policy test starts when both add-in copies are loaded.
+            Application.Run BuildRunCmd("TestClassInvoke"), obj, strProcName
             lngErrNum = Err.Number
             strErrDesc = Err.Description
             If lngErrNum <> 0 Then Err.Clear
@@ -1441,6 +1443,8 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
     On Error GoTo 0
     If cmp Is Nothing Then Exit Sub
 
+    EnsureClassInvoker cmp
+
     ' Find the BEGIN/END markers
     lngBegin = 0
     lngEnd = 0
@@ -1478,6 +1482,19 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
     End If
     cmp.CodeModule.InsertLines lngBegin + 1, strExpected
 
+End Sub
+
+
+' Invoke in the tested project so Access resolves its class/form type information
+' there, rather than through the installed runner's duplicate project types.
+Private Sub EnsureClassInvoker(cmp As VBIDE.VBComponent)
+    Dim strCode As String
+    strCode = cmp.CodeModule.Lines(1, cmp.CodeModule.CountOfLines)
+    If InStr(1, strCode, "Public Sub TestClassInvoke(", vbTextCompare) > 0 Then Exit Sub
+    cmp.CodeModule.InsertLines cmp.CodeModule.CountOfLines + 1, vbCrLf & _
+        "Public Sub TestClassInvoke(ByVal obj As Object, ByVal strProcName As String)" & vbCrLf & _
+        "    CallByName obj, strProcName, VbMethod" & vbCrLf & _
+        "End Sub" & vbCrLf
 End Sub
 
 

@@ -25,6 +25,13 @@ runs there, acquires the root lease, and owns the log, the console, and the resu
 JSON. The **tests** run in the current project, reached by `Application.Run` through
 `clsTestRunner.BuildRunCmd`, because the runner scans `CurrentVBProject`.
 
+Class tests are created by the target's `TestClassFactory` and invoked through
+the generated `TestClassInvoke` helper in that same project. Access can reject
+cross-project `CallByName` before a form-policy test begins when the development
+and installed add-in expose duplicate class/form types. Invocation stays in the
+tested project; the installed runner still records errors and assertions and
+releases each class instance for teardown.
+
 For a user database those are obviously different projects. For this repository they
 are two loaded copies of the *same* project — `Version Control.accda` open as the
 current database, plus the installed copy under `%AppData%\MSAccessVCS` — both named
