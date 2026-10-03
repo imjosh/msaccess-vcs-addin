@@ -29,7 +29,9 @@ Class tests are created by the target's `TestClassFactory` and invoked through
 the generated `TestClassInvoke` helper in that same project. Access can reject
 cross-project `CallByName` before a form-policy test begins when the development
 and installed add-in expose duplicate class/form types. Invocation stays in the
-tested project; the installed runner still records errors and assertions and
+tested project. The helper catches class errors and returns their number and
+description as a scalar string across `Application.Run`; the installed runner
+still records errors and assertions and
 releases each class instance for teardown.
 
 For a user database those are obviously different projects. For this repository they
