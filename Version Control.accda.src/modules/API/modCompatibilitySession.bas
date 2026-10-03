@@ -12,6 +12,7 @@ Private Const MAX_SESSIONS As Long = 128
 Private Const SESSION_IDLE_MINUTES As Long = 30
 Private m_strInstance As String
 Private m_strLoadedFile As String
+Private m_strLoadedSnapshot As String
 Private m_strEnvelope As String
 Private m_strPolicyOwner As String
 Private m_dSessions As Dictionary
@@ -57,7 +58,7 @@ End Function
 
 ' Tables such as translation contributions are mutable runtime data; their writes
 ' do not replace the loaded VBA library. Track the physical file generation here.
-Private Function LoadedFileIdentity() As String
+Private Function LoadedFileIdentity(Optional ByRef snapshot As String = vbNullString) As String
     Dim handle As LongPtr
     Dim info As FILE_INFORMATION
     Dim path As String
@@ -69,22 +70,44 @@ Private Function LoadedFileIdentity() As String
         LoadedFileIdentity = LCase$(path) & ":" & Hex$(info.Volume) & ":" & _
             Hex$(info.IndexHigh) & ":" & Hex$(info.IndexLow) & ":" & _
             Hex$(info.CreatedHigh) & ":" & Hex$(info.CreatedLow)
+        snapshot = LoadedFileIdentity & ":" & Hex$(info.WrittenHigh) & ":" & _
+            Hex$(info.WrittenLow) & ":" & Hex$(info.SizeHigh) & ":" & Hex$(info.SizeLow)
     End If
     CloseHandle handle
 End Function
 
 Private Function InstanceReady() As Boolean
     Dim identity As String
-    identity = LoadedFileIdentity()
+    Dim snapshot As String
+    identity = LoadedFileIdentity(snapshot)
     If Len(identity) = 0 Then Exit Function
     If Len(m_strInstance) = 0 Then
         m_strInstance = NewInstance()
         m_strLoadedFile = identity
+        m_strLoadedSnapshot = snapshot
         Set m_dSessions = New Dictionary
     End If
     ' Replacement cannot relabel an older loaded project as the new installation.
-    InstanceReady = (Len(m_strInstance) > 0 And identity = m_strLoadedFile)
+    InstanceReady = (Len(m_strInstance) > 0 And identity = m_strLoadedFile And snapshot = m_strLoadedSnapshot)
 End Function
+
+' Trusted internal data writers account for their own table writes. Unknown
+' size/timestamp changes still fail closed, including same-file overwrites.
+' These helpers are not automation commands and do not grant a session.
+Public Function BeginCompatibilityDataWrite() As String
+    If InstanceReady Then BeginCompatibilityDataWrite = m_strLoadedSnapshot
+End Function
+
+Public Sub EndCompatibilityDataWrite(ByVal token As String)
+    Dim identity As String
+    Dim snapshot As String
+    On Error GoTo Finished
+    If Len(token) = 0 Or token <> m_strLoadedSnapshot Then Exit Sub
+    DBEngine.Idle dbRefreshCache
+    identity = LoadedFileIdentity(snapshot)
+    If identity = m_strLoadedFile And Len(snapshot) > 0 Then m_strLoadedSnapshot = snapshot
+Finished:
+End Sub
 
 Public Function APIIdentity() As String
     Dim result As New Dictionary
@@ -214,20 +237,20 @@ Public Function SessionFailure(ByVal reason As String, Optional ByVal version As
     SessionFailure = ConvertToJson(result)
 End Function
 
+Public Function CompatibilitySessionExpired(ByVal touched As Date, ByVal checkedAt As Date, _
+    Optional ByVal ownsPolicy As Boolean = False) As Boolean
+    ' Idle owner policies require explicit owner cleanup (developer decision).
+    CompatibilitySessionExpired = (Not ownsPolicy And checkedAt >= DateAdd("n", SESSION_IDLE_MINUTES, touched))
+End Function
+
 Private Sub PruneSessions()
     Dim key As Variant
     Dim entry As Dictionary
+    Dim ownsPolicy As Boolean
     For Each key In m_dSessions.Keys
         Set entry = m_dSessions(key)
-        If DateDiff("n", entry("touched"), Now) >= SESSION_IDLE_MINUTES Then
-            If m_strPolicyOwner = entry("server_instance") & ":" & entry("connection_id") Then
-                ' A compatibility check must never expire another caller's policy.
-                ' Keep its single bounded entry until its owner clears/disconnects.
-                GoTo NextEntry
-            End If
-            m_dSessions.Remove key
-        End If
-NextEntry:
+        ownsPolicy = (m_strPolicyOwner = entry("server_instance") & ":" & entry("connection_id"))
+        If CompatibilitySessionExpired(entry("touched"), Now, ownsPolicy) Then m_dSessions.Remove key
     Next
 End Sub
 
@@ -326,8 +349,10 @@ End Sub
 
 Public Function APICompatibilityCounters() As String
     ' Read-only diagnostics; no session is established by inspecting these counters.
+    Dim count As Long
+    If Not (m_dSessions Is Nothing) Then count = m_dSessions.Count
     APICompatibilityCounters = "{""handshakes"":" & m_lngHandshakes & _
-        ",""validations"":" & m_lngValidations & ",""dispatches"":" & m_lngDispatches & "}"
+        ",""validations"":" & m_lngValidations & ",""dispatches"":" & m_lngDispatches & ",""sessions"":" & count & "}"
 End Function
 
 Public Function APIDisconnectSession(ByVal envelope As String) As String
@@ -362,13 +387,13 @@ Public Function APIExecute(ByVal envelope As String, ByVal method As String, _
         Exit Function
     End If
     If Not IsMissing(arg3) Then
-        APIExecute = API(method, arg1, arg2, arg3)
+        APIExecute = API(method, arg1, arg2, arg3, strSessionEnvelope:=envelope)
     ElseIf Not IsMissing(arg2) Then
-        APIExecute = API(method, arg1, arg2)
+        APIExecute = API(method, arg1, arg2, strSessionEnvelope:=envelope)
     ElseIf Not IsMissing(arg1) Then
-        APIExecute = API(method, arg1)
+        APIExecute = API(method, arg1, strSessionEnvelope:=envelope)
     Else
-        APIExecute = API(method)
+        APIExecute = API(method, strSessionEnvelope:=envelope)
     End If
     RememberCompatibilityPolicy method, APIExecute
     LeaveCompatibilitySession
@@ -394,11 +419,11 @@ Public Function APIExecuteAsync(ByVal envelope As String, ByVal callback As Stri
         Exit Function
     End If
     If Not IsMissing(arg2) Then
-        APIExecuteAsync = APIAsync(callback, method, arg1, arg2)
+        APIExecuteAsync = APIAsync(callback, method, arg1, arg2, strSessionEnvelope:=envelope)
     ElseIf Not IsMissing(arg1) Then
-        APIExecuteAsync = APIAsync(callback, method, arg1)
+        APIExecuteAsync = APIAsync(callback, method, arg1, strSessionEnvelope:=envelope)
     Else
-        APIExecuteAsync = APIAsync(callback, method)
+        APIExecuteAsync = APIAsync(callback, method, strSessionEnvelope:=envelope)
     End If
     LeaveCompatibilitySession
     Exit Function

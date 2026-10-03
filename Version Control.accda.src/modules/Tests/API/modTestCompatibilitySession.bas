@@ -111,6 +111,8 @@ Private Function NewRequest(ByVal version As String) As Dictionary
 End Function
 
 Public Sub ForeignSessionCannotClearCallerPolicy()
+    Dim priorSource As eOperationSource
+    priorSource = Operation.Source
     Dim first As Dictionary, second As Dictionary, result As Dictionary
     Dim before As String
     Set first = NewRequest(SERVER_DEVELOPMENT)
@@ -131,4 +133,96 @@ Public Sub ForeignSessionCannotClearCallerPolicy()
     TestAssert result("success") = True
     APIDisconnectSession ConvertToJson(first)
     APIDisconnectSession ConvertToJson(second)
+    Operation.Source = priorSource
+End Sub
+
+Public Sub IdleExpiryHonorsExplicitPolicyOwner()
+    Dim touched As Date
+    Dim before As String
+    touched = #1/1/2026 12:00:00 PM#
+    before = OperationState
+    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", 29, touched))
+    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("s", 1799, touched))
+    TestAssert CompatibilitySessionExpired(touched, DateAdd("s", 1800, touched))
+    TestAssert CompatibilitySessionExpired(touched, DateAdd("n", 30, touched))
+    TestAssert CompatibilitySessionExpired(touched, DateAdd("n", 300, touched))
+    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", -1, touched))
+    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", 30, touched), True)
+    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", 300, touched), True)
+    TestAssert OperationState = before
+End Sub
+
+' Native reset probe helper, excluded from automatic test discovery by its argument.
+' It only permits an idle, copied fixture library, never the installed add-in.
+Public Function NativeLibraryResetForTest(ByVal expectedLibrary As String) As String
+    If StrComp(CodeProject.FullName, expectedLibrary, vbTextCompare) <> 0 Or _
+        InStr(1, CodeProject.Path, "identity-disposable-", vbTextCompare) = 0 Or _
+        StrComp(CodeProject.FullName, GetInstalledAddInFileName(), vbTextCompare) = 0 Then
+        NativeLibraryResetForTest = SessionFailure("native_reset_fixture_unconfirmed")
+        Exit Function
+    End If
+    If Operation.IsActive Or TimerIsPending Or Len(CurrentCompatibilityEnvelope()) > 0 Or _
+        Operation.InteractionMode = eimNonInteractive Then
+        NativeLibraryResetForTest = SessionFailure("native_reset_owner_active")
+        Exit Function
+    End If
+    End
+End Function
+
+' Read-only snapshot used only on a copied owner fixture, never an installed host.
+Public Function NativeOwnerSnapshotForTest(ByVal expectedLibrary As String) As String
+    Dim result As New Dictionary
+    If Not NativeOwnerFixtureMatches(expectedLibrary) Then
+        NativeOwnerSnapshotForTest = SessionFailure("native_owner_fixture_unconfirmed")
+        Exit Function
+    End If
+    result.Add "root_token", Operation.CurrentRootToken
+    result.Add "source", Operation.Source
+    result.Add "status", Operation.Status
+    result.Add "mode", Operation.InteractionMode
+    result.Add "policy", Operation.DecisionPolicy
+    result.Add "blocked", Operation.DecisionBlocked
+    result.Add "decision_count", Operation.Decisions.Count
+    result.Add "cancel_requested", Operation.CancelRequested
+    result.Add "callback_url", MCP.CallbackUrl
+    result.Add "callback_operation", MCP.OperationId
+    result.Add "log_operation", Log.OperationId
+    result.Add "log_path", Log.LogFilePath
+    NativeOwnerSnapshotForTest = ConvertToJson(result)
+End Function
+
+Public Function NativeOwnerDecisionForTest(ByVal expectedLibrary As String) As Long
+    If Not NativeOwnerFixtureMatches(expectedLibrary) Then Exit Function
+    If Not Operation.IsActive Or Operation.InteractionMode <> eimNonInteractive Then Exit Function
+    NativeOwnerDecisionForTest = Operation.ResolvePrompt(vbYesNo, _
+        T("X17 disposable owner decision"), T("X17 disposable owner prompt")).Result
+End Function
+
+Private Function NativeOwnerFixtureMatches(ByVal expectedLibrary As String) As Boolean
+    NativeOwnerFixtureMatches = (StrComp(CodeProject.FullName, expectedLibrary, vbTextCompare) = 0 And _
+        InStr(1, CodeProject.Path, "owner-disposable-", vbTextCompare) > 0 And _
+        StrComp(CodeProject.FullName, GetInstalledAddInFileName(), vbTextCompare) <> 0)
+End Function
+
+Public Sub LegacyCannotBorrowAmbientAdmission()
+    Dim request As Dictionary
+    Dim result As Dictionary
+    Dim before As String
+    Dim counters As Dictionary
+    Set request = NewRequest(SERVER_DEVELOPMENT)
+    Set result = ParseJson(APIHandshake(ConvertToJson(request)))
+    TestAssert result("success") = True
+    TestAssert EnterCompatibilitySession(ConvertToJson(request)) = vbNullString
+    before = OperationState
+    Set counters = ParseJson(APICompatibilityCounters())
+    Set result = ParseJson(CStr(API("SetInteractionMode", eimNonInteractive)))
+    TestAssert result("success") = False
+    TestAssert result("error_pattern") = "compatibility_session_invalid"
+    Set result = ParseJson(APIAsync(vbNullString, "Export"))
+    TestAssert result("success") = False
+    TestAssert result("error_pattern") = "compatibility_session_invalid"
+    TestAssert OperationState = before
+    TestAssert ParseJson(APICompatibilityCounters())("dispatches") = counters("dispatches")
+    LeaveCompatibilitySession
+    APIDisconnectSession ConvertToJson(request)
 End Sub

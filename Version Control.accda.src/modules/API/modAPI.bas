@@ -416,7 +416,8 @@ End Function
 Public Function API(strMethod As String, _
     Optional varArg1 As Variant, _
     Optional varArg2 As Variant, _
-    Optional varArg3 As Variant) As Variant
+    Optional varArg3 As Variant, _
+    Optional ByVal strSessionEnvelope As String = vbNullString) As Variant
 
     ' The function is called by Application.Run, which can be re-entrant. We really don't
     ' want it to be, since a nested call would run against Operation state the outer call
@@ -434,7 +435,8 @@ Public Function API(strMethod As String, _
         API = APICapabilities()
         Exit Function
     End If
-    If Not CompatibilityDispatchAllowed Then
+    If Len(strSessionEnvelope) = 0 Or strSessionEnvelope <> CurrentCompatibilityEnvelope() Or _
+        Not CompatibilityDispatchAllowed Then
         API = SessionFailure("missing_stale_or_foreign_session")
         Exit Function
     End If
@@ -545,7 +547,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
-    Optional varArg1 As Variant, Optional varArg2 As Variant) As String
+    Optional varArg1 As Variant, Optional varArg2 As Variant, _
+    Optional ByVal strSessionEnvelope As String = vbNullString) As String
 
     ' The function is called by Application.Run, which can be re-entrant. We really don't
     ' want it to be, since a nested call would run against Operation state the outer call
@@ -561,7 +564,8 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     Dim lngErr As Long
     Dim strErr As String
 
-    If Not CompatibilityDispatchAllowed Then
+    If Len(strSessionEnvelope) = 0 Or strSessionEnvelope <> CurrentCompatibilityEnvelope() Or _
+        Not CompatibilityDispatchAllowed Then
         APIAsync = PostCompatibilityRefusal(strCallbackInfo, SessionFailure("missing_stale_or_foreign_session"))
         Exit Function
     End If
@@ -654,11 +658,11 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
             ' Fall back to sync API for quick operations
             ' Call existing API function
             If Not IsMissing(varArg2) Then
-                varResult = API(strMethod, varArg1, varArg2)
+                varResult = API(strMethod, varArg1, varArg2, strSessionEnvelope:=strSessionEnvelope)
             ElseIf Not IsMissing(varArg1) Then
-                varResult = API(strMethod, varArg1)
+                varResult = API(strMethod, varArg1, strSessionEnvelope:=strSessionEnvelope)
             Else
-                varResult = API(strMethod)
+                varResult = API(strMethod, strSessionEnvelope:=strSessionEnvelope)
             End If
 
             ' Return sync response

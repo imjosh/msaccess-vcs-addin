@@ -292,11 +292,11 @@ Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strC
     ' Log.Add automatically routes to MCP when MCP.IsActive
     intStatusBefore = Operation.Status
     If Len(strArg2) > 0 Then
-        varResult = API(strMethod, strArg1, strArg2)
+        varResult = API(strMethod, strArg1, strArg2, strSessionEnvelope:=CurrentCompatibilityEnvelope())
     ElseIf Len(strArg1) > 0 Then
-        varResult = API(strMethod, strArg1)
+        varResult = API(strMethod, strArg1, strSessionEnvelope:=CurrentCompatibilityEnvelope())
     Else
-        varResult = API(strMethod)
+        varResult = API(strMethod, strSessionEnvelope:=CurrentCompatibilityEnvelope())
     End If
 
     ' Completion callback is sent from the root operation's completion, before ReleaseObjects
