@@ -35,6 +35,7 @@ Public Sub TestExportConflict_DetectsModifiedSource()
     Dim dCategory As Dictionary
     Dim strFile As String
     Dim strOriginal As String
+    Dim dteOriginal As Date
     Dim cItem As IDbComponent
 
     ' Access GetAllFromDB through the IDbComponent interface (same pattern as modExport)
@@ -52,6 +53,7 @@ Public Sub TestExportConflict_DetectsModifiedSource()
 
     ' Save original file content
     strOriginal = ReadFile(strFile)
+    dteOriginal = FSO.GetFile(strFile).DateLastModified
 
     On Error GoTo CleanUp
 
@@ -76,7 +78,10 @@ Public Sub TestExportConflict_DetectsModifiedSource()
 
 CleanUp:
     ' Restore original file content unconditionally
-    If Len(strOriginal) > 0 Then WriteFile strOriginal, strFile
+    If Len(strOriginal) > 0 Then
+        WriteFile strOriginal, strFile
+        SetFileDate strFile, dteOriginal, True
+    End If
 
 End Sub
 

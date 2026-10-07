@@ -38,8 +38,10 @@ Public Function ProbePendingAsyncCallers(ByVal strOwnerCallback As String, _
     intPrior = Operation.InteractionMode
     Operation.InteractionMode = eimSilent
     m_blnExpectPendingPolicy = True
-    dResult.Add "owner_start", APIAsync(strOwnerCallback, "RunFilteredTests", "block")
-    dResult.Add "refused_start", APIAsync(strRefusedCallback, "BuildAs", strRefusedExportFolder, strRefusedExportFolder & ".accdb")
+    dResult.Add "owner_start", APIAsync(strOwnerCallback, "RunFilteredTests", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    dResult.Add "refused_start", APIAsync(strRefusedCallback, "BuildAs", strRefusedExportFolder, strRefusedExportFolder & ".accdb", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    ' Dispatch belongs to its own session scope, after both launches unwind.
+    LeaveCompatibilitySession
     If TimerIsPending Then WinAPITimerCallback
 
 CleanUp:
@@ -62,7 +64,7 @@ End Function
 Public Function ProbeAsyncAdmissionError(ByVal strCallbackInfo As String) As String
     Dim dResult As New Dictionary
     On Error GoTo ErrHandler
-    dResult.Add "launch", APIAsync(strCallbackInfo, "RunFilteredTests", Null)
+    dResult.Add "launch", APIAsync(strCallbackInfo, "RunFilteredTests", Null, strSessionEnvelope:=CurrentCompatibilityEnvelope())
     ProbeAsyncAdmissionError = ConvertToJson(dResult)
     Exit Function
 ErrHandler:
@@ -79,8 +81,8 @@ Public Function ProbePendingBeforeSync(ByVal strRefusedCallback As String) As St
     Dim strErr As String
     On Error GoTo ErrHandler
     m_blnDispatchPending = True
-    dResult.Add "pending_start", APIAsync(strRefusedCallback, "BuildAs", "a33-must-not-build", "a33-must-not-build.accdb")
-    dResult.Add "owner_result", API("RunFilteredTests", "block")
+    dResult.Add "pending_start", APIAsync(strRefusedCallback, "BuildAs", "a33-must-not-build", "a33-must-not-build.accdb", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    dResult.Add "owner_result", API("RunFilteredTests", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
     dResult.Add "running_probe", ParseJson(m_strLastProbe)
 CleanUp:
     On Error Resume Next
@@ -121,6 +123,7 @@ Public Function ProbeRunningAsyncCaller(ByVal blnUnused As Boolean) As String
     Dim dLaunch As Dictionary
     Dim cOutcome As clsPromptOutcome
     Dim strCallback As String
+    Dim strEnvelope As String
     Dim lngErr As Long
     Dim strErr As String
 
@@ -133,10 +136,18 @@ Public Function ProbeRunningAsyncCaller(ByVal blnUnused As Boolean) As String
     dResult.Add "before", RunningCallerSnapshot()
     If m_blnDispatchPending Then
         dResult.Add "deferred_dispatch", TimerIsPending
-        If TimerIsPending Then WinAPITimerCallback
+        If TimerIsPending Then
+            ' Keep the API root busy while the timer validates its own envelope.
+            strEnvelope = CurrentCompatibilityEnvelope()
+            LeaveCompatibilitySession
+            WinAPITimerCallback
+            strErr = EnterCompatibilitySession(strEnvelope)
+            If Len(strErr) > 0 Then dResult.Add "probe_error", strErr
+        End If
         dResult.Add "timer_pending_after", TimerIsPending
     Else
-        Set dLaunch = ParseJson(APIAsync(strCallback, "BuildAs", "a33-must-not-build", "a33-must-not-build.accdb"))
+        Set dLaunch = ParseJson(APIAsync(strCallback, "BuildAs", "a33-must-not-build", "a33-must-not-build.accdb", _
+            strSessionEnvelope:=CurrentCompatibilityEnvelope()))
         dResult.Add "launch", dLaunch
         ' The old implementation admits this timer, then overwrites MCP before API refuses.
         If dLaunch.Exists("async") Then WinAPITimerCallback
@@ -233,3 +244,46 @@ ErrHandler:
     strErr = Err.Description
     Resume CleanUp
 End Sub
+
+
+' External idle-host probe only. Never call this from a running test harness.
+' Admit the timer first, then hold a real root lease until its dispatch is refused.
+Public Function ProbeDeferredBusyRoot(ByVal strOwnerCallback As String, _
+    ByVal strRefusedCallback As String, ByVal strLogPath As String) As String
+
+    Dim dResult As New Dictionary
+    Dim cRoot As clsRootOperationLease
+    Dim cOutcome As clsPromptOutcome
+    Dim lngErr As Long
+    Dim strErr As String
+    On Error GoTo ErrHandler
+    If Operation.IsActive Or TimerIsPending Then Err.Raise 5, , "Probe requires an idle host"
+    dResult.Add "pending_start", APIAsync(strRefusedCallback, "BuildAs", _
+        "a33-must-not-build", "a33-must-not-build.accdb", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    MCP.RegisterCallback strOwnerCallback
+    Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
+    If cRoot Is Nothing Then Err.Raise 5, , "Probe root was refused"
+    Set cOutcome = Operation.ResolvePrompt(vbOKOnly, "A33 owner journal", "Owner acknowledgement")
+    Log.Add "A33 deferred timer owner", False
+    Log.SaveFile strLogPath
+    dResult.Add "before", RunningCallerSnapshot()
+    LeaveCompatibilitySession
+    If TimerIsPending Then WinAPITimerCallback
+    dResult.Add "timer_pending_after", TimerIsPending
+    dResult.Add "after", RunningCallerSnapshot()
+    MCP.SkipCancelThrottleForTest
+    dResult.Add "cancelled", MCP.CheckCancelled
+    cRoot.Complete eorSuccess
+    Set cRoot = Nothing
+    dResult.Add "clean", RunningCallerSnapshot()
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If lngErr <> 0 Then dResult.Add "probe_error", CStr(lngErr) & ": " & strErr
+    ProbeDeferredBusyRoot = ConvertToJson(dResult)
+    Exit Function
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Function
