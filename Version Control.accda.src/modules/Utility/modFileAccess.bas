@@ -529,6 +529,7 @@ Public Sub WriteFileNoBom(strText As String, strPath As String, Optional strEnco
         stmNoBom.Open
         .Position = 3
         .CopyTo stmNoBom
+        stmNoBom.Position = 0
         bteContent = stmNoBom.Read
         stmNoBom.Close
         .Close

@@ -36,6 +36,10 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
     Dim lngCount As Long
     Dim lngCurrent As Long
     Dim strTempFile As String
+    Dim dCompletedHashes As Dictionary
+    Dim lngCompletedCategories As Long
+    Dim lngCategoryErrors As Long
+    Dim blnExportCompleted As Boolean
 
     ' Use inline error handling functions to trap and log errors.
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
@@ -88,6 +92,7 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
 
     Set dCurrentHashes = Options.GetCategoryHashes
     Set dStoredHashes = VCSIndex.CategoryHashes
+    Set dCompletedHashes = CloneDictionary(dStoredHashes)
     Set dStaleCategories = New Dictionary
 
     ' Check global options (ExportFormatVersion, AccessVersion)
@@ -260,6 +265,8 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
                 Options.ShowDebug
         End If
         dCategory.Add "Objects", dObjects
+        dCategory.Add "FullExport", blnFullForCategory
+        dCategory.Add "SelectedCount", dObjects.Count
         dCategories.Add cCategory.Category, dCategory
         VCSIndex.CheckExportConflicts dObjects
         ' Clear any orphaned files in this category
@@ -301,6 +308,8 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
         Set dCategory = dCategories(varCatKey)
         Set cCategory = dCategory("Class")
         Set dObjects = dCategory("Objects")
+        blnFullForCategory = dCategory("FullExport")
+        lngCategoryErrors = Log.ErrorCount + Log.WarningCount
 
         ' Only show category details when it contains objects
         lngCount = dObjects.Count
@@ -332,14 +341,15 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
 
                 ' If we have already exported this object while scanning for changes, use that copy.
                 strTempFile = Replace(cDbObject.SourceFile, Options.GetExportFolder, VCSIndex.GetTempExportFolder)
-                If FSO.FileExists(strTempFile) Then
+                If FSO.FileExists(strTempFile) And Not blnFullForCategory Then
                     ' Move the temp file(s) over to the source export folder.
                     cDbObject.MoveSource FSO.GetParentFolderName(strTempFile) & PathSep, _
                         FSO.GetParentFolderName(cDbObject.SourceFile) & PathSep
                     ' Update the index with the values from the alternate export
                     VCSIndex.UpdateFromAltExport cDbObject
                 Else
-                    ' Export a fresh copy
+                    ' Full/category migrations must run the exporter, including
+                    ' derived artifacts omitted by alternate conflict exports.
                     cDbObject.Export
                 End If
 
@@ -385,6 +395,17 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
             End If
         End If
 
+        ' A skipped conflict can shrink/remove a category. Its migration was
+        ' not performed for every selected object, even if the run succeeds.
+        If dObjects.Count = dCategory("SelectedCount") _
+            And Log.ErrorCount + Log.WarningCount = lngCategoryErrors _
+            And Operation.ErrorLevel < eelError And Not Operation.DecisionBlocked Then
+            lngCompletedCategories = lngCompletedCategories + 1
+            If dCurrentHashes.Exists(CStr(varCatKey)) Then
+                dCompletedHashes(CStr(varCatKey)) = dCurrentHashes(CStr(varCatKey))
+            End If
+        End If
+
     Next varCatKey
 
     ' Ensure that we have created the .gitignore and .gitattributes files in Git environments.
@@ -404,6 +425,12 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
 
     ' Log any unused .env connection entries (full export only)
     If blnFullExport Then LogUnusedEnvEntries
+
+    CatchAny eelError, T("Error completing export"), ModuleName & ".ExportSource", True, True
+    blnExportCompleted = (Operation.ErrorLevel < eelError _
+        And Not Operation.DecisionBlocked And Not Operation.CancelRequested _
+        And Not Operation.NativeCloseCanceled _
+        And lngCompletedCategories = colCategories.Count)
 
     ' Show final output and save log
     Log.Spacer
@@ -434,14 +461,21 @@ CleanUp:
     ' Restore original fast save option, and save options with project
     Options.SaveOptionsForProject
 
-    ' Save index file (skip if the user canceled a conflict dialog, so the
-    ' on-disk index state is unchanged and the same conflicts will reappear
-    ' on the next export run).
+    ' Persist valid component/category progress after an abort, without claiming
+    ' that unfinished option migrations or the whole export completed. Preserve
+    ' the conflict-dialog cancellation rule: its on-disk index stays unchanged.
     If Not VCSIndex.Conflicts.UserCanceled Then
         With VCSIndex
-            .ExportDate = Now
-            If blnFullExport Then .FullExportDate = Now
-            Set .CategoryHashes = dCurrentHashes
+            If blnExportCompleted And Operation.ErrorLevel < eelError Then
+                .ExportDate = Now
+                If intFilter = ecfAllObjects Then
+                    If blnFullExport Then .FullExportDate = Now
+                    If dCurrentHashes.Exists("_Global") Then
+                        dCompletedHashes("_Global") = dCurrentHashes("_Global")
+                    End If
+                End If
+            End If
+            Set .CategoryHashes = dCompletedHashes
             .Save
         End With
     End If

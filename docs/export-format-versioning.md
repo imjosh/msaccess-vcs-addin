@@ -59,6 +59,16 @@ version gate. The revision is folded into that category's `CategoryHashes` entry
 on the user's next export, the existing stale-category path re-exports that
 category once and persists the new hash.
 
+Whole-project exports persist a category hash only after every selected object in
+that category completes without errors or warnings. Blocked or cancelled exports
+retain completed component/category progress while leaving unfinished migrations
+pending. A conflict-dialog cancellation keeps the existing on-disk index unchanged.
+Completion dates advance only when the selected export finishes; `_Global` and
+`FullExportDate` require completion of all project categories, so ExportVBA cannot
+claim a global migration. Skipped conflicts leave their category migrations pending.
+Full/category migrations run the exporter again rather than promoting an alternate
+conflict export, since alternate copies omit derived artifacts such as layout SVGs.
+
 1. Add or increment the category entry in `GetExporterRevisions()` (key =
    `IDbComponent.Category` string, e.g. `"CommandBars"`).
 2. Add a history comment line documenting the fix.
