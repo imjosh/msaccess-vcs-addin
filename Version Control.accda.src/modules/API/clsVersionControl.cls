@@ -24,6 +24,7 @@ Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 ' Instance-owned test seams for scoped calls; see the Friend properties below.
 Private m_lngFaultAfterBegin As Long
 Private m_blnCancelAfterBegin As Boolean
+Private m_blnBlockAfterBegin As Boolean
 
 
 '---------------------------------------------------------------------------------------
@@ -1647,6 +1648,7 @@ Public Function ExportByType(ByVal varTypes As Variant, _
 
     BeginScopedSyncLog T("Beginning Category Export")
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
+    If m_blnBlockAfterBegin Then Operation.DecisionBlocked = True
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
     Else
@@ -1728,6 +1730,7 @@ Public Function ImportByType(ByVal varTypes As Variant, _
 
     BeginScopedSyncLog T("Beginning Category Import")
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
+    If m_blnBlockAfterBegin Then Operation.DecisionBlocked = True
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
     Else
@@ -1762,6 +1765,13 @@ End Property
 ' objects. Instance-owned and unavailable through COM or CallByName.
 Friend Property Let CancelAfterBegin(ByVal blnCancel As Boolean)
     m_blnCancelAfterBegin = blnCancel
+End Property
+
+
+' Test seam: record a blocked decision before any scoped work runs, so the work's own
+' outcome (for example a canceled native close) meets decision-required precedence.
+Friend Property Let BlockAfterBegin(ByVal blnBlock As Boolean)
+    m_blnBlockAfterBegin = blnBlock
 End Property
 
 
@@ -1817,7 +1827,9 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Dim strColor As String
     Dim strLogPath As String
 
-    blnUserCanceled = VCSIndex.Conflicts.UserCanceled
+    ' A canceled conflict dialog and a canceled native save/discard prompt on a close
+    ' (A36) are both a confirmed user cancel; a failed close is not.
+    blnUserCanceled = VCSIndex.Conflicts.UserCanceled Or Operation.NativeCloseCanceled
     blnCritical = (Operation.ErrorLevel = eelCritical)
     blnCanceled = blnCritical Or blnUserCanceled
 

@@ -16,6 +16,9 @@ Private Const ModuleName As String = "modDatabase"
 ' Batched table Type cache (table name -> MSysObjects.Type for local/linked tables).
 Private m_dTableTypeCache As Dictionary
 
+' Error number CloseOpenObject raises instead of closing, for tests. Zero when disarmed.
+Private m_lngCloseFaultForTest As Long
+
 ' Reused temporary query for deterministic table-data XML export (one per operation).
 Private Const TABLE_DATA_SORT_QUERY_PREFIX As String = "vcs_tmp_sort_export"
 Private m_strTableDataSortQueryName As String
@@ -436,13 +439,18 @@ End Function
 '           : Returns False when a close is canceled or fails.
 '---------------------------------------------------------------------------------------
 '
-Public Function CloseOpenObjectsForType(intType As eDatabaseComponentType, intSave As AcCloseSave) As Boolean
+Public Function CloseOpenObjectsForType(intType As eDatabaseComponentType, intSave As AcCloseSave, _
+    Optional ByRef blnCanceled As Boolean) As Boolean
 
     Dim objItem As AccessObject
     Dim intItem As Integer
     Dim intAcType As AcObjectType
+    Dim strName As String
+    Dim strDescription As String
+    Dim lngErr As Long
 
     CloseOpenObjectsForType = True
+    blnCanceled = False
 
     If DebugMode(True) Then On Error GoTo ErrHandler Else On Error GoTo ErrHandler
 
@@ -450,34 +458,41 @@ Public Function CloseOpenObjectsForType(intType As eDatabaseComponentType, intSa
         Case edbForm
             For intItem = Forms.Count - 1 To 0 Step -1
                 If Forms(intItem).Caption <> PROJECT_NAME Then
-                    DoCmd.Close acForm, Forms(intItem).Name, intSave
+                    intAcType = acForm
+                    strName = Forms(intItem).Name
+                    CloseOpenObject intAcType, strName, intSave
                     DoEvents
                 End If
             Next intItem
         Case edbReport
             For intItem = Reports.Count - 1 To 0 Step -1
-                DoCmd.Close acReport, Reports(intItem).Name, intSave
+                intAcType = acReport
+                strName = Reports(intItem).Name
+                CloseOpenObject intAcType, strName, intSave
                 DoEvents
             Next intItem
         Case edbMacro
             intAcType = acMacro
             For Each objItem In CurrentProject.AllMacros
                 If SysCmd(acSysCmdGetObjectState, intAcType, objItem.Name) <> adStateClosed Then
-                    DoCmd.Close intAcType, objItem.Name, intSave
+                    strName = objItem.Name
+                    CloseOpenObject intAcType, strName, intSave
                 End If
             Next objItem
         Case edbQuery
             intAcType = acQuery
             For Each objItem In CurrentData.AllQueries
                 If SysCmd(acSysCmdGetObjectState, intAcType, objItem.Name) <> adStateClosed Then
-                    DoCmd.Close intAcType, objItem.Name, intSave
+                    strName = objItem.Name
+                    CloseOpenObject intAcType, strName, intSave
                 End If
             Next objItem
         Case edbTableDef, edbTableData, edbTableDataMacro
             intAcType = acTable
             For Each objItem In CurrentData.AllTables
                 If SysCmd(acSysCmdGetObjectState, intAcType, objItem.Name) <> adStateClosed Then
-                    DoCmd.Close intAcType, objItem.Name, intSave
+                    strName = objItem.Name
+                    CloseOpenObject intAcType, strName, intSave
                 End If
             Next objItem
     End Select
@@ -486,9 +501,69 @@ Public Function CloseOpenObjectsForType(intType As eDatabaseComponentType, intSa
 
 ErrHandler:
     CloseOpenObjectsForType = False
-    CatchAny eelWarning, T("Error closing open objects"), ModuleName & ".CloseOpenObjectsForType", True, True
+    lngErr = Err.Number
+    strDescription = Err.Description
+    On Error Resume Next
+
+    ' Canceling the native save/discard prompt raises 2501 and leaves the object open.
+    ' Tell that apart from any other failure so the caller can report a cancellation (A36).
+    If Len(strName) > 0 Then
+        blnCanceled = IsNativeCloseCancel(lngErr, _
+            SysCmd(acSysCmdGetObjectState, intAcType, strName) <> adStateClosed)
+    End If
+    If blnCanceled Then
+        Log.Add T("Closing {0} was canceled. It was not changed.", var0:=strName)
+    Else
+        ' The On Error above cleared the error, so raise it again for CatchAny.
+        Err.Raise lngErr, , strDescription
+        CatchAny eelWarning, T("Error closing open objects"), ModuleName & ".CloseOpenObjectsForType", True, True
+    End If
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : IsNativeCloseCancel
+' Author    : Josh
+' Date      : 10/07/2026
+' Purpose   : True when a failed close is a canceled native save/discard prompt: Access
+'           : raises 2501 for the Cancel button, and the object is still open. A 2501
+'           : that left the object closed, or any other error, is an ordinary failure.
+'---------------------------------------------------------------------------------------
+'
+Public Function IsNativeCloseCancel(ByVal lngErrNumber As Long, ByVal blnStillOpen As Boolean) As Boolean
+    IsNativeCloseCancel = (lngErrNumber = 2501) And blnStillOpen
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CloseOpenObject
+' Author    : Josh
+' Date      : 10/07/2026
+' Purpose   : Close one object with the given save argument. The only place
+'           : CloseOpenObjectsForType closes anything, so a test can raise the error a
+'           : canceled native prompt would (SetCloseFaultForTest) while the object
+'           : stays open.
+'---------------------------------------------------------------------------------------
+'
+Private Sub CloseOpenObject(intAcType As AcObjectType, strName As String, intSave As AcCloseSave)
+    If m_lngCloseFaultForTest <> 0 Then Err.Raise m_lngCloseFaultForTest
+    DoCmd.Close intAcType, strName, intSave
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetCloseFaultForTest
+' Author    : Josh
+' Date      : 10/07/2026
+' Purpose   : Test seam: make category closes raise this error number instead of
+'           : closing (2501 simulates a canceled native prompt). Pass zero to restore
+'           : the normal close. Tests must restore it, since the setting is module-wide.
+'---------------------------------------------------------------------------------------
+'
+Public Sub SetCloseFaultForTest(ByVal lngError As Long)
+    m_lngCloseFaultForTest = lngError
+End Sub
 
 
 '---------------------------------------------------------------------------------------
@@ -498,14 +573,16 @@ End Function
 ' Purpose   : Close open objects for each container in the collection.
 '---------------------------------------------------------------------------------------
 '
-Public Function CloseOpenObjectsForContainers(colContainers As Collection, intSave As AcCloseSave) As Boolean
+Public Function CloseOpenObjectsForContainers(colContainers As Collection, intSave As AcCloseSave, _
+    Optional ByRef blnCanceled As Boolean) As Boolean
 
     Dim cCategory As IDbComponent
 
     CloseOpenObjectsForContainers = True
+    blnCanceled = False
 
     For Each cCategory In colContainers
-        If Not CloseOpenObjectsForType(cCategory.ComponentType, intSave) Then
+        If Not CloseOpenObjectsForType(cCategory.ComponentType, intSave, blnCanceled) Then
             CloseOpenObjectsForContainers = False
             Exit Function
         End If

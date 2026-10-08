@@ -68,3 +68,33 @@ Public Sub TestCloseOpenObjectsForTypeNoOpTypes()
     TestAssert CloseOpenObjectsForType(edbModule, acSaveYes), "modules no-op succeeds"
     TestAssert CloseOpenObjectsForType(edbVbeReference, acSaveYes), "references no-op succeeds"
 End Sub
+
+
+Public Sub TestCloseOpenObjectsForTypeNoOpTypesReportNoCancel()
+    Dim blnCanceled As Boolean
+    blnCanceled = True
+    TestAssert CloseOpenObjectsForType(edbModule, acSaveYes, blnCanceled), "modules no-op succeeds"
+    TestAssert Not blnCanceled, "a close that did nothing is not a cancellation"
+    blnCanceled = True
+    TestAssert CloseOpenObjectsForContainers(New Collection, acSaveYes, blnCanceled), "no containers succeed"
+    TestAssert Not blnCanceled, "no containers is not a cancellation"
+End Sub
+
+
+Public Sub TestIsNativeCloseCancel()
+    TestAssert IsNativeCloseCancel(2501, True), "canceled prompt with the object open is a native cancel"
+    TestAssert Not IsNativeCloseCancel(2501, False), "2501 with the object closed is not a cancel"
+    TestAssert Not IsNativeCloseCancel(2467, True), "another close error with the object open is ordinary"
+    TestAssert Not IsNativeCloseCancel(0, True), "no error is not a cancel"
+End Sub
+
+
+Public Sub TestOperationNativeCloseCanceledFlag()
+    Dim blnWas As Boolean
+    blnWas = Operation.NativeCloseCanceled
+    Operation.NativeCloseCanceled = True
+    TestAssert Operation.NativeCloseCanceled, "the flag records a canceled native close"
+    Operation.NativeCloseCanceled = False
+    TestAssert Not Operation.NativeCloseCanceled, "the flag can be cleared"
+    Operation.NativeCloseCanceled = blnWas
+End Sub

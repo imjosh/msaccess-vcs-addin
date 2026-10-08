@@ -2114,6 +2114,7 @@ Public Sub MergeScoped(colContainers As Collection, blnFullMerge As Boolean)
     Dim lngCurrent As Long
     Dim intSave As AcCloseSave
     Dim strPath As String
+    Dim blnCloseCanceled As Boolean
 
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
 
@@ -2138,9 +2139,10 @@ Public Sub MergeScoped(colContainers As Collection, blnFullMerge As Boolean)
         intSave = acSaveYes
     End If
 
-    If Not CloseOpenObjectsForContainers(colContainers, intSave) Then
+    If Not CloseOpenObjectsForContainers(colContainers, intSave, blnCloseCanceled) Then
         Log.Spacer
         Log.Add T("Merge Canceled"), , , "Red", True
+        Operation.NativeCloseCanceled = blnCloseCanceled
         Operation.ErrorLevel = eelCritical
         Exit Sub
     End If

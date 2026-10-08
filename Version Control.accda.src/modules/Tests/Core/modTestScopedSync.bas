@@ -266,3 +266,191 @@ ErrHandler:
     strErr = Err.Description
     Resume CleanUp
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ScopedSyncNativeCloseCheck
+' Author    : Josh
+' Date      : 10/07/2026
+' Purpose   : A36: ImportByType / ExportByType when the native save/discard prompt of
+'           : closing an open form is canceled. Needs a free session operation and a
+'           : disposable host that is not this project: it creates, opens, exports and
+'           : imports a probe form, and the export preflight refuses the running code
+'           : project. Load this development project as a library in a disposable
+'           : database, then call it with blnExport False (import) and True (export):
+'           : vcs_call_vba(<disposable db>, "<dev copy>.ScopedSyncNativeCloseCheck").
+'           : The close is made to raise 2501 through the modDatabase seam while the form
+'           : really stays open, so the real state check and public result are tested.
+'           : Returns "OK", or the failed checks one per line.
+'---------------------------------------------------------------------------------------
+'
+Public Function ScopedSyncNativeCloseCheck(Optional blnExport As Boolean = False) As String
+
+    Const PROBE_FORM As String = "frmA36Probe"
+    Const ORIGINAL_CAPTION As String = "A36 original"
+    Const SOURCE_CAPTION As String = "A36 source"
+
+    Dim cVcs As clsVersionControl
+    Dim dResult As Dictionary
+    Dim frmNew As Form
+    Dim strTemp As String
+    Dim strSource As String
+    Dim strText As String
+    Dim strFailed As String
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim intMode As eInteractionMode
+    Dim intPolicy As eDecisionPolicy
+    Dim blnPolicySet As Boolean
+
+    On Error GoTo ErrHandler
+
+    If Operation.Status = eosRunning Then
+        ScopedSyncNativeCloseCheck = "Not run: an operation is already running."
+        Exit Function
+    End If
+    If StrComp(CurrentProject.FullName, CodeProject.FullName, vbTextCompare) = 0 Then
+        ScopedSyncNativeCloseCheck = "Not run: host this project as a library in a disposable database."
+        Exit Function
+    End If
+
+    ' Probe form, saved closed.
+    Set frmNew = Application.CreateForm
+    strTemp = frmNew.Name
+    frmNew.Caption = ORIGINAL_CAPTION
+    DoCmd.Close acForm, strTemp, acSaveYes
+    Set frmNew = Nothing
+    DoCmd.Rename PROBE_FORM, acForm, strTemp
+
+    VCS.SetOperationPolicy "block"
+    blnPolicySet = True
+    intMode = Operation.InteractionMode
+    intPolicy = Operation.DecisionPolicy
+
+    ' Baseline export gives the form a source file to import from, or to lose.
+    Set cVcs = New clsVersionControl
+    Set dResult = ParseJson(cVcs.ExportByType("forms", True))
+    Check strFailed, CBool(dResult("success")), "the baseline export succeeds"
+    ' A form without a code module may export as .bas instead of .form.
+    strSource = Options.GetExportFolder & "forms" & PathSep & PROBE_FORM & ".form"
+    If Not FSO.FileExists(strSource) Then strSource = Replace(strSource, ".form", ".bas")
+    If Not FSO.FileExists(strSource) Then
+        ScopedSyncNativeCloseCheck = strFailed & "Not run: the baseline export wrote no " & strSource
+        GoTo CleanUp
+    End If
+    If blnExport Then
+        FSO.DeleteFile strSource, True
+    Else
+        strText = ReadFile(strSource)
+        If InStr(1, strText, ORIGINAL_CAPTION, vbBinaryCompare) = 0 Then
+            ScopedSyncNativeCloseCheck = strFailed & "Not run: the source has no caption to change."
+            GoTo CleanUp
+        End If
+        WriteFile Replace(strText, ORIGINAL_CAPTION, SOURCE_CAPTION), strSource
+    End If
+
+    ' 1. Confirmed native Cancel with the form still open.
+    DoCmd.OpenForm PROBE_FORM, acNormal, , , , acHidden
+    SetCloseFaultForTest 2501
+    Set dResult = RunNativeCloseCall(blnExport, False)
+    SetCloseFaultForTest 0
+    Check strFailed, Not CBool(dResult("success")), "native cancel fails the call"
+    Check strFailed, dResult.Exists("cancelled"), "native cancel carries cancelled"
+    If dResult.Exists("cancelled") Then Check strFailed, CBool(dResult("cancelled")), "cancelled is true"
+    Check strFailed, CStr(dResult("error")) = "Operation was canceled.", "native cancel keeps the cancellation error"
+    Check strFailed, Len(CStr(dResult("logPath"))) > 0, "native cancel names its log"
+    Check strFailed, Not dResult.Exists("decision_required"), "native cancel is not decision_required"
+    CheckNativeCloseState strFailed, "native cancel", eorCanceled, PROBE_FORM, intMode, intPolicy
+    If blnExport Then
+        Check strFailed, Not FSO.FileExists(strSource), "the open form is not exported after its close was canceled"
+    Else
+        Check strFailed, Forms(PROBE_FORM).Caption = ORIGINAL_CAPTION, "the open form is not imported after its close was canceled"
+    End If
+
+    ' 2. A close that fails for another reason and leaves the form open is ordinary.
+    SetCloseFaultForTest 2467
+    Set dResult = RunNativeCloseCall(blnExport, False)
+    SetCloseFaultForTest 0
+    Check strFailed, Not CBool(dResult("success")), "an ordinary close failure fails the call"
+    Check strFailed, Not dResult.Exists("cancelled"), "an ordinary close failure has no cancelled field"
+    Check strFailed, CStr(dResult("error")) <> "Operation was canceled.", "an ordinary close failure is not the cancellation error"
+    Check strFailed, Len(CStr(dResult("logPath"))) > 0, "an ordinary close failure names its log"
+    CheckNativeCloseState strFailed, "ordinary failure", eorFailed, PROBE_FORM, intMode, intPolicy
+    If blnExport Then
+        Check strFailed, Not FSO.FileExists(strSource), "an ordinary close failure does not export the open form"
+    Else
+        Check strFailed, Forms(PROBE_FORM).Caption = ORIGINAL_CAPTION, "an ordinary close failure does not import into the open form"
+    End If
+
+    ' 3. A blocked decision stays decision_required, even with a native cancel recorded.
+    SetCloseFaultForTest 2501
+    Set dResult = RunNativeCloseCall(blnExport, True)
+    SetCloseFaultForTest 0
+    Check strFailed, Not CBool(dResult("success")), "a blocked decision fails the call"
+    Check strFailed, dResult.Exists("decision_required"), "a blocked decision carries decision_required"
+    If dResult.Exists("decision_required") Then Check strFailed, CBool(dResult("decision_required")), "decision_required is true"
+    Check strFailed, CStr(dResult("error_pattern")) = "decision_required", "a blocked decision keeps its error pattern"
+    Check strFailed, Not dResult.Exists("cancelled"), "a blocked decision is not a cancellation"
+    CheckNativeCloseState strFailed, "blocked decision", eorDecisionRequired, PROBE_FORM, intMode, intPolicy
+
+    ' 4. Control: with the close working, the same call does its work.
+    Set dResult = RunNativeCloseCall(blnExport, False)
+    Check strFailed, CBool(dResult("success")), "the call succeeds once the close works"
+    Check strFailed, Not dResult.Exists("cancelled"), "a success has no cancelled field"
+    If blnExport Then
+        Check strFailed, FSO.FileExists(strSource), "the form is exported once the close works"
+    Else
+        Check strFailed, CurrentProject.AllForms(PROBE_FORM).Name = PROBE_FORM, "the form survives the import"
+        DoCmd.OpenForm PROBE_FORM, acNormal, , , , acHidden
+        Check strFailed, Forms(PROBE_FORM).Caption = SOURCE_CAPTION, "the form is imported once the close works"
+    End If
+
+CleanUp:
+    On Error Resume Next
+    SetCloseFaultForTest 0
+    If IsLoaded(acForm, PROBE_FORM) Then DoCmd.Close acForm, PROBE_FORM, acSaveNo
+    DoCmd.DeleteObject acForm, PROBE_FORM
+    DoCmd.DeleteObject acForm, strTemp
+    Err.Clear
+    If blnPolicySet Then VCS.ClearOperationPolicy
+    If lngErr <> 0 Then strFailed = strFailed & "ERROR: " & lngErr & ": " & strErr & vbCrLf
+    If Len(ScopedSyncNativeCloseCheck) = 0 Then
+        If Len(strFailed) = 0 Then strFailed = "OK"
+        ScopedSyncNativeCloseCheck = strFailed
+    End If
+    Exit Function
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Function
+
+
+' One category call on a fresh public instance, returning the parsed result.
+Private Function RunNativeCloseCall(blnExport As Boolean, blnBlocked As Boolean) As Dictionary
+    Dim cVcs As clsVersionControl
+    Set cVcs = New clsVersionControl
+    cVcs.BlockAfterBegin = blnBlocked
+    If blnExport Then
+        Set RunNativeCloseCall = ParseJson(cVcs.ExportByType("forms", True))
+    Else
+        Set RunNativeCloseCall = ParseJson(cVcs.ImportByType("forms", True))
+    End If
+End Function
+
+
+' State every outcome of the call must leave: the root finished as expected, its owned
+' state is released, the session's mode and policy are back, and the form was left open.
+Private Sub CheckNativeCloseState(ByRef strFailed As String, strCase As String, _
+    eExpected As eOperationResult, strForm As String, intMode As eInteractionMode, _
+    intPolicy As eDecisionPolicy)
+
+    Check strFailed, Operation.Result = eExpected, strCase & " finishes the root as expected"
+    Check strFailed, Operation.Status <> eosRunning, strCase & " releases the root"
+    Check strFailed, Not Log.Active, strCase & " releases the log"
+    Check strFailed, Operation.InteractionMode = intMode, strCase & " restores the interaction mode"
+    Check strFailed, Operation.DecisionPolicy = intPolicy, strCase & " restores the session policy"
+    Check strFailed, IsLoaded(acForm, strForm), strCase & " leaves the affected form open"
+
+End Sub

@@ -217,6 +217,19 @@ Cancel with `success: false`, `error: "Operation was canceled."`, `logPath`,
 and `cancelled: true`. Both use the same scoped wrap-up. An ordinary failure
 has no `cancelled` field; a blocked decision remains `decision_required`.
 
+The same wrap-up reports a confirmed native save/discard Cancel when
+`ImportByType` or `ExportByType` closes the open objects of a category (A36).
+The close that raised error 2501 with the object still open stops the call
+before anything is imported or exported, and the result is the cancellation
+above (`error: "Operation was canceled."`, `logPath`, `cancelled: true`, and
+the decision journal). A close that fails for any other reason, or raises 2501
+after the object closed, is an ordinary failure with no `cancelled` field, and
+a blocked decision remains `decision_required`. The native prompt itself stays
+outside decision-policy dismissal. The cancellation is carried by
+`Operation.NativeCloseCanceled`, which the scoped wrap-up reads beside the
+conflict-dialog flag; later work on the abort-time export state (A37) shares
+that wrap-up and keeps this field when it changes completion bookkeeping.
+
 `ImportByType` and `ExportByType` share that error path. A raised error
 returns the original `error` and `errorNumber`, and finishes only a root
 the call itself began. An error before its `Begin` succeeded, such as an

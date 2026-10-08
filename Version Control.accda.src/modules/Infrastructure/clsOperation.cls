@@ -52,6 +52,7 @@ Private Type udtRoot
     RuntimeErrorNumber As Long
     CancelRequested As Boolean
     OutputPath As String
+    NativeCloseCanceled As Boolean
 End Type
 Private m_Root As udtRoot
 
@@ -427,6 +428,26 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : NativeCloseCanceled
+' Author    : Josh
+' Date      : 10/07/2026
+' Purpose   : True once a native save/discard prompt raised by closing an object for
+'           : this operation was canceled and the object stayed open (A36). Set where
+'           : the close happens; the operation's wrap-up reads it to report
+'           : cancelled:true instead of an ordinary failure. Reset when a root begins
+'           : and kept after Finish until the next one, like CancelRequested.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get NativeCloseCanceled() As Boolean
+    NativeCloseCanceled = m_Root.NativeCloseCanceled
+End Property
+
+Public Property Let NativeCloseCanceled(ByVal blnCanceled As Boolean)
+    m_Root.NativeCloseCanceled = blnCanceled
+End Property
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : CancelRequested
 ' Author    : Josh
 ' Date      : 09/30/2026
@@ -665,6 +686,7 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     m_Root.RuntimeErrorNumber = 0
     m_Root.CancelRequested = False
     m_Root.OutputPath = vbNullString
+    m_Root.NativeCloseCanceled = False
 
     Me.ErrorLevel = eelNoError
     Me.Result = eorUnknown

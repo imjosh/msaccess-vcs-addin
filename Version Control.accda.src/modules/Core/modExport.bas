@@ -486,6 +486,7 @@ Public Sub ExportScoped(colContainers As Collection, blnFullExport As Boolean)
     Dim intSave As AcCloseSave
     Dim blnGlobalChanged As Boolean
     Dim blnFullForCategory As Boolean
+    Dim blnCloseCanceled As Boolean
     Dim varHashKey As Variant
 
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
@@ -499,9 +500,10 @@ Public Sub ExportScoped(colContainers As Collection, blnFullExport As Boolean)
         intSave = acSaveYes
     End If
 
-    If Not CloseOpenObjectsForContainers(colContainers, intSave) Then
+    If Not CloseOpenObjectsForContainers(colContainers, intSave, blnCloseCanceled) Then
         Log.Spacer
         Log.Add T("Export Canceled"), , , "Red", True
+        Operation.NativeCloseCanceled = blnCloseCanceled
         Operation.ErrorLevel = eelCritical
         Exit Sub
     End If
