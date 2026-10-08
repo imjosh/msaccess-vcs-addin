@@ -1668,7 +1668,7 @@ Public Function FinishSingleObjectExport(cOp As clsOperation, strLogPath As Stri
         If Not dFinal.Exists("success") Then
             dFinal.Add "success", (intLevel < eelError)
             If intLevel >= eelError Then
-                dFinal.Add "error", "Export completed with errors. Check the log for details."
+                dFinal.Add "error", T("Export completed with errors. Check the log for details.")
             End If
         End If
     End If
