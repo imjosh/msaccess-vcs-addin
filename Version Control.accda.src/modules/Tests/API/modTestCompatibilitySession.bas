@@ -11,7 +11,7 @@ Public Sub StrictServerVersions()
     TestAssert ServerVersionReason("0.3.10") = vbNullString
     TestAssert ServerVersionReason("0.4.0") = "unsupported_boundary"
     TestAssert ServerVersionReason("1.0.0") = "unsupported_boundary"
-    TestAssert ServerVersionReason("0.3.0-dev.17+local.9") = vbNullString
+    TestAssert ServerVersionReason("0.3.0-dev.18+local.9") = vbNullString
     TestAssert ServerVersionReason("0.3.0-dev.16") = "prerelease_not_admitted"
     TestAssert ServerVersionReason("0.3.0-01") = "invalid_version"
     TestAssert ServerVersionReason("0.03.0") = "invalid_version"

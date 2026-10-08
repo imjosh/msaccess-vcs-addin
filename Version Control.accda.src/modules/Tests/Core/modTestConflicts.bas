@@ -292,24 +292,35 @@ Public Sub TestModuleImport_IndexesEachFileOnSharedInstance()
     Dim strBase As String
     Dim strRepoRoot As String
     Dim eelSavedLevel As eErrorLevel
+    Dim lngErr As Long
+    Dim strErr As String
+
+    eelSavedLevel = Operation.ErrorLevel
+    On Error GoTo ErrHandler
 
     ' Use fixture modules that are not already loaded in the add-in project.
     ' Re-importing live modules (e.g. modTimer) fails to remove the in-use
     ' component and leaves duplicates (modTimer1) plus a VBE project-reset prompt.
     strRepoRoot = Git.GetRepositoryRoot
-    If Len(strRepoRoot) = 0 Then Exit Sub
+    If Len(strRepoRoot) = 0 Then
+        TestAssert False, "disposable suite host requires repository context"
+        GoTo CleanUp
+    End If
     strBase = strRepoRoot & "Testing\Fixtures\modules\"
     strFile1 = strBase & "vcs_test_import_alpha.bas"
     strFile2 = strBase & "vcs_test_import_beta.bas"
-    If Not FSO.FileExists(strFile1) Then Exit Sub
-    If Not FSO.FileExists(strFile2) Then Exit Sub
+    If Not FSO.FileExists(strFile1) Then
+        TestAssert False, "required import fixture missing: " & strFile1
+        GoTo CleanUp
+    End If
+    If Not FSO.FileExists(strFile2) Then
+        TestAssert False, "required import fixture missing: " & strFile2
+        GoTo CleanUp
+    End If
 
-    RemoveTestImportFixtureModule "vcs_test_import_alpha"
-    RemoveTestImportFixtureModule "vcs_test_import_beta"
 
     ' Import skips indexing at eelError or above, and no operation begins in this
     ' project during a test run to clear a level left by an earlier test.
-    eelSavedLevel = Operation.ErrorLevel
     Operation.ErrorLevel = eelNoError
 
     Set cMod = New clsDbModule
@@ -319,10 +330,18 @@ Public Sub TestModuleImport_IndexesEachFileOnSharedInstance()
     TestAssert VCSIndex.Exists(cMod, strFile1), "first imported module indexed"
     TestAssert VCSIndex.Exists(cMod, strFile2), "second imported module indexed under its own name"
 
+CleanUp:
+    On Error Resume Next
     Operation.ErrorLevel = eelSavedLevel
-    RemoveTestImportFixtureModule "vcs_test_import_alpha"
-    RemoveTestImportFixtureModule "vcs_test_import_beta"
+    ' Retain imported modules until owned close/reopen validation and host disposal.
+    If lngErr <> 0 Then TestAssert False, "module import fixture error " & lngErr & ": " & strErr
+    Err.Clear
+    Exit Sub
 
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -343,19 +362,30 @@ Public Sub TestModuleImportFast_IndexesEachFileOnSharedInstance()
     Dim strBase As String
     Dim strRepoRoot As String
     Dim eelSavedLevel As eErrorLevel
-
-    strRepoRoot = Git.GetRepositoryRoot
-    If Len(strRepoRoot) = 0 Then Exit Sub
-    strBase = strRepoRoot & "Testing\Fixtures\modules\"
-    strFile1 = strBase & "vcs_test_import_alpha.bas"
-    strFile2 = strBase & "vcs_test_import_beta.bas"
-    If Not FSO.FileExists(strFile1) Then Exit Sub
-    If Not FSO.FileExists(strFile2) Then Exit Sub
-
-    RemoveTestImportFixtureModule "vcs_test_import_alpha"
-    RemoveTestImportFixtureModule "vcs_test_import_beta"
+    Dim lngErr As Long
+    Dim strErr As String
 
     eelSavedLevel = Operation.ErrorLevel
+    On Error GoTo ErrHandler
+
+    strRepoRoot = Git.GetRepositoryRoot
+    If Len(strRepoRoot) = 0 Then
+        TestAssert False, "disposable suite host requires repository context"
+        GoTo CleanUp
+    End If
+    strBase = strRepoRoot & "Testing\Fixtures\modules\"
+    strFile1 = strBase & "vcs_test_import_fast_alpha.bas"
+    strFile2 = strBase & "vcs_test_import_fast_beta.bas"
+    If Not FSO.FileExists(strFile1) Then
+        TestAssert False, "required import fixture missing: " & strFile1
+        GoTo CleanUp
+    End If
+    If Not FSO.FileExists(strFile2) Then
+        TestAssert False, "required import fixture missing: " & strFile2
+        GoTo CleanUp
+    End If
+
+
     Operation.ErrorLevel = eelNoError
 
     Set cMod = New clsDbModule
@@ -366,10 +396,18 @@ Public Sub TestModuleImportFast_IndexesEachFileOnSharedInstance()
     TestAssert VCSIndex.Exists(cMod.Parent, strFile1), "first batch-imported module indexed"
     TestAssert VCSIndex.Exists(cMod.Parent, strFile2), "second batch-imported module indexed under its own name"
 
+CleanUp:
+    On Error Resume Next
     Operation.ErrorLevel = eelSavedLevel
-    RemoveTestImportFixtureModule "vcs_test_import_alpha"
-    RemoveTestImportFixtureModule "vcs_test_import_beta"
+    ' Retain imported modules until owned close/reopen validation and host disposal.
+    If lngErr <> 0 Then TestAssert False, "module import fixture error " & lngErr & ": " & strErr
+    Err.Clear
+    Exit Sub
 
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -419,23 +457,6 @@ Public Sub TestTableDefGetFileList_ExcludesMetadataSidecar()
     LogUnhandledErrors
     On Error Resume Next
     If FSO.FolderExists(strRoot) Then FSO.DeleteFolder StripSlash(strRoot), True
-    Err.Clear
-
-End Sub
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : RemoveTestImportFixtureModule
-' Author    : Adam Waller
-' Date      : 5/29/2026
-' Purpose   : Remove a sandbox module imported by TestModuleImport_* if present.
-'---------------------------------------------------------------------------------------
-'
-Private Sub RemoveTestImportFixtureModule(strName As String)
-
-    LogUnhandledErrors
-    On Error Resume Next
-    CurrentVBProject.VBComponents.Remove CurrentVBProject.VBComponents(strName)
     Err.Clear
 
 End Sub

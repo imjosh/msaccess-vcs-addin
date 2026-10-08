@@ -1,25 +1,68 @@
 # Running the add-in's own tests
 
-How an agent runs the test suite that lives in this repository. Two things make
-it different from testing a user database, and both have sent agents somewhere
-else entirely: the run must be hosted on **this repo's development copy** of the
-add-in, and it must go through the MCP server rather than the add-in's own window.
+How an agent runs this repository's add-in suite. Use a **fresh disposable
+development copy** of `Version Control.accda` with matching source/repository
+context, and drive the installed-library runner through MCP.
+
+The module-import tests retain distinct normal/batch fixtures in the disposable
+host and restore their error state on success or trapped failure. Build this
+exported source through the supported rebuild before running the lifecycle below.
+[A43](../../issues/A43-addin-isolate-module-import-test-fixtures.md) records native
+qualification; existing A42 cleanup-enabled reports remain historical evidence.
 
 For writing a test, see [.cursor/rules/testing.mdc](../.cursor/rules/testing.mdc).
 For the layers, the round-trip harness, and where results land, see
 [testing-strategy.md](testing-strategy.md).
 
-## Host the run on the development copy
+## Prepare and dispose of the entire development host
+
+Normal developer use loads the installed add-in to operate on a separate user
+database. Add-in development tests execute the add-in's own code and can modify
+the project containing their test procedures. Whole-host disposal applies to this
+repository's suite; it is not a requirement to discard developers' user databases.
+
+1. Prepare an isolated checkout or equivalent repository snapshot from the current
+   working source. Include the matching `.src`, fixtures, documentation and Git
+   context. Resolve export/source paths inside that snapshot so tests cannot mutate
+   the primary checkout or silently take missing-repository guards.
+2. Use the supported source rebuild to obtain the version under test. Either build
+   in the isolated checkout or copy the closed, compiled development `.accda` and
+   its matching context there. Record source/binary hashes and the installed runner
+   identity; never copy an open database or patch the installed library.
+3. Run focused checks and the original unfiltered suite through MCP. Start each
+   independent run from a fresh disposable host. Retain alpha/beta modules through
+   validation; normal and batch fixtures need distinct module names/source paths
+   so both tests coexist without deletion or replacement of retained fixtures.
+   Preserve both indexing assertions on one shared module instance per test.
+   Restore transient options/error state needed by later tests.
+4. Gracefully close the identity-confirmed owned host, confirm original-handle
+   process exit, then freshly reopen that same disposable database. Read every
+   retained import fixture and independently check compilation/IsCompiled. Repeat
+   the full lifecycle from a fresh supported source build for qualification.
+5. Copy results and logs outside the temporary checkout before disposal. Preserve
+   failing binaries and diagnostics too. After confirmed owned closure/exit, remove
+   the disposable database, sidecars and checkout. Verify disposal on success,
+   assertion failure and import failure; retain files when closure is uncertain.
+   Restore temporary trust/install-source settings and caller/session state, and
+   leave unrelated Access processes intact.
+
+The installed library remains the runner and assertion receiver. Test procedures
+and import assertions execute in the disposable current project. It may contain
+fixture modules until disposal; the primary development database remains free of
+suite mutations. A qualified disposable suite does not diagnose A42's low-level
+corruption or qualify production module deletion in a separate user database.
+
+The examples below assume the disposable checkout has already been prepared:
 
 ```
-vcs_run_tests("C:\path\to\msaccess-vcs-addin\Version Control.accda", "clsTestInstall")
+vcs_run_tests("C:\scratch\addin-suite\msaccess-vcs-addin\Version Control.accda", "clsTestInstall")
 ```
 
 MCP progress is best-effort in Cursor. For live per-test output, keep this
 CLI command in the foreground:
 
 ```text
-msaccess-vcs run-tests "C:\path\to\msaccess-vcs-addin\Version Control.accda" --filter clsTestInstall
+msaccess-vcs run-tests "C:\scratch\addin-suite\msaccess-vcs-addin\Version Control.accda" --filter clsTestInstall
 ```
 
 The stream is pytest-style: dots for fast passes, a named line after a test
@@ -49,8 +92,9 @@ only exclusions starts from all tests.
 ?VCS.RunRoundtripTests                     ' Run the object round-trip corpus
 ```
 
-`database_path` is the development copy in the repository — the `.accda` beside
-`Version Control.accda.src`. The runner scans `CurrentVBProject`, so whichever
+`database_path` is the disposable development copy — the `.accda` beside
+`Version Control.accda.src` in the isolated repository snapshot. The runner scans
+`CurrentVBProject`, so whichever
 database hosts the run is the one whose tests are found: point a run at a user
 database and you get that database's tests, reported as a clean pass because
 nothing you were looking for was there to fail.
@@ -102,8 +146,9 @@ proving nothing.
 they locate from `CodeProject.Path`. Where there is no `AGENTS.md` beside that path,
 `RepoIsAvailable` returns False and every check in both modules reports a passing
 note instead. That guard is there for the end user whose install has no checkout,
-not as a configuration to run in: hosted on the development copy the checks are
-live, and if they ever report skips you are running somewhere you should not be.
+not as a suite configuration: in the disposable development checkout these checks
+must remain live. A database-only copy can make them report skips or passing notes;
+inspect every guard and qualify the matching repository context explicitly.
 Line budgets from [agent-docs-maintenance.md](agent-docs-maintenance.md) are worth
 confirming directly either way, since a count is cheaper than a run:
 

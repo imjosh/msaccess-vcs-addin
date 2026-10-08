@@ -17,6 +17,21 @@ UI and its VBA-to-JavaScript bridge, see
 [web-test-runner.md](web-test-runner.md). For the filter syntax used by
 `VCS.RunTests`, see [AGENTS.md](../AGENTS.md).
 
+### Normal developer use and add-in development
+
+Normal developer use runs the installed add-in against a separate user database;
+production import/replacement/deletion coverage exercises that relationship.
+The add-in's own suite executes development code in its current project and may
+modify that executing project. Use a fresh disposable development host for the
+whole suite, retain imported module fixtures through reopen validation, then
+dispose of the host. The installed library still drives the run and receives
+assertions. The primary development database is protected by host disposal.
+
+[agent-test-runs.md](agent-test-runs.md) owns the preparation, repository-context,
+close/reopen and disposal recipe. Normal and batch fixtures have distinct names
+and remain in the host until disposal. This does not prove a repair of A42's
+corruption mechanism or production deletion behavior.
+
 ### Which project a run executes in
 
 A run spans two VBA projects, and almost every surprise in the harness traces back
@@ -35,8 +50,9 @@ still records errors and assertions and
 releases each class instance for teardown.
 
 For a user database those are obviously different projects. For this repository they
-are two loaded copies of the *same* project — `Version Control.accda` open as the
-current database, plus the installed copy under `%AppData%\MSAccessVCS` — both named
+are two loaded copies of the *same* project — disposable `Version Control.accda`
+open as the current database, plus the installed library under
+`%AppData%\MSAccessVCS` — both named
 `MSAccessVCS`. `BuildRunCmd` qualifies by file path precisely for this case.
 
 The consequence that costs the most time: **global state is per-copy**. A test

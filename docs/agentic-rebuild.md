@@ -165,10 +165,13 @@ rebuild.
 
 ## Verifying the rebuild
 
-A rebuild ends with no Access process running, so the next run reopens the file.
-Running the add-in's own test suite afterwards is its own topic, including which
-database has to host the run and why an all-`EMPTY` result is a broken harness
-rather than a pass: see [agent-test-runs.md](agent-test-runs.md).
+After a completed rebuild, prepare a fresh disposable development host with the
+matching repository context for suite qualification. The primary build output
+supplies the version under test; the suite copy may retain imported fixtures until
+owned close/fresh reopen readability and compilation checks finish. Preserve
+results/failures before whole-host disposal. Preparation and qualification,
+including retained fixtures and EMPTY guards, are maintained in
+[agent-test-runs.md](agent-test-runs.md).
 
 ## Why it refuses instead of closing them
 
@@ -224,4 +227,4 @@ The launcher must obtain mutual admission before registering its rebuild callbac
 
 The callback-free `Build` call returns Empty because it is a VBA Sub. That confirms dispatch only. The worker waits for its completed build log and compile result before advancing; structured admission or dispatch refusals stop it immediately.
 
-The coordinated development identities are add-in `6.0.0-dev.17` and MCP `0.3.0-dev.17`, protocol `msaccess-vcs.session/1`. They are assigned, unpublished versions. To migrate from the X16 development pair, use its recorded server source to perform the documented exported-source rebuild once; then reconnect using the X17 server. Do not disable admission or patch a loaded library. See [compatibility guidance](../../msaccess-vcs-mcp/docs/RELEASE_COMPATIBILITY.md) and [X17 evidence](../../verification/X17/README.md).
+The coordinated development identities are add-in `6.0.0-dev.18` and MCP `0.3.0-dev.18`, protocol `msaccess-vcs.session/1`. They are assigned, unpublished versions. To migrate from the X16 development pair, use its recorded server source to perform the documented exported-source rebuild once; then reconnect using the X17 server. Do not disable admission or patch a loaded library. See [compatibility guidance](../../msaccess-vcs-mcp/docs/RELEASE_COMPATIBILITY.md) and [X17 evidence](../../verification/X17/README.md).

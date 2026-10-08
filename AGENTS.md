@@ -82,12 +82,12 @@ projects, or untranslatable UI.
 
 ## Running tests
 
-Over MCP, `database_path` decides which project the runner scans, so **run this
-repo's tests on the development copy** — `vcs_run_tests("<repo>\Version Control.accda")`.
-The installed copy under `%AppData%` is only ever loaded as a library, where it
-supplies the runner and `TestAssert`; hosting a run on it is refused. Nothing in
-`Testing/` hosts a run either, and an all-`EMPTY` result is a broken harness, not
-a pass. [docs/agent-test-runs.md](docs/agent-test-runs.md) covers the traps.
+Run this repo's suite through MCP on a **fresh disposable development `.accda`**
+with matching source/repository context. The installed add-in supplies the runner
+and `TestAssert` as a library. Retain import fixtures through close/reopen
+validation, then dispose of the entire owned host.
+[docs/agent-test-runs.md](docs/agent-test-runs.md) owns preparation and qualification.
+`Testing/` is not the suite host; all-`EMPTY` is a broken harness.
 
 ## Key files in an export folder
 

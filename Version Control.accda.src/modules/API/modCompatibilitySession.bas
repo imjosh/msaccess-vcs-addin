@@ -7,7 +7,7 @@ Option Explicit
 Public Const COMMAND_PROTOCOL As String = "msaccess-vcs.session/1"
 Public Const SERVER_MINIMUM As String = "0.3.0"
 Public Const SERVER_MAXIMUM As String = "0.4.0"
-Public Const SERVER_DEVELOPMENT As String = "0.3.0-dev.17"
+Public Const SERVER_DEVELOPMENT As String = "0.3.0-dev.18"
 Private Const MAX_SESSIONS As Long = 128
 Private Const SESSION_IDLE_MINUTES As Long = 30
 Private m_strInstance As String

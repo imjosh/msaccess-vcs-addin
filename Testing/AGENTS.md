@@ -1,8 +1,9 @@
 # AGENTS.md - Testing Folder Guide
 
 **Nothing in this folder runs the add-in's own tests, or rebuilds the add-in.**
-Both are done against the development copy of `Version Control.accda` in the
-repository root, driven over MCP; see
+Rebuilds use the development `Version Control.accda` beside exported source.
+Suite runs use a fresh disposable development copy with matching repository
+context, driven over MCP; see
 [../docs/agent-test-runs.md](../docs/agent-test-runs.md) and
 [../docs/agentic-rebuild.md](../docs/agentic-rebuild.md). A test run pointed at
 `Testing.accdb` searches that sample database for tests and reports a vacuous
