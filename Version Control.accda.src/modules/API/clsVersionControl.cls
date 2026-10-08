@@ -518,6 +518,8 @@ Private Function BuildAsPathRefusal(ByVal strSourceFolder As String, _
 
     If Len(strSourceFolder) = 0 Or Len(strOutputPath) = 0 Then
         strMessage = T("Build As needs both a source folder and an output file path.")
+    ElseIf Not BuildOutputIsFullyQualified(strOutputPath) Then
+        strMessage = T("The output must be a full path to a database file: {0}", var0:=strOutputPath)
     ElseIf Not FolderHasVcsOptionsFile(strSourceFolder) Then
         strMessage = T("Source files not found in folder: {0}", var0:=strSourceFolder)
     Else
@@ -533,6 +535,16 @@ Private Function BuildAsPathRefusal(ByVal strSourceFolder As String, _
 
     If Len(strMessage) > 0 Then BuildAsPathRefusal = RefusalJson(ERR_INVALID_BUILD_PATH, strMessage)
 
+End Function
+
+
+' A supplied destination must name its drive root or its UNC server and share.
+' Check the caller's path before resolving it: absolute conversion would hide
+' drive-relative and root-relative inputs. Keep existing file/folder validation.
+Private Function BuildOutputIsFullyQualified(ByVal strPath As String) As Boolean
+    strPath = Replace(strPath, "/", "\")
+    BuildOutputIsFullyQualified = strPath Like "[A-Za-z]:\*" Or _
+        strPath Like "\\?*\?*\?*"
 End Function
 
 

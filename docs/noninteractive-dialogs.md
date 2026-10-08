@@ -81,8 +81,11 @@ trapping and infrastructure; its retained callback emitter submits once after
 restoration. A payload-construction fault adds `completion_error` and
 `completion_error_number` without replacing the operation's primary diagnosis.
 
-`BuildAs(source, output)` builds the source folder to the output file with no
-picker. With no arguments (the ribbon) it keeps its pickers. Given only one path,
+`BuildAs(source, output)` requires a fully qualified drive or UNC output path.
+Relative, drive-relative and root-relative outputs are refused before operation
+admission, leaving the open database and caller session unchanged. It builds
+the source folder to the output file with no picker. With no arguments (the
+ribbon) it keeps its pickers. Given only one path,
 or a path it cannot use, it starts nothing and returns `invalid_build_path`
 (posted as an `error` callback like any refusal): both paths are required, the
 source folder must hold `vcs-options.json`, and the output must be a full path to

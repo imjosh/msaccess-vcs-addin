@@ -82,6 +82,35 @@ Public Sub TestBuildAsRefusesUnusableOutput()
 End Sub
 
 
+Public Sub TestBuildAsRefusesRelativeDestinations()
+    Dim varPath As Variant
+    Dim dBefore As Dictionary
+    Dim dCompletion As Dictionary
+    Dim lngError As Long
+    Dim strError As String
+
+    On Error GoTo ErrHandler
+    For Each varPath In Array(".\Out.accdb", "..\Out.accdb", _
+        Left$(CurrentProject.FullName, 2) & ".\Out.accdb", Mid$(CurrentProject.FullName, 3))
+        Set dBefore = BuildAsAdmissionState()
+        Set dCompletion = Operation.LastCompletion
+        AssertPathRefusal VCS.BuildAs(ThisSourceFolder, CStr(varPath)), CStr(varPath)
+        TestAssert ConvertToJson(dBefore) = ConvertToJson(BuildAsAdmissionState()), _
+            "refusal preserves database, forms, operation and session: " & CStr(varPath)
+        TestAssert Operation.LastCompletion Is dCompletion, "refusal emits no completion"
+    Next varPath
+
+CleanUp:
+    On Error Resume Next
+    If lngError <> 0 Then TestAssert False, CStr(lngError) & ": " & strError
+    Exit Sub
+ErrHandler:
+    lngError = Err.Number
+    strError = Err.Description
+    Resume CleanUp
+End Sub
+
+
 Public Sub TestCompletionCarriesRecordedOutputPath()
 
     Dim cOp As clsOperation
@@ -183,3 +212,111 @@ End Function
 Private Sub Check(ByRef strFailed As String, blnPassed As Boolean, strCheck As String)
     If Not blnPassed Then strFailed = strFailed & "FAIL: " & strCheck & vbCrLf
 End Sub
+
+
+' A38 scripted public-boundary probe. Run outside the test runner in a disposable
+' database with this development project loaded as a library. A held root safely
+' distinguishes path admission from operation admission on the unfixed version.
+Public Function BuildAsAdmissionCheck(ByVal strSource As String, ByVal strOutput As String, _
+    ByVal strExpectedPattern As String, ByVal blnHoldRoot As Boolean) As String
+
+    Dim cRoot As clsRootOperationLease
+    Dim dResult As New Dictionary
+    Dim dBefore As Dictionary
+    Dim dAfter As Dictionary
+    Dim dRefusal As Dictionary
+    Dim dCompletion As Dictionary
+    Dim strReply As String
+    Dim lngScope As Long
+    Dim intMode As eInteractionMode
+    Dim intPolicy As eDecisionPolicy
+    Dim lngError As Long
+    Dim strError As String
+
+    On Error GoTo ErrHandler
+    intMode = Operation.InteractionMode
+    intPolicy = Operation.DecisionPolicy
+    If Operation.IsActive Then
+        dResult.Add "error", "Probe requires a free disposable session."
+        GoTo CleanUp
+    End If
+    lngScope = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
+    If blnHoldRoot Then
+        Set cRoot = Operation.TryBeginRoot(eotOther)
+        If cRoot Is Nothing Then
+            dResult.Add "error", "Probe root was refused."
+            GoTo CleanUp
+        End If
+    End If
+
+    Set dBefore = BuildAsAdmissionState()
+    Set dCompletion = Operation.LastCompletion
+    strReply = VCS.BuildAs(strSource, strOutput)
+    Set dRefusal = ParseJson(strReply)
+    Set dAfter = BuildAsAdmissionState()
+    dResult.Add "before", dBefore
+    dResult.Add "after", dAfter
+    dResult.Add "refusal", dRefusal
+    dResult.Add "state_unchanged", ConvertToJson(dBefore) = ConvertToJson(dAfter)
+    dResult.Add "completion_unchanged", Operation.LastCompletion Is dCompletion
+    dResult.Add "success", Not CBool(dRefusal("success")) And _
+        dNZ(dRefusal, "error_pattern") = strExpectedPattern And _
+        CBool(dResult("state_unchanged")) And CBool(dResult("completion_unchanged"))
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorSuccess
+    Set cRoot = Nothing
+    ' Root completion must not consume the caller-owned policy scope.
+    dResult.Add "scope_survives_root", Operation.InteractionMode = eimNonInteractive And _
+        Operation.DecisionPolicy = edpBlock
+    Operation.CloseInteractionScope lngScope
+    dResult.Add "scope_restored", Operation.InteractionMode = intMode And _
+        Operation.DecisionPolicy = intPolicy
+    If lngError <> 0 Then dResult.Add "error", CStr(lngError) & ": " & strError
+    BuildAsAdmissionCheck = ConvertToJson(dResult)
+    Exit Function
+
+ErrHandler:
+    lngError = Err.Number
+    strError = Err.Description
+    Resume CleanUp
+End Function
+
+
+Private Function BuildAsAdmissionState() As Dictionary
+    Dim dState As New Dictionary
+    Dim colForms As New Collection
+    Dim frm As Access.Form
+    Dim dForm As Dictionary
+
+    dState.Add "database", CurrentProject.FullName
+    dState.Add "status", Operation.Status
+    dState.Add "root_token", Operation.CurrentRootToken
+    dState.Add "mode", Operation.InteractionMode
+    dState.Add "policy", Operation.DecisionPolicy
+    dState.Add "attended", Operation.Attended
+    dState.Add "force_unattended", Operation.ForceUnattended
+    dState.Add "operation_type", Operation.OperationType
+    dState.Add "source_name", Operation.SourceName
+    dState.Add "automation_source", Operation.AutomationSource
+    dState.Add "blocked", Operation.DecisionBlocked
+    dState.Add "error_level", Operation.ErrorLevel
+    dState.Add "cancel_requested", Operation.CancelRequested
+    dState.Add "native_close_cancelled", Operation.NativeCloseCanceled
+    AddDecisionJournal dState, Operation.Decisions
+    dState.Add "log_active", Log.Active
+    dState.Add "export_folder", Options.GetExportFolder
+    dState.Add "timer_pending", TimerIsPending
+    dState.Add "compatibility_envelope", CurrentCompatibilityEnvelope()
+    For Each frm In Forms
+        Set dForm = New Dictionary
+        dForm.Add "name", frm.Name
+        dForm.Add "visible", frm.Visible
+        dForm.Add "view", frm.CurrentView
+        dForm.Add "dirty", frm.Dirty
+        colForms.Add dForm
+    Next frm
+    dState.Add "forms", colForms
+    Set BuildAsAdmissionState = dState
+End Function
