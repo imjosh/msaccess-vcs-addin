@@ -55,7 +55,10 @@ installed before this feature will not have the flag.
 ## Running tests
 
 Run `?VCS.RunTests` from the Immediate Window, or use **Tools > Run Tests** on the
-ribbon. After a completed run the runner can re-run only the failures.
+ribbon. With authorized MCP, use `vcs_run_tests` against **this project's database**
+(or the rebuilt output being verified), not a development or installed add-in copy.
+Check that the returned tests are the intended ones; zero tests or all EMPTY does
+not verify the changes. After a completed run, re-run only failures as needed.
 
 `RunTests` takes an optional `ParamArray` of filters. Each argument resolves in
 priority order: exact module name, then suite or `@Folder` value (matching the full

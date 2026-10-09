@@ -2,8 +2,11 @@
 
 ## Reading the logs
 
-Every operation writes a timestamped log to the `logs/` subfolder. Check the most
-recent one first; it carries the detailed output, timing, and error messages.
+Every operation writes a timestamped log to `logs/`. Prefer MCP's returned
+`log_path` for the attempt; otherwise match the latest log's time and database to
+the operation. It carries detailed output, timing, and errors. After a timeout or
+uncertain completion, inspect recent calls and that log before retrying a mutation;
+the `access-vcs-recover` skill provides detailed MCP recovery when installed.
 
 | Pattern | Operation |
 |---------|-----------|

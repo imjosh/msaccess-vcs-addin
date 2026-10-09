@@ -85,11 +85,17 @@ Each of these is short. Read the matching one before making that kind of change.
 
 ## How changes get back into Access
 
-Ask the user to run a **merge build** from the add-in ribbon, which imports changed
-source files into the existing database. A **full build** creates a new database
-from source instead, and **export** goes the other way, writing database objects
-out to these files. When a source file and its database object have both changed,
-the add-in detects the conflict and prompts the user to choose which version wins.
+Use Access VCS MCP tools when available and authorized to apply the requested
+changes, then verify them in the intended database. The `access-vcs-sync` and
+`access-vcs-recover` skills provide detailed sync and recovery procedures when
+installed; editing this project does not require them. Otherwise, ask the user
+to run the appropriate build or merge from the add-in ribbon and verify it.
+
+A **merge build** imports changed source into the existing database. A **full
+build** creates a new database from source. **Export** goes the other way, writing
+database objects to these files. When source and database have both changed, a
+merge detects conflicts: use the user's authorized choice or ask which version
+wins. A started operation is not proof that the changes reached Access.
 
 ## More information
 
