@@ -12,7 +12,6 @@ Run `VCS.InstallTestAssertModule` in the Immediate Window to inject `modTestAsse
 ## Writing tests
 
 A test is a parameterless `Public Sub` in a test module:
-
 ```vba
 Option Compare Database
 Option Explicit
@@ -24,7 +23,6 @@ Public Sub TestDoubleInput()
     TestAssert MyFunction(0) = 0, "Zero input returns zero"
 End Sub
 ```
-
 The second `TestAssert` argument is optional context that identifies which
 assertion failed, which matters inside loops and shared helpers.
 
@@ -47,11 +45,9 @@ finishes (`Application.Run` ignores Error Trapping). Class tests report ERROR in
 A run is unattended: a `MsgBox`, `InputBox`, or modal form in code a test reaches
 stalls it until someone clicks. `modTestAssert.TestRunActive` is true for the whole
 run, so guard anything that waits for a person:
-
 ```vba
 If Not TestRunActive Then MsgBox "Import complete.", vbInformation
 ```
-
 Prefer guarding a prompt whose absence changes nothing; where a prompt decides
 something, branch to the answer an unattended run should get. A `modTestAssert`
 installed before this feature will not have the flag.
