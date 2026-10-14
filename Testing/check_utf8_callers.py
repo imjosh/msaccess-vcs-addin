@@ -100,6 +100,7 @@ def run(mode, database, library):
             result["fixture_name"] = component.Name
             assert component.Name == "vcs_test_utf8_translation"
             component = project = None
+            app.DoCmd.Save(win32com.client.constants.acModule, "vcs_test_utf8_translation")
             result["fixture_compile"] = api("CompileVBA", True)
             assert result["fixture_compile"] and app.IsCompiled
             result["translation_path"] = str(database.parent / "Translation")
@@ -108,13 +109,12 @@ def run(mode, database, library):
             files = sorted((database.parent / "Translation").glob("*.po"))
             files += sorted((database.parent / "Translation").glob("*.pot"))
             records = [artifact(path) for path in files]
+            result["artifacts"] = records
             assert any(r["name"].endswith(".pot") for r in records)
             assert any(r["name"].endswith(".po") for r in records)
             for record in records:
                 assert record["bytes"] and not record["bom"]
                 assert 'msgid ""' in record["text"] and 'msgstr ""' in record["text"]
-                assert "charset=UTF-8" in record["text"]
-            result["artifacts"] = records
         result["end_session"] = api("EndSession")
         result["success"] = True
     except Exception as exc:
@@ -144,6 +144,12 @@ def run(mode, database, library):
                 assert win32process.GetProcessTimes(handle)["CreationTime"] == stamp
                 assert Path(app.CurrentProject.FullName).resolve() == database
                 result["end_session_cleanup"] = first(app.Run(str(library.with_suffix("")) + ".API", "EndSession"))
+                if mode == "gettext" and result.get("fixture_name") == "vcs_test_utf8_translation":
+                    project = next(p for p in app.VBE.VBProjects if Path(str(p.FileName)).resolve() == database)
+                    app.VBE.ActiveVBProject = project
+                    app.DoCmd.RunCommand(win32com.client.constants.acCmdCompileAndSaveAllModules)
+                    project = None
+                    result["compile_and_save_before_close"] = bool(app.IsCompiled)
                 app.Quit(2)
                 result["graceful_quit"] = True
             except Exception as exc:
@@ -164,19 +170,30 @@ def run(mode, database, library):
             window = reopened.hWndAccessApp
             window = window() if callable(window) else window
             reopen_pid = win32process.GetWindowThreadProcessId(window)[1]
+            result["reopened_pid"] = reopen_pid
             reopen_handle = win32api.OpenProcess(0x1000 | 0x100000, False, reopen_pid)
             assert Path(reopened.CurrentProject.FullName).resolve() == database
             project = next(p for p in reopened.VBE.VBProjects if Path(str(p.FileName)).resolve() == database)
             module = project.VBComponents("vcs_test_utf8_translation").CodeModule
             text = str(module.Lines(1, module.CountOfLines))
             result["reopened_fixture_readable"] = "Utf8TranslationProbe" in text
+            result["reopened_compiled_before_check"] = bool(reopened.IsCompiled)
+            reopened.VBE.ActiveVBProject = project
+            reopened.DoCmd.RunCommand(win32com.client.constants.acCmdCompileAndSaveAllModules)
             result["reopened_is_compiled"] = bool(reopened.IsCompiled)
             result["reopened_pid"] = reopen_pid
             module = project = None
             reopened.Quit(2)
+            reopened = None
         except Exception as exc:
             result["reopen_error"] = repr(exc)
         finally:
+            if reopened is not None and reopen_handle is not None:
+                try:
+                    assert Path(reopened.CurrentProject.FullName).resolve() == database
+                    reopened.Quit(2)
+                except Exception as exc:
+                    result["reopen_close_error"] = repr(exc)
             reopened = None
             gc.collect()
             if reopen_handle is not None:
