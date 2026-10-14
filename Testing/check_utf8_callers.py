@@ -183,6 +183,13 @@ def run(mode, database, library):
                 result["reopened_handle_exit"] = win32event.WaitForSingleObject(reopen_handle, 5000) == win32event.WAIT_OBJECT_0
                 reopen_handle.Close()
             pythoncom.CoUninitialize()
+    if mode == "gettext":
+        result["success"] = bool(result.get("success") and result.get("contribute_setting_restored")
+                                 and result.get("reopened_fixture_readable")
+                                 and result.get("reopened_is_compiled")
+                                 and result.get("reopened_handle_exit"))
+    result["success"] = bool(result.get("success") and result.get("original_handle_exit")
+                             and "close_error" not in result and "restoration_error" not in result)
     return result
 
 
