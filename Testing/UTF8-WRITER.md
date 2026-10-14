@@ -49,3 +49,18 @@ This fix preserves bytes on new writes. It does not change the export format or
 force unchanged forms to export again. To replace an existing empty SVG, export
 that object again or run a full export with layout SVG enabled. Regenerate POT
 and PO files through their existing translation commands.
+
+The Windows [caller driver](check_utf8_callers.py) requires Access and pywin32.
+It calls the installed add-in as a library and closes only its owned process.
+Use a new user database for SVG and a disposable development checkout for
+gettext. The [translation fixture](Fixtures/modules/vcs_test_utf8_translation.bas)
+imports once into that idle development host. It remains through close and fresh
+reopen validation. The driver restores the contribution setting exactly.
+
+```text
+python Testing/check_utf8_callers.py svg <new-user.accdb> <installed-addin.accda> <new-receipt.json>
+python Testing/check_utf8_callers.py gettext <disposable-dev.accda> <installed-addin.accda> <new-receipt.json>
+```
+
+Keep the caller receipts and failure artifacts before disposing of each owned
+host. Use the same rebuilt writer stage in the installed runner and tested host.
