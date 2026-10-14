@@ -55,8 +55,9 @@ The legacy-helper control seeds the earlier Sub helper. Scan must upgrade it to
 the scalar-returning Function, and all three class-invocation procedures must pass.
 These controls never edit the loaded library.
 
-Add `--sync` to a focused command to verify the synchronous `RunTestsHeadless`
-JSON API through owned COM instead of MCP callbacks. Require the same assertions
+Add `--sync` to a focused command to verify the synchronous `RunFilteredTests`
+JSON API through owned COM instead of MCP callbacks. The driver sets the session
+filter before dispatch, and API source forces headless execution. Require the same assertions
 and reopen checks. This switch does not change the unfiltered MCP qualification.
 
 Each receipt records errors separately from test results. The driver preserves a

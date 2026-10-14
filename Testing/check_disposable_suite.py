@@ -144,7 +144,9 @@ def run(label,binary,pin,filters,fault=None,sync=False):
             if message:print(message,flush=True)
         if sync:
             app.Run(str(INSTALLED.with_suffix(''))+'.SetInteractionMode',1)
-            data['tests']=json.loads(api('RunTestsHeadless',filters))
+            api('SetOption','DefaultTestFilter',filters)
+            data['sync_raw_result']=api('RunFilteredTests')
+            data['tests']=json.loads(data['sync_raw_result'])
             data['tests']['success']=data['tests'].get('allPassed',False)
         else:
             result=asyncio.run(run_mcp_tool('vcs_run_tests',args,on_progress=progress))
