@@ -10,6 +10,10 @@ Keep the evidence directory outside this checkout. The driver creates a detached
 Git worktree for each run, copies the closed build output and matching source
 context, and opens only that disposable database. Start with no Access processes
 running. The driver refuses otherwise and never terminates another process.
+Older command-bar tests read menu fixtures beside the checkout. Each owned host
+container includes its own matching sibling copy. The driver archives that copy
+with the host and removes both after confirmed closure. Check for unexpected
+SKIP assertions as well as EMPTY procedures before accepting an unfiltered run.
 
 From this repository, run these commands with the MCP client's Python environment:
 

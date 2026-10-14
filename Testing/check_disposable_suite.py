@@ -31,10 +31,10 @@ def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def git(repo,*args):return subprocess.check_output(['git','-C',str(repo),*args],text=True).strip()
 
 def run(label,binary,pin,filters,fault=None,sync=False):
-    assert OUT is not None and OUT.is_dir(), 'Provide an evidence directory outside the checkout'
-    assert not OUT.resolve().is_relative_to(REPO.resolve())
-    folder=OUT/'hosts'/label
-    folder.parent.mkdir(exist_ok=True)
+    container=OUT/'hosts'/label
+    assert not container.exists()
+    folder=container/'repo'
+    folder.parent.mkdir(parents=True,exist_ok=False)
     assert not folder.exists()
     assert list_access_pids_or_none()==set(), 'Exclusive native use required'
     subprocess.run(['git','-C',str(REPO),'worktree','add','--detach',str(folder),pin],check=True)
@@ -43,6 +43,9 @@ def run(label,binary,pin,filters,fault=None,sync=False):
     src=Path(str(host)+'.src')
     shutil.copytree(Path(str(binary)+'.src'),src,dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('logs','mcp','test-results'))
+    # Older command-bar tests resolve these fixtures beside CodeProject.Path.
+    legacy=container/'Testing/Fixtures/menus/regression'
+    shutil.copytree(folder/'Testing/Fixtures/menus/regression',legacy)
     # Controls modify only the idle disposable snapshot's fixture source.
     if fault=='assertion':
         p=folder/'Testing/Fixtures/modules/vcs_test_import_alpha.bas'
@@ -55,6 +58,7 @@ def run(label,binary,pin,filters,fault=None,sync=False):
           'source_manifest':{p.relative_to(folder).as_posix():sha(p) for p in src.rglob('*')
                              if p.is_file() and not any(x in p.parts for x in ['logs','mcp','test-results'])},
           'client_version':__import__('msaccess_vcs_mcp').__version__}
+    data['legacy_fixture_context']={p.relative_to(container).as_posix():sha(p) for p in legacy.rglob('*') if p.is_file()}
     app=handle=project=module=None
     def save():
         (OUT/(label+'.json')).write_text(json.dumps(data,indent=2,default=str),encoding='utf-8')
@@ -194,9 +198,9 @@ def run(label,binary,pin,filters,fault=None,sync=False):
     archive=OUT/(label+'-host.zip')
     manifest={}
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as z:
-        for p in folder.rglob('*'):
+        for p in container.rglob('*'):
             if p.is_file():
-                name=p.relative_to(folder).as_posix();raw=p.read_bytes()
+                name=p.relative_to(container).as_posix();raw=p.read_bytes()
                 z.writestr(name,raw);manifest[name]=hashlib.sha256(raw).hexdigest()
     with zipfile.ZipFile(archive) as z:
         assert all(hashlib.sha256(z.read(k)).hexdigest()==v for k,v in manifest.items())
@@ -204,9 +208,11 @@ def run(label,binary,pin,filters,fault=None,sync=False):
     data['git_status_after']=git(folder,'status','--porcelain')
     # Preserve failed reopen hosts raw as well, for later diagnosis.
     if data.get('reopen_is_compiled') and not data.get('error'):
-        target=folder.resolve();assert target.parent==(OUT/'hosts').resolve()
+        target=folder.resolve();owned_container=container.resolve()
+        assert target.parent==owned_container and owned_container.parent==(OUT/'hosts').resolve()
         subprocess.run(['git','-C',str(REPO),'worktree','remove','--force',str(target)],check=True)
-        data['disposed']=not target.exists()
+        shutil.rmtree(owned_container)
+        data['disposed']=not owned_container.exists()
     else:data['retained_raw']=True
     save()
     print(json.dumps({k:v for k,v in data.items() if k not in ['tests','source_manifest','initial_project','after_project','reopened_project']},indent=2),flush=True)
