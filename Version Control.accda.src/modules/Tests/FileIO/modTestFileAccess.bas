@@ -285,3 +285,101 @@ Private Function LocalPathAsAdminShareUnc(ByVal strPath As String) As String
     End If
 
 End Function
+
+
+' The layout exporter uses this shared file writer. Verify actual UTF-8 bytes,
+' including non-ASCII text and its absence of a BOM, in a disposable temp file.
+Public Sub TestLayoutSvgFileWriter()
+    Dim strPath As String
+    Dim strText As String
+    Dim bData() As Byte
+    Dim lngByte As Long
+    Dim varExpected As Variant
+    Dim lngErr As Long
+    Dim strErr As String
+    On Error GoTo ErrHandler
+    strPath = GetTempFolder & "vcs_utf8_" & FSO.GetTempName
+    strText = "<svg>" & ChrW$(&H3A9) & "</svg>" & vbCrLf
+    WriteFileNoBom strText, strPath
+    TestAssert FSO.FileExists(strPath), "SVG writer creates its file"
+    bData = GetFileBytes(strPath)
+    TestAssert bData(0) = Asc("<"), "UTF-8 output starts with content, without a BOM"
+    TestAssert UBound(bData) + 1 = 15, "UTF-8 encodes omega as two bytes"
+    varExpected = Array(60, 115, 118, 103, 62, 206, 169, 60, 47, 115, 118, 103, 62, 13, 10)
+    For lngByte = 0 To 14
+        TestAssert bData(lngByte) = varExpected(lngByte), "UTF-8 byte " & lngByte
+    Next lngByte
+    TestAssert ReadFile(strPath) = strText, "SVG text survives UTF-8 write/read"
+CleanUp:
+    On Error Resume Next
+    If Len(strPath) > 0 Then
+        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
+    End If
+    If lngErr <> 0 Then TestAssert False, "SVG file writer " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestWriteFileNoBomSkipsUnchangedContent()
+    Dim strPath As String
+    Dim strText As String
+    Dim dteBefore As Date
+    Dim lngErr As Long
+    Dim strErr As String
+    On Error GoTo ErrHandler
+    strPath = GetTempFolder & "vcs_utf8_" & FSO.GetTempName
+    strText = "unchanged " & ChrW$(&H3A9) & vbCrLf
+    WriteFileNoBom strText, strPath
+    TestAssert ReadFile(strPath) = strText, "Initial no-BOM content matches"
+    SetFileDate strPath, DateAdd("n", -5, Now), True
+    dteBefore = GetLastModifiedDate(strPath)
+    WriteFileNoBom strText, strPath
+    TestAssert GetLastModifiedDate(strPath) = dteBefore, "Identical no-BOM write preserves timestamp"
+    TestAssert ReadFile(strPath) = strText, "Identical no-BOM write preserves content"
+CleanUp:
+    On Error Resume Next
+    If Len(strPath) > 0 Then
+        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
+    End If
+    If lngErr <> 0 Then TestAssert False, "Unchanged no-BOM write " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestWriteFileNoBomOverwritesExistingFile()
+    Dim strPath As String
+    Dim strText As String
+    Dim bData() As Byte
+    Dim lngErr As Long
+    Dim strErr As String
+    On Error GoTo ErrHandler
+    strPath = GetTempFolder & "vcs_utf8_" & FSO.GetTempName
+    WriteFile "Longer previous content" & vbCrLf, strPath
+    ' Also cover the writer's existing trailing-CRLF behavior.
+    strText = ChrW$(&H3A9)
+    WriteFileNoBom strText, strPath
+    bData = GetFileBytes(strPath)
+    TestAssert UBound(bData) + 1 = 4, "Shorter no-BOM write truncates previous bytes"
+    TestAssert bData(0) = 206 And bData(1) = 169, "Overwrite starts with UTF-8 omega without BOM"
+    TestAssert bData(2) = 13 And bData(3) = 10, "Writer appends CRLF when missing"
+    TestAssert ReadFile(strPath) = strText & vbCrLf, "Overwrite replaces previous text"
+CleanUp:
+    On Error Resume Next
+    If Len(strPath) > 0 Then
+        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
+    End If
+    If lngErr <> 0 Then TestAssert False, "Overwrite no-BOM write " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
