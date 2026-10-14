@@ -529,6 +529,384 @@ Public Sub TestAltExportPromotionRecordsSourceFileState()
 End Sub
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeReportsObjectMissingFromDatabase
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : A source file whose object does not exist in the database must be
+'           : reported for merging even when the index holds matching hashes for it
+'           : (issue #471). Otherwise a deleted object is never restored.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeReportsObjectMissingFromDatabase()
+
+    Dim cModule As IDbComponent
+    Dim strFile As String
+    Dim dModified As Dictionary
+
+    Set cModule = GetTestModuleComponent
+    If cModule Is Nothing Then
+        TestAssert True, "SKIP: modTestIndex not available"
+        Exit Sub
+    End If
+
+    ' A module source file with no matching module in the database
+    strFile = cModule.BaseFolder & "modTestMissingFromDb.bas"
+    WriteFile "Attribute VB_Name = ""modTestMissingFromDb""" & vbCrLf & "Option Explicit" & vbCrLf, strFile
+
+    ' The file list is cached per component instance, so create a new one that
+    ' sees the file just written.
+    Set cModule = GetTestModuleComponent
+
+    ' Give the file an index entry whose hashes match the file on disk.
+    SeedMergeIndexBaseline cModule, strFile
+
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cModule)
+    TestAssert dModified.Exists(strFile), _
+        "unchanged source file of an object missing from the database is reported (issue #471)"
+
+    ' Leave neither the file nor its index entry behind.
+    VCSIndex.Remove cModule, strFile
+    DeleteFile strFile
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeIgnoresFolderDriftForExistingObject
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : A source file that differs from the object's expected path only by
+'           : folder and casing (@Folder drift) must not count as missing: when the
+'           : index matches, it is not reported for merging.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeIgnoresFolderDriftForExistingObject()
+
+    Dim cModule As IDbComponent
+    Dim strOriginal As String
+    Dim strFolder As String
+    Dim strCopy As String
+    Dim dModified As Dictionary
+
+    Set cModule = GetTestModuleComponent
+    If cModule Is Nothing Then
+        TestAssert True, "SKIP: modTestIndex not available"
+        Exit Sub
+    End If
+
+    strOriginal = ResolveSourceFilePath(cModule, "modTestIndex")
+    If Len(strOriginal) = 0 Then
+        TestAssert True, "SKIP: modTestIndex.bas fixture missing"
+        Exit Sub
+    End If
+
+    ' Same module, different folder and casing
+    strFolder = cModule.BaseFolder & "zzTestFolderDrift" & PathSep
+    strCopy = strFolder & "MODTESTINDEX.bas"
+    If Not FSO.FolderExists(strFolder) Then FSO.CreateFolder strFolder
+    FSO.CopyFile strOriginal, strCopy, True
+
+    ' New instance, so the cached file list includes the copy.
+    Set cModule = GetTestModuleComponent
+    SeedMergeIndexBaseline cModule, strCopy
+
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cModule)
+    TestAssert Not dModified.Exists(strCopy), _
+        "folder and casing drift of an existing object is not reported as missing"
+
+    ' The index keys on the file name, so the copy may share the original's entry.
+    ' Remove it, drop the copy, and describe the original again.
+    VCSIndex.Remove cModule, strCopy
+    DeleteFile strCopy
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder Left$(strFolder, Len(strFolder) - 1), True
+    Set cModule = GetTestModuleComponent
+    SeedMergeIndexBaseline cModule, strOriginal
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeKeepsObjectWithFolderDriftedSource
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : A database object whose source file sits in another folder and with other
+'           : casing than its expected path (@Folder drift) must not be reported as an
+'           : orphan: merging an orphan deletes the object from the database.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeKeepsObjectWithFolderDriftedSource()
+
+    Dim cModule As IDbComponent
+    Dim strExpected As String
+    Dim strFolder As String
+    Dim strMoved As String
+    Dim dModified As Dictionary
+
+    Set cModule = GetTestModuleComponent
+    If cModule Is Nothing Then
+        TestAssert True, "SKIP: modTestIndex not available"
+        Exit Sub
+    End If
+
+    strExpected = cModule.SourceFile
+    If Not FSO.FileExists(strExpected) Then
+        TestAssert True, "SKIP: modTestIndex.bas fixture missing"
+        Exit Sub
+    End If
+
+    ' Move the module's own source file to another folder, with other casing.
+    strFolder = cModule.BaseFolder & "zzTestOrphanDrift" & PathSep
+    strMoved = strFolder & "MODTESTINDEX.bas"
+    If Not FSO.FolderExists(strFolder) Then FSO.CreateFolder strFolder
+    FSO.MoveFile strExpected, strMoved
+
+    ' New instance, so the cached file list sees the move.
+    Set cModule = GetTestModuleComponent
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cModule)
+    TestAssert Not dModified.Exists(strExpected), _
+        "object whose source file drifted to another folder is not reported as an orphan"
+
+    ' Put the file back and describe it again.
+    FSO.MoveFile strMoved, strExpected
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder Left$(strFolder, Len(strFolder) - 1), True
+    Set cModule = GetTestModuleComponent
+    SeedMergeIndexBaseline cModule, strExpected
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeKeepsObjectWithRecasedSource
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : A database object whose source file differs from its expected path only
+'           : by casing must not be reported as an orphan.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeKeepsObjectWithRecasedSource()
+
+    Dim cModule As IDbComponent
+    Dim strExpected As String
+    Dim strTemp As String
+    Dim strRecased As String
+    Dim dModified As Dictionary
+
+    Set cModule = GetTestModuleComponent
+    If cModule Is Nothing Then
+        TestAssert True, "SKIP: modTestIndex not available"
+        Exit Sub
+    End If
+
+    strExpected = cModule.SourceFile
+    If Not FSO.FileExists(strExpected) Then
+        TestAssert True, "SKIP: modTestIndex.bas fixture missing"
+        Exit Sub
+    End If
+
+    ' Rename in place to other casing. (Through a temporary name: a case-only
+    ' rename is a no-op on a case-insensitive file system.)
+    strTemp = strExpected & ".tmp"
+    strRecased = FSO.GetParentFolderName(strExpected) & PathSep & "MODTESTINDEX.bas"
+    FSO.MoveFile strExpected, strTemp
+    FSO.MoveFile strTemp, strRecased
+
+    Set cModule = GetTestModuleComponent
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cModule)
+    TestAssert Not dModified.Exists(strExpected), _
+        "object whose source file differs only by casing is not reported as an orphan"
+
+    ' Restore the original casing and describe the file again.
+    FSO.MoveFile strRecased, strTemp
+    FSO.MoveFile strTemp, strExpected
+    Set cModule = GetTestModuleComponent
+    SeedMergeIndexBaseline cModule, strExpected
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeReportsOrphanWithoutSourceFile
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : A database object with no source file of its name anywhere in the
+'           : category folder is still reported as an orphan, so the merge removes it.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeReportsOrphanWithoutSourceFile()
+
+    Dim cModule As IDbComponent
+    Dim strExpected As String
+    Dim strHidden As String
+    Dim dModified As Dictionary
+
+    Set cModule = GetTestModuleComponent
+    If cModule Is Nothing Then
+        TestAssert True, "SKIP: modTestIndex not available"
+        Exit Sub
+    End If
+
+    strExpected = cModule.SourceFile
+    If Not FSO.FileExists(strExpected) Then
+        TestAssert True, "SKIP: modTestIndex.bas fixture missing"
+        Exit Sub
+    End If
+
+    ' Hide the source file from the file list (other extension).
+    strHidden = strExpected & ".tmp"
+    FSO.MoveFile strExpected, strHidden
+
+    Set cModule = GetTestModuleComponent
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cModule)
+    TestAssert dModified.Exists(strExpected), _
+        "object with no source file of its name is reported as an orphan"
+
+    ' Put the file back and describe it again.
+    FSO.MoveFile strHidden, strExpected
+    Set cModule = GetTestModuleComponent
+    SeedMergeIndexBaseline cModule, strExpected
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeReportsDataOfMissingConfiguredTable
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : When a table configured in TablesToExportData is missing from the
+'           : database, its unchanged data file must be reported for merging, so the
+'           : table comes back with its records after the table def is restored.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeReportsDataOfMissingConfiguredTable()
+    '@Tag("integration")
+
+    Dim cCategory As IDbComponent
+    Dim strTable As String
+    Dim strFile As String
+    Dim blnConfigured As Boolean
+    Dim dModified As Dictionary
+    Dim lngErr As Long
+    Dim strErr As String
+
+    strTable = "vcs_test_missing_data"
+    strFile = Options.GetExportFolder & "tables\" & strTable & ".txt"
+    If Options.TablesToExportData.Exists(strTable) Then
+        TestAssert True, "SKIP: test table already configured for data export"
+        Exit Sub
+    End If
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    ' A leftover table from an interrupted run is expected, so the drop is tolerated.
+    On Error Resume Next
+    CurrentDb.Execute "DROP TABLE [" & strTable & "]"
+    Err.Clear
+    On Error GoTo ErrHandler
+
+    ' Data file for a configured table that does not exist in the database
+    VerifyPath strFile
+    WriteFile "ID" & vbTab & "Name" & vbCrLf & "1" & vbTab & "a" & vbCrLf, strFile
+    Options.AddTableToExportData strTable, etdTabDelimited
+    blnConfigured = True
+
+    ' New instance, so the cached file list includes the data file.
+    Set cCategory = New clsDbTableData
+    SeedMergeIndexBaseline cCategory, strFile
+
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cCategory)
+    TestAssert dModified.Exists(strFile), _
+        "unchanged data file of a configured table missing from the database is reported"
+
+CleanUp:
+    On Error Resume Next
+    If blnConfigured Then Options.TablesToExportData.Remove strTable
+    If Not cCategory Is Nothing Then VCSIndex.Remove cCategory, strFile
+    If FSO.FileExists(strFile) Then DeleteFile strFile
+    If lngErr <> 0 Then TestAssert False, _
+        "unexpected missing table data error " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestMergeIgnoresDataFileOfUnconfiguredTable
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : A leftover data file for a table that exists in the database but is no
+'           : longer in TablesToExportData must not count as missing: GetAllFromDB only
+'           : lists configured tables, and merging the file would overwrite the
+'           : table's records.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestMergeIgnoresDataFileOfUnconfiguredTable()
+    '@Tag("integration")
+
+    Dim cCategory As IDbComponent
+    Dim dbs As DAO.Database
+    Dim strTable As String
+    Dim strFile As String
+    Dim dModified As Dictionary
+    Dim lngErr As Long
+    Dim strErr As String
+
+    strTable = "vcs_test_unconfigured_data"
+    strFile = Options.GetExportFolder & "tables\" & strTable & ".txt"
+    If Options.TablesToExportData.Exists(strTable) Then
+        TestAssert True, "SKIP: test table already configured for data export"
+        Exit Sub
+    End If
+    Set dbs = CurrentDb
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    ' A leftover table from an interrupted run is expected, so the drop is tolerated.
+    On Error Resume Next
+    dbs.Execute "DROP TABLE [" & strTable & "]"
+    Err.Clear
+    On Error GoTo ErrHandler
+
+    ' The table exists, is not configured, and still has a data file in source.
+    dbs.Execute "CREATE TABLE [" & strTable & "] (ID LONG, Name TEXT(10))"
+    dbs.TableDefs.Refresh
+    VerifyPath strFile
+    WriteFile "ID" & vbTab & "Name" & vbCrLf & "1" & vbTab & "a" & vbCrLf, strFile
+
+    ' New instance, so the cached file list includes the data file.
+    Set cCategory = New clsDbTableData
+    SeedMergeIndexBaseline cCategory, strFile
+
+    Set dModified = VCSIndex.GetModifiedSourceFiles(cCategory)
+    TestAssert Not dModified.Exists(strFile), _
+        "unchanged data file of an unconfigured table is not reported as missing"
+
+CleanUp:
+    On Error Resume Next
+    dbs.Execute "DROP TABLE [" & strTable & "]"
+    dbs.TableDefs.Refresh
+    ReleaseDbReferences
+    If Not cCategory Is Nothing Then VCSIndex.Remove cCategory, strFile
+    If FSO.FileExists(strFile) Then DeleteFile strFile
+    If lngErr <> 0 Then TestAssert False, _
+        "unexpected unconfigured table data error " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
 Private Sub RunMetadataOnlyMergeTest(cCategory As IDbComponent, strBaseName As String)
     Dim strFile As String
     Dim strJson As String

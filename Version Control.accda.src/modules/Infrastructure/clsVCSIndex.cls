@@ -783,6 +783,11 @@ End Property
 '           : the index entry recorded at the last export or import.
 '           : NOTE: This will also include source file paths for database objects that
 '           : no longer exist. (Orphaned database objects not represented in source.)
+'           : An object only counts as orphaned when no source file shares its base file
+'           : name, so a file in another folder (@Folder drift) or with other casing does
+'           : not get its object deleted by the merge.
+'           : It also includes every source file whose object is missing from the
+'           : database, even when the file itself is unchanged, so a merge restores it.
 '           :
 '           : Detection precedence per file:
 '           :   1. Property hash (date + size of every indexed file) matches the index
@@ -815,6 +820,8 @@ Public Function GetModifiedSourceFiles(cCategory As IDbComponent, _
 
     Dim dAllFiles As Dictionary
     Dim dItems As Dictionary
+    Dim dDbBaseNames As Dictionary
+    Dim dSourceBaseNames As Dictionary
     Dim dMeta As Dictionary
     Dim varItem As Variant
     Dim cItem As IDbComponent
@@ -831,6 +838,7 @@ Public Function GetModifiedSourceFiles(cCategory As IDbComponent, _
         ' Get a full list of source files and database objects
         Set dAllFiles = cCategory.GetFileList
         Set dItems = cCategory.GetAllFromDB
+        If Not cCategory.SingleFile Then Set dDbBaseNames = GetBaseNameKeys(dItems)
 
         ' File dates and sizes come from a single Win32 folder walk rather than a
         ' per-file FSO.GetFile. (The batch scan is ~20x faster than per-file FSO on
@@ -867,20 +875,28 @@ Public Function GetModifiedSourceFiles(cCategory As IDbComponent, _
             Else
                 ' See if the database object currently exists
                 If Not cCategory.SingleFile Then
-                    blnMissing = Not dItems.Exists(strFile)
+                    blnMissing = IsMissingFromDatabase(cCategory, strFile, dItems, dDbBaseNames)
                 End If
 
                 ' Check the index for any existing entry, so we can compare the saved hashes.
-                ' NOTE: We intentionally do NOT gate this on blnMissing. The
-                ' path-based check (dItems.Exists) can fail due to casing,
-                ' @Folder annotation drift, or stale index state. As long as
-                ' the index has an entry keyed by filename we can still compare
-                ' hashes and avoid unnecessary merges.
+                ' NOTE: The path-based check (dItems.Exists) can fail due to casing,
+                ' @Folder annotation drift, or stale index state, so an object is only
+                ' treated as missing when no database object shares its base file name.
+                ' A missing object is always merged, whatever the index says: a source
+                ' file for an object that does not exist in the database belongs in the
+                ' database after a merge (issue #471). Otherwise, as long as the index has
+                ' an entry keyed by filename we can still compare hashes and avoid
+                ' unnecessary merges.
                 ' Resolve the entry once. GetExistingIndexItem also honors the legacy
                 ' table def .xml/.json key alias, which Me.Item does not -- going through
                 ' Me.Item would silently create a blank entry for those and report the
                 ' component modified on every merge.
-                Set cIdx = GetExistingIndexItem(cCategory, strFile)
+                If blnMissing Then
+                    Log.Add "  Missing from database: " & FSO.GetFileName(strFile), False
+                    Set cIdx = Nothing
+                Else
+                    Set cIdx = GetExistingIndexItem(cCategory, strFile)
+                End If
                 If Not cIdx Is Nothing Then
 
                     ' Hash the current file dates and sizes (sourced from the folder scan
@@ -946,20 +962,76 @@ Public Function GetModifiedSourceFiles(cCategory As IDbComponent, _
 
         ' Now loop through database objects, and compare to source file list
         ' to identify orphaned database objects no longer represented in source.
+        ' The expected path alone is not enough: it follows the object's @Folder
+        ' annotation and casing, so a source file in another folder or with other
+        ' casing would be taken for an orphan, and merging an orphan deletes the
+        ' object. Like the missing check above, compare by base file name.
+        Set dSourceBaseNames = GetBaseNameKeys(dAllFiles)
         For Each varItem In dItems.Items
             Set cItem = varItem
             ' We are only concerned about non single-file items.
             If Not cItem.SingleFile Then
                 ' See if the path exists in the list of source files
                 If Not dAllFiles.Exists(cItem.SourceFile) Then
-                    ' This object does not appear to exist in the source files.
-                    ' Add to list of files to process. (This will remove the
-                    ' existing database object during the merge.)
-                    .Add cItem.SourceFile, vbNullString
+                    If Not dSourceBaseNames.Exists(LCase$(FSO.GetBaseName(cItem.SourceFile))) Then
+                        ' This object does not appear to exist in the source files.
+                        ' Add to list of files to process. (This will remove the
+                        ' existing database object during the merge.)
+                        .Add cItem.SourceFile, vbNullString
+                    End If
                 End If
             End If
         Next varItem
     End With
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : GetBaseNameKeys
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : Return the lower case base file names (no folder, no extension) of the
+'           : file paths keyed in a dictionary (a GetAllFromDB or GetFileList result).
+'---------------------------------------------------------------------------------------
+'
+Private Function GetBaseNameKeys(dPaths As Dictionary) As Dictionary
+
+    Dim varKey As Variant
+    Dim strBaseName As String
+
+    Set GetBaseNameKeys = New Dictionary
+    For Each varKey In dPaths.Keys
+        strBaseName = LCase$(FSO.GetBaseName(CStr(varKey)))
+        If Not GetBaseNameKeys.Exists(strBaseName) Then GetBaseNameKeys.Add strBaseName, vbNullString
+    Next varKey
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : IsMissingFromDatabase
+' Author    : Ricardo Hernandez (Notarnet)
+' Date      : 10/7/2026
+' Purpose   : Returns true when no database object is represented by this source file.
+'           : The full path is checked first, then the base file name, so a path that
+'           : differs only by folder (@Folder drift), casing or a legacy extension does
+'           : not count as missing. Table data is only missing when the table is still
+'           : configured to export data: GetAllFromDB lists configured tables only, and
+'           : merging a leftover data file for a table that is no longer configured would
+'           : overwrite its records.
+'---------------------------------------------------------------------------------------
+'
+Private Function IsMissingFromDatabase(cCategory As IDbComponent, strFile As String, _
+    dItems As Dictionary, dDbBaseNames As Dictionary) As Boolean
+
+    If dItems.Exists(strFile) Then Exit Function
+    If dDbBaseNames.Exists(LCase$(FSO.GetBaseName(strFile))) Then Exit Function
+    If cCategory.ComponentType = edbTableData Then
+        IsMissingFromDatabase = Options.TablesToExportData.Exists(GetObjectNameFromFileName(strFile))
+    Else
+        IsMissingFromDatabase = True
+    End If
 
 End Function
 
