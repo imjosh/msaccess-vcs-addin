@@ -11,6 +11,8 @@ exported source through the supported rebuild before running the lifecycle below
 For writing a test, see [.cursor/rules/testing.mdc](../.cursor/rules/testing.mdc).
 For the layers, the round-trip harness, and where results land, see
 [testing-strategy.md](testing-strategy.md).
+For reproducible checks and safe failure controls, use
+[the disposable-host driver](../Testing/DISPOSABLE-HOSTS.md).
 
 ## Prepare and dispose of the entire development host
 
@@ -47,8 +49,8 @@ repository's suite; it is not a requirement to discard developers' user database
 The installed library remains the runner and assertion receiver. Test procedures
 and import assertions execute in the disposable current project. It may contain
 fixture modules until disposal; the primary development database remains free of
-suite mutations. A qualified disposable suite does not establish a repair of production module
-deletion in a separate user database.
+suite mutations. A qualified disposable suite does not establish a repair of
+production module deletion in a separate user database.
 
 The examples below assume the disposable checkout has already been prepared:
 
