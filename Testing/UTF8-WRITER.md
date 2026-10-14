@@ -42,8 +42,23 @@ actual output bytes. Do not edit a loaded VBA project to construct this control.
    and restore any translation contribution or path settings. Check that the
    generated POT and PO files are nonempty UTF-8 without a BOM and contain their
    gettext headers and messages. Do not use a shared translation folder.
-3. Run existing file-access regressions and the unfiltered suite on fresh
-   disposable hosts. Compare unrelated failures with an equivalently built base.
+3. Run existing file-access regressions on a fresh disposable host. For the
+   broader filtered check on this version, exclude the two existing import tests
+   named below. Compare results with an equivalently built base.
+
+This version's two module-import tests remove fixtures from their executing
+project. That prevents retaining those fixtures through close and fresh reopen.
+The writer check therefore uses this explicit filter:
+
+```text
+msaccess-vcs run-tests <fresh-disposable-dev.accda> --filter=-TestModuleImport_IndexesEachFileOnSharedInstance,-TestModuleImportFast_IndexesEachFileOnSharedInstance
+```
+
+Describe that run as filtered. Fixture-lifecycle repair and full unfiltered
+verification belong to a separate test-host change. The filtered suite's base
+and candidate hosts also fail recompilation after fresh reopen. Preserve those
+failure artifacts. Fresh focused writer hosts and the retained translation
+caller fixture compile successfully after reopen.
 
 This fix preserves bytes on new writes. It does not change the export format or
 force unchanged forms to export again. To replace an existing empty SVG, export
