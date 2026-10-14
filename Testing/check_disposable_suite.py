@@ -104,7 +104,8 @@ def run(label,binary,pin,filters,fault=None,sync=False):
                 if name=='modTestAssert':components[name]['body']=body
             except Exception as exc:components[name]={'error':repr(exc)}
             module=None
-        data[phase]={'components':components,'projects':[str(p.FileName) for p in app.VBE.VBProjects],
+        data[phase]={'components':components,'fixture_names':sorted(c.Name for c in project.VBComponents if c.Name.startswith('vcs_test_import_')),
+                     'projects':[str(p.FileName) for p in app.VBE.VBProjects],
                      'references':[{'name':r.Name,'path':r.FullPath,'broken':r.IsBroken} for r in app.References]}
         library=next((p for p in app.VBE.VBProjects if Path(str(p.FileName)).resolve()==INSTALLED.resolve()),None)
         if library is not None:
