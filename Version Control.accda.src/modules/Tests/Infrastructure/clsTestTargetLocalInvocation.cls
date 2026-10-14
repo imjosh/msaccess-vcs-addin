@@ -18,7 +18,7 @@ Private Sub Class_Terminate()
     ' A file marker survives VBA state resets after an external run completes.
     Dim stream As Object
     Set stream = CreateObject("Scripting.FileSystemObject").OpenTextFile( _
-        CurrentProject.Path & "\invocation-teardown.txt", 8, True)
+        CurrentProject.Path & "\invocation-teardown.txt", ForAppending, True)
     stream.WriteLine "terminated"
     stream.Close
     Set stream = Nothing
