@@ -48,9 +48,16 @@ owned close, reopen, compilation, and disposal lifecycle. Neither uses malformed
 The class-error control installs a helper in the idle disposable current project
 that calls a nonexistent member. The helper catches error 438 and returns scalar
 error data. The external runner must record ERROR and release the class instance.
+The class writes `invocation-teardown.txt` in the disposable checkout. Require
+one `terminated` line for the error control. This marker survives VBA global-state
+resets after the external run, so a reset counter cannot hide successful teardown.
 The legacy-helper control seeds the earlier Sub helper. Scan must upgrade it to
 the scalar-returning Function, and all three class-invocation procedures must pass.
 These controls never edit the loaded library.
+
+Add `--sync` to a focused command to verify the synchronous `RunTestsHeadless`
+JSON API through owned COM instead of MCP callbacks. Require the same assertions
+and reopen checks. This switch does not change the unfiltered MCP qualification.
 
 Each receipt records errors separately from test results. The driver preserves a
 verified host archive and copies logs before disposal. A failed reopen remains raw

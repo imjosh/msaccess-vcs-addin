@@ -30,7 +30,7 @@ FIXTURES=['vcs_test_import_alpha','vcs_test_import_beta',
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def git(repo,*args):return subprocess.check_output(['git','-C',str(repo),*args],text=True).strip()
 
-def run(label,binary,pin,filters,fault=None):
+def run(label,binary,pin,filters,fault=None,sync=False):
     assert OUT is not None and OUT.is_dir(), 'Provide an evidence directory outside the checkout'
     assert not OUT.resolve().is_relative_to(REPO.resolve())
     folder=OUT/'hosts'/label
@@ -50,7 +50,7 @@ def run(label,binary,pin,filters,fault=None):
     if fault=='import':
         p=folder/'Testing/Fixtures/modules/vcs_test_import_beta.bas'
         p.write_bytes(b'Attribute VB_Name = "vcs_test_import_beta"\r\n<<<<<<< ours\r\nOption Explicit\r\n=======\r\nOption Compare Database\r\n>>>>>>> theirs\r\n')
-    data={'host':str(host),'pin':pin,'resolved_pin':git(folder,'rev-parse','HEAD'),'filters':filters,'fault':fault,
+    data={'host':str(host),'pin':pin,'resolved_pin':git(folder,'rev-parse','HEAD'),'filters':filters,'fault':fault,'transport':'sync-json' if sync else 'mcp',
           'binary_input_sha256':sha(host),'installed_input_sha256':sha(INSTALLED),
           'source_manifest':{p.relative_to(folder).as_posix():sha(p) for p in src.rglob('*')
                              if p.is_file() and not any(x in p.parts for x in ['logs','mcp','test-results'])},
@@ -142,8 +142,13 @@ def run(label,binary,pin,filters,fault=None):
         data['mcp_arguments']=args;save()
         def progress(value,total,message):
             if message:print(message,flush=True)
-        result=asyncio.run(run_mcp_tool('vcs_run_tests',args,on_progress=progress))
-        data['tests']=parse_result_payload(_tool_result_text(result))
+        if sync:
+            app.Run(str(INSTALLED.with_suffix(''))+'.SetInteractionMode',1)
+            data['tests']=json.loads(api('RunTestsHeadless',filters))
+            data['tests']['success']=data['tests'].get('allPassed',False)
+        else:
+            result=asyncio.run(run_mcp_tool('vcs_run_tests',args,on_progress=progress))
+            data['tests']=parse_result_payload(_tool_result_text(result))
         print(json.dumps(data['tests'].get('summary',{})),flush=True)
         marker=folder/'invocation-teardown.txt'
         data['teardown_markers']=marker.read_text().splitlines() if marker.exists() else []
@@ -210,5 +215,6 @@ if __name__=='__main__':
     p.add_argument('label');p.add_argument('binary',type=Path);p.add_argument('pin')
     p.add_argument('--evidence',type=Path,required=True)
     p.add_argument('--filters',default='');p.add_argument('--fault',choices=['assertion','import','class-error','legacy-invoker'])
+    p.add_argument('--sync',action='store_true')
     a=p.parse_args();OUT=a.evidence.resolve();OUT.mkdir(parents=True,exist_ok=True)
-    run(a.label,a.binary,a.pin,a.filters,a.fault)
+    run(a.label,a.binary,a.pin,a.filters,a.fault,a.sync)
