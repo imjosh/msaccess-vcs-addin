@@ -31,6 +31,9 @@ def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def git(repo,*args):return subprocess.check_output(['git','-C',str(repo),*args],text=True).strip()
 
 def run(label,binary,pin,filters,fault=None,sync=False):
+    assert OUT is not None and OUT.is_dir()
+    assert not OUT.resolve().is_relative_to(REPO.resolve())
+    assert Path(label).name==label and label not in ['.','..']
     container=OUT/'hosts'/label
     assert not container.exists()
     folder=container/'repo'
@@ -156,6 +159,9 @@ def run(label,binary,pin,filters,fault=None,sync=False):
             result=asyncio.run(run_mcp_tool('vcs_run_tests',args,on_progress=progress))
             data['tests']=parse_result_payload(_tool_result_text(result))
         print(json.dumps(data['tests'].get('summary',{})),flush=True)
+        data['skip_assertions']=[{'test':key,'assertion':a} for key,value in data['tests'].get('tests',{}).items()
+                                 for a in value.get('assertions',[]) if 'SKIP:' in str(a)]
+        data['legacy_fixture_context_unchanged']=all(sha(container/name)==value for name,value in data['legacy_fixture_context'].items())
         marker=folder/'invocation-teardown.txt'
         data['teardown_markers']=marker.read_text().splitlines() if marker.exists() else []
         data['state_before_end_session']=snapshot()
