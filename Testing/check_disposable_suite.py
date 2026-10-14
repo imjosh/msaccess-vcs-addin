@@ -145,6 +145,9 @@ def run(label,binary,pin,filters,fault=None):
         result=asyncio.run(run_mcp_tool('vcs_run_tests',args,on_progress=progress))
         data['tests']=parse_result_payload(_tool_result_text(result))
         print(json.dumps(data['tests'].get('summary',{})),flush=True)
+        marker=folder/'invocation-teardown.txt'
+        data['teardown_markers']=marker.read_text().splitlines() if marker.exists() else []
+        data['state_before_end_session']=snapshot()
         data['end_session']=api('EndSession')
         data['state_after']=snapshot()
         inspect('after_project')

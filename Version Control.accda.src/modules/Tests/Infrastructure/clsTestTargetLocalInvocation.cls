@@ -13,7 +13,15 @@ Option Explicit
 '@Tag("unit")
 
 Private Sub Class_Terminate()
+    On Error Resume Next
     TargetLocalTerminateCount = TargetLocalTerminateCount + 1
+    ' A file marker survives VBA state resets after an external run completes.
+    Dim stream As Object
+    Set stream = CreateObject("Scripting.FileSystemObject").OpenTextFile( _
+        CurrentProject.Path & "\invocation-teardown.txt", 8, True)
+    stream.WriteLine "terminated"
+    stream.Close
+    Set stream = Nothing
 End Sub
 
 ' Keep a target-local form type in this class without opening a form.
