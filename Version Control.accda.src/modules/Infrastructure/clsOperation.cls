@@ -385,12 +385,10 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : SetCancelPollForTest
+' Procedure : CompletionFaultForTest
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : Test seam. The cancel poll reports a request on the Nth check from now,
-'           : once, in place of asking MCP. Pass 0 to disarm. Arm a private instance
-'           : unless the test means to cancel the session's running operation.
+' Purpose   : One-shot fault while constructing a completion payload.
 '---------------------------------------------------------------------------------------
 '
 Friend Property Let CompletionFaultForTest(ByVal lngNumber As Long)
