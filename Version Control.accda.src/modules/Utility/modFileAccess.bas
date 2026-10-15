@@ -570,6 +570,76 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : TryAppendToFile
+' Author    : Josh
+' Date      : 9/30/2026
+' Purpose   : Append a line like AppendToFile, but never log, retry, or raise. Returns
+'           : False when the line was not written. For diagnostic output: a failure
+'           : there must not raise the operation's error level or open a message box,
+'           : and it must not pause for a locked-file retry on every line.
+'           : Creates the file's parent folder if missing, but not deeper folders.
+'---------------------------------------------------------------------------------------
+'
+Public Function TryAppendToFile(strText As String, strPath As String) As Boolean
+
+    Dim bteAppend() As Byte
+    Dim blnExists As Boolean
+    Dim strFolder As String
+    Dim fs As Scripting.FileSystemObject
+
+    ' Diagnostics consume any inbound Err without logging it. Callers must save
+    ' error details first. Unlike normal writers, this also bypasses the shared
+    ' FSO getter, whose error handling logs and retries.
+    On Error Resume Next
+    Err.Clear
+
+    Set fs = New Scripting.FileSystemObject
+    If Err Then GoTo CleanUp
+
+    strFolder = fs.GetParentFolderName(strPath)
+    If Not fs.FolderExists(strFolder) Then fs.CreateFolder strFolder
+    If Err Then GoTo CleanUp
+    blnExists = fs.FileExists(strPath)
+
+    ' Encode as UTF-8, keeping the BOM only when this creates the file
+    With New ADODB.Stream
+        .Type = adTypeText
+        .Open
+        .Charset = "utf-8"
+        .WriteText strText
+        If Right$(strText, 2) <> vbCrLf Then .WriteText vbCrLf
+        .Position = 0
+        .Type = adTypeBinary
+        If blnExists Then .Position = 3
+        bteAppend = .Read
+        .Close
+    End With
+    If Err Then GoTo CleanUp
+
+    ' Stop if the existing file cannot be loaded, so it is never overwritten with
+    ' only the new line.
+    With New ADODB.Stream
+        .Type = adTypeBinary
+        .Open
+        If blnExists Then
+            .LoadFromFile strPath
+            .Position = .Size
+        End If
+        If Err = 0 Then
+            .Write bteAppend
+            .SaveToFile strPath, adSaveCreateOverWrite
+        End If
+        .Close
+    End With
+
+CleanUp:
+    TryAppendToFile = (Err.Number = 0)
+    Err.Clear
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : GetFileBytes
 ' Author    : Adam Waller
 ' Date      : 7/31/2020
