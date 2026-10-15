@@ -70,7 +70,7 @@ def run(out, label, legacy=False):
             app.Run(driver+'.Preload')
             api('RegisterSession','workflow-'+uuid.uuid4().hex)
             assert api('SetOption','ExportFormatVersion',50100)['success']
-            if legacy:api('SetInteractionMode',1)
+            if legacy:app.Run(driver+'.SetInteractionMode',1)
             else:assert api('SetOperationPolicy','block')['success']
             item={'host':str(host),'baseline':invoke('FullExport')};record['cases'][policy]=item;save()
             assert item['baseline']['terminal']['type']=='complete',item
