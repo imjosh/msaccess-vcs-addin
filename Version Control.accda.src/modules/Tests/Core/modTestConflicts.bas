@@ -12,6 +12,11 @@ Option Private Module
 '@Folder("Tests.Core")
 '@Tag("integration")
 
+' Database property that designates a host as a disposable suite host. The value must be
+' the full path of the database that carries it. The disposable-host driver sets it in
+' the host it owns; see Testing/DISPOSABLE-HOSTS.md for manual preparation.
+Public Const DISPOSABLE_HOST_PROPERTY As String = "VCSDisposableTestHost"
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : TestExportConflict_DetectsModifiedSource
@@ -276,6 +281,30 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : DisposableHostDenial
+' Purpose   : The import tests leave their fixture modules in the executing project, so
+'           : they may only run in a host that was explicitly designated disposable.
+'           : Repository context alone does not qualify a host. Returns a reason when
+'           : the current host is not designated, or vbNullString when it is.
+'---------------------------------------------------------------------------------------
+'
+Private Function DisposableHostDenial() As String
+
+    Dim varMarker As Variant
+
+    varMarker = GetDBProperty(DISPOSABLE_HOST_PROPERTY)
+    If VarType(varMarker) <> vbString Then
+        DisposableHostDenial = "host is not designated disposable: database property " & _
+            DISPOSABLE_HOST_PROPERTY & " is missing or not text (see Testing/DISPOSABLE-HOSTS.md)"
+    ElseIf StrComp(CStr(varMarker), CurrentProject.FullName, vbTextCompare) <> 0 Then
+        DisposableHostDenial = "host is not designated disposable: " & DISPOSABLE_HOST_PROPERTY & _
+            " names '" & CStr(varMarker) & "' but this host is '" & CurrentProject.FullName & "'"
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : TestModuleImport_IndexesEachFileOnSharedInstance
 ' Author    : Adam Waller
 ' Date      : 5/29/2026
@@ -294,9 +323,17 @@ Public Sub TestModuleImport_IndexesEachFileOnSharedInstance()
     Dim eelSavedLevel As eErrorLevel
     Dim lngErr As Long
     Dim strErr As String
+    Dim strDenial As String
 
     eelSavedLevel = Operation.ErrorLevel
     On Error GoTo ErrHandler
+
+    ' These fixtures stay in the executing project; refuse any host not designated disposable.
+    strDenial = DisposableHostDenial()
+    If Len(strDenial) > 0 Then
+        TestAssert False, strDenial
+        GoTo CleanUp
+    End If
 
     ' Use fixture modules that are not already loaded in the add-in project.
     ' Re-importing live modules (e.g. modTimer) fails to remove the in-use
@@ -364,9 +401,17 @@ Public Sub TestModuleImportFast_IndexesEachFileOnSharedInstance()
     Dim eelSavedLevel As eErrorLevel
     Dim lngErr As Long
     Dim strErr As String
+    Dim strDenial As String
 
     eelSavedLevel = Operation.ErrorLevel
     On Error GoTo ErrHandler
+
+    ' These fixtures stay in the executing project; refuse any host not designated disposable.
+    strDenial = DisposableHostDenial()
+    If Len(strDenial) > 0 Then
+        TestAssert False, strDenial
+        GoTo CleanUp
+    End If
 
     strRepoRoot = Git.GetRepositoryRoot
     If Len(strRepoRoot) = 0 Then

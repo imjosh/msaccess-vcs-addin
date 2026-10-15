@@ -64,7 +64,8 @@ filter matches nothing, and their errors are non-fatal — teardown still runs.
   the macro list — the runner can still call them.
 - One assertion concept per test method; use `context` to distinguish assertions.
 - The runner auto-maintains `TestClassFactory` in `modTestAssert`, one `Select Case`
-  entry per test class. Do not hand-edit between the markers.
+  entry per test class. Do not hand-edit between the markers. It also keeps the
+  `TestClassInvoke` helper there, marked with a helper version comment; leave that comment.
 - Do not add per-test `Operation.InteractionMode = eimSilent` guards; the runner
   owns root interaction policy (see below).
 

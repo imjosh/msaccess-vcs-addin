@@ -27,6 +27,13 @@ Private Const GlobalTestTeardownProc As String = "GlobalTestTeardown"
 Private Const MCP_SLOW_MS As Long = 1000
 Private Const MCP_DOT_FLUSH_SEC As Currency = 0.2
 
+' Version marker for the TestClassInvoke helper in the tested project's modTestAssert.
+' The committed helper carries "' TestClassInvoke helper version <n>" as a comment in its
+' body. Raise INVOKER_VERSION with any change to BuildClassInvokerSource, and update the
+' committed modTestAssert to match.
+Private Const INVOKER_MARKER As String = "TestClassInvoke helper version "
+Private Const INVOKER_VERSION As Long = 2
+
 ' Runner state machine
 Public Enum eTestRunnerState
     etrsIdle = 0
@@ -485,10 +492,8 @@ Public Sub RunSelected(colTestKeys As Collection)
             strErrDesc = Err.Description
             If lngErrNum <> 0 Then Err.Clear
             On Error GoTo 0
-            If lngErrNum = 0 And Len(CStr(varInvokeResult)) > 0 Then
-                lngErrNum = CLng(Left$(CStr(varInvokeResult), InStr(CStr(varInvokeResult), vbTab) - 1))
-                strErrDesc = Mid$(CStr(varInvokeResult), InStr(CStr(varInvokeResult), vbTab) + 1)
-            End If
+            ' An unexpected helper result becomes an ERROR for this test, never a run abort.
+            If lngErrNum = 0 Then ParseClassInvokeResult varInvokeResult, lngErrNum, strErrDesc
 
             ' Release instance (fires Class_Terminate for teardown)
             Set obj = Nothing
@@ -1415,12 +1420,6 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
     Dim varKey As Variant
     Dim dTest As Dictionary
     Dim strClassName As String
-    Dim lngBegin As Long
-    Dim lngEnd As Long
-    Dim lngLine As Long
-    Dim strLine As String
-    Dim strExpected As String
-    Dim strExisting As String
     Dim i As Long
 
     ' Collect unique class names from discovered tests
@@ -1448,7 +1447,28 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
     On Error GoTo 0
     If cmp Is Nothing Then Exit Sub
 
+    ' Factory entries first, then the invoker. Both steps are idempotent, so a module that
+    ' needs the full template ends up with the same layout as the committed modTestAssert.
+    SyncFactoryCases cmp, colClassNames
     EnsureClassInvoker cmp
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SyncFactoryCases
+' Purpose   : Reconcile the Select Case entries between the BEGIN/END markers of
+'           : TestClassFactory, or append the full template when the markers are absent.
+'---------------------------------------------------------------------------------------
+'
+Private Sub SyncFactoryCases(cmp As VBIDE.VBComponent, colClassNames As Collection)
+
+    Dim lngBegin As Long
+    Dim lngEnd As Long
+    Dim lngLine As Long
+    Dim strLine As String
+    Dim strExpected As String
+    Dim strExisting As String
 
     ' Find the BEGIN/END markers
     lngBegin = 0
@@ -1490,28 +1510,140 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
 End Sub
 
 
-' Invoke in the tested project so Access resolves its class/form type information
-' there, rather than through the installed runner's duplicate project types.
+'---------------------------------------------------------------------------------------
+' Procedure : EnsureClassInvoker
+' Purpose   : Class tests are invoked through TestClassInvoke in the tested project, so
+'           : Access resolves class/form type information there, rather than through
+'           : the installed runner's duplicate project types. Current builds commit the
+'           : helper in modTestAssert. This only installs it into an older project where
+'           : it is absent, and upgrades a legacy Sub or an older marked version. A helper
+'           : that carries the current version marker is never rewritten.
+'---------------------------------------------------------------------------------------
+'
 Private Sub EnsureClassInvoker(cmp As VBIDE.VBComponent)
-    Dim strCode As String
+
     Dim lngLine As Long
     Dim lngCount As Long
-    strCode = cmp.CodeModule.Lines(1, cmp.CodeModule.CountOfLines)
-    If InStr(1, strCode, "TestClassInvoke = CStr(Err.Number) & vbTab & Err.Description", vbTextCompare) > 0 Then Exit Sub
-    If InStr(1, strCode, "Public Sub TestClassInvoke(", vbTextCompare) > 0 Or _
-       InStr(1, strCode, "Public Function TestClassInvoke(", vbTextCompare) > 0 Then
-        lngLine = cmp.CodeModule.ProcStartLine("TestClassInvoke", vbext_pk_Proc)
-        lngCount = cmp.CodeModule.ProcCountLines("TestClassInvoke", vbext_pk_Proc)
+    Dim strProc As String
+    Dim lngPos As Long
+
+    ' Locate any existing helper by name, whether it is a Sub or a Function.
+    LogUnhandledErrors
+    On Error Resume Next
+    lngLine = cmp.CodeModule.ProcStartLine("TestClassInvoke", vbext_pk_Proc)
+    If Err.Number = 0 Then lngCount = cmp.CodeModule.ProcCountLines("TestClassInvoke", vbext_pk_Proc)
+    If Err.Number <> 0 Then
+        lngLine = 0
+        lngCount = 0
+        Err.Clear
+    End If
+    On Error GoTo 0
+
+    If lngLine > 0 And lngCount > 0 Then
+        ' Leave a helper alone when it carries the current (or a newer) version marker.
+        strProc = cmp.CodeModule.Lines(lngLine, lngCount)
+        lngPos = InStr(1, strProc, INVOKER_MARKER, vbTextCompare)
+        If lngPos > 0 Then
+            If Val(Mid$(strProc, lngPos + Len(INVOKER_MARKER))) >= INVOKER_VERSION Then Exit Sub
+        End If
+        ' Legacy Sub, unmarked Function, or older version: replace it rather than add a duplicate.
         cmp.CodeModule.DeleteLines lngLine, lngCount
     End If
-    cmp.CodeModule.InsertLines cmp.CodeModule.CountOfLines + 1, vbCrLf & _
+
+    cmp.CodeModule.InsertLines cmp.CodeModule.CountOfLines + 1, BuildClassInvokerSource()
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BuildClassInvokerSource
+' Purpose   : Source for TestClassInvoke. Must match the helper committed in modTestAssert,
+'           : which returns vbNullString on success or Err.Number & vbTab & Err.Description.
+'           : It must not depend on anything in the add-in.
+'---------------------------------------------------------------------------------------
+'
+Private Function BuildClassInvokerSource() As String
+
+    BuildClassInvokerSource = vbCrLf & vbCrLf & _
+        "'---------------------------------------------------------------------------------------" & vbCrLf & _
+        "' Procedure : TestClassInvoke" & vbCrLf & _
+        "' Purpose   : Invoke one test method on a class instance from inside this project, so" & vbCrLf & _
+        "'           : class and form types resolve here rather than through the installed runner." & vbCrLf & _
+        "'           : Returns vbNullString on success, or the error as Err.Number & vbTab &" & vbCrLf & _
+        "'           : Err.Description. The VCS test runner installs or upgrades this procedure" & vbCrLf & _
+        "'           : when its version marker is missing or older. Keep it free of dependencies" & vbCrLf & _
+        "'           : on the VCS add-in." & vbCrLf & _
+        "'---------------------------------------------------------------------------------------" & vbCrLf & _
+        "'" & vbCrLf & _
         "Public Function TestClassInvoke(ByVal obj As Object, ByVal strProcName As String) As String" & vbCrLf & _
+        "    ' " & INVOKER_MARKER & INVOKER_VERSION & vbCrLf & _
         "    On Error GoTo Failed" & vbCrLf & _
         "    CallByName obj, strProcName, VbMethod" & vbCrLf & _
         "    Exit Function" & vbCrLf & _
         "Failed:" & vbCrLf & _
         "    TestClassInvoke = CStr(Err.Number) & vbTab & Err.Description" & vbCrLf & _
-        "End Function" & vbCrLf
+        "End Function"
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ParseClassInvokeResult
+' Purpose   : Translate a TestClassInvoke result into an error number and description.
+'           : An empty string (or Empty, from a helper that returns nothing) is success
+'           : and leaves the error number 0. Otherwise the result must be a nonzero Long
+'           : error number, a tab, and the description. Any other value, including a
+'           : missing delimiter, a non-numeric or out-of-range number, or a non-string
+'           : Variant, is reported as an error for that test. Nothing here can raise, so
+'           : a helper that returns something unexpected cannot abort the run.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ParseClassInvokeResult(ByVal varResult As Variant, ByRef lngErrNum As Long, ByRef strErrDesc As String)
+
+    Dim strResult As String
+    Dim lngTab As Long
+    Dim strNumber As String
+    Dim strDigits As String
+    Dim dblNumber As Double
+
+    lngErrNum = 0
+    strErrDesc = vbNullString
+
+    If VarType(varResult) = vbEmpty Then Exit Sub
+    If VarType(varResult) <> vbString Then
+        lngErrNum = vbObjectError
+        strErrDesc = T("Unexpected TestClassInvoke result type: {0}", var0:=TypeName(varResult))
+        Exit Sub
+    End If
+
+    strResult = varResult
+    If Len(strResult) = 0 Then Exit Sub
+
+    ' Expect "<error number><tab><description>". The number is validated as an optional
+    ' minus sign and up to ten digits before conversion, so CLng cannot overflow.
+    lngTab = InStr(1, strResult, vbTab, vbBinaryCompare)
+    If lngTab > 1 Then
+        strNumber = Left$(strResult, lngTab - 1)
+        strDigits = strNumber
+        If Left$(strDigits, 1) = "-" Then strDigits = Mid$(strDigits, 2)
+        If Len(strDigits) > 0 And Len(strDigits) <= 10 Then
+            If Not (strDigits Like "*[!0-9]*") Then
+                dblNumber = Val(strNumber)
+                If dblNumber <> 0 And dblNumber >= -2147483648# And dblNumber <= 2147483647# Then
+                    lngErrNum = CLng(dblNumber)
+                    strErrDesc = Mid$(strResult, lngTab + 1)
+                    Exit Sub
+                End If
+            End If
+        End If
+    End If
+
+    ' Malformed: keep a bounded, single-line copy of the result for the log.
+    strResult = Replace(Replace(Replace(strResult, vbCr, " "), vbLf, " "), vbTab, " ")
+    If Len(strResult) > 200 Then strResult = Left$(strResult, 200) & "..."
+    lngErrNum = vbObjectError
+    strErrDesc = T("Unexpected TestClassInvoke result: {0}", var0:=strResult)
+
 End Sub
 
 

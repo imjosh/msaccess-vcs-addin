@@ -41,13 +41,16 @@ JSON. The **tests** run in the current project, reached by `Application.Run` thr
 `clsTestRunner.BuildRunCmd`, because the runner scans `CurrentVBProject`.
 
 Class tests are created by the target's `TestClassFactory` and invoked through
-the generated `TestClassInvoke` helper in that same project. Access can reject
+the committed `TestClassInvoke` helper in that same project. The scan installs or
+upgrades the helper only in an older project where it is absent, a legacy `Sub`, or an
+older version; a helper with the current version marker is never rewritten. Access can reject
 cross-project `CallByName` before a class test begins when the development
 and installed add-in expose duplicate class/form types. Invocation stays in the
 tested project. The helper catches class errors and returns their number and
 description as a scalar string across `Application.Run`; the installed runner
 still records errors and assertions and
-releases each class instance for teardown.
+releases each class instance for teardown. A result that is not empty or a
+number, tab and description is recorded as an ERROR for that test.
 
 For a user database those are obviously different projects. For this repository they
 are two loaded copies of the *same* project — disposable `Version Control.accda`

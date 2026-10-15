@@ -55,6 +55,7 @@ Public Sub RegisterCallback(strCallbackInfo As String)
 
     Dim dCallback As Dictionary
     Dim strJson As String
+    Dim strRegistrationError As String
 
     ResetDiagnostics
 
@@ -104,7 +105,9 @@ Public Sub RegisterCallback(strCallbackInfo As String)
 
 ErrHandler:
     ' If parsing fails, disable callbacks but don't break the operation
-    MCPDebugLog "clsMCP.RegisterCallback: ERROR - " & Err.Description
+    strRegistrationError = Err.Description
+    Err.Clear
+    MCPDebugLog "clsMCP.RegisterCallback: ERROR - " & strRegistrationError
     this.IsActive = False
     this.CallbackUrl = vbNullString
     this.OperationId = vbNullString

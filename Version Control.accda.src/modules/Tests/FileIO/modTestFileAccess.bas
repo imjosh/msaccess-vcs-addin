@@ -515,3 +515,78 @@ ErrHandler:
     Resume CleanUp
 
 End Sub
+
+
+Public Sub TestTryAppendToFileWithLiveErrorWrites()
+    CheckTryAppendWithLiveError False
+End Sub
+
+
+Public Sub TestTryAppendToFileWithLiveErrorFailsQuietly()
+    CheckTryAppendWithLiveError True
+End Sub
+
+
+Private Sub CheckTryAppendWithLiveError(ByVal blnBlock As Boolean)
+    Dim strFolder As String
+    Dim strPath As String
+    Dim lngJournal As Long
+    Dim lngErrors As Long
+    Dim eLevel As eErrorLevel
+    Dim blnWritten As Boolean
+    Dim lngInbound As Long
+    Dim lngAfter As Long
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_live_error")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strPath = strFolder & "\logs\debug.log"
+    If blnBlock Then
+        WriteFile "blocker", strFolder & "\logs"
+    Else
+        FSO.CreateFolder strFolder
+    End If
+    lngJournal = Log.ErrorJournalCount
+    lngErrors = Log.ErrorCount
+    eLevel = Operation.ErrorLevel
+
+    blnWritten = AppendFromErrorHandler(strPath, lngInbound, lngAfter)
+
+    TestAssert lngInbound = 11, "diagnostic helper entered from a live division error handler"
+    TestAssert lngAfter = 0, "diagnostic helper consumes the inbound error"
+    TestAssert blnWritten = (Not blnBlock), "write result depends only on the destination"
+    TestAssert Log.ErrorJournalCount = lngJournal, "live error adds no journal entry"
+    TestAssert Log.ErrorCount = lngErrors, "live error adds no error count"
+    TestAssert Operation.ErrorLevel = eLevel, "live error leaves operation level unchanged"
+    If blnBlock Then
+        TestAssert ReadFile(strFolder & "\logs") = "blocker" & vbCrLf, "blocker preserved with live error"
+    Else
+        TestAssert ReadFile(strPath) = "live error line" & vbCrLf, "line written with live error"
+    End If
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "CheckTryAppendWithLiveError", lngErr, strErr, strCleanUp
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Private Function AppendFromErrorHandler(ByVal strPath As String, _
+    ByRef lngInbound As Long, ByRef lngAfter As Long) As Boolean
+    Dim lngZero As Long
+    On Error GoTo ExpectedError
+    lngZero = 1 \ lngZero
+    Exit Function
+ExpectedError:
+    ' Capture before calling another helper, including TestAssert.
+    lngInbound = Err.Number
+    AppendFromErrorHandler = TryAppendToFile("live error line", strPath)
+    lngAfter = Err.Number
+End Function
