@@ -8,8 +8,10 @@ import asyncio
 import gc
 import hashlib
 import json
+import os
 import shutil
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
@@ -24,6 +26,8 @@ from msaccess_vcs_mcp.cli import run_mcp_tool, _tool_result_text, parse_result_p
 REPO=Path(__file__).resolve().parents[1]
 OUT=None
 INSTALLED=Path.home()/'AppData/Roaming/MSAccessVCS/Version Control.accda'
+# Full-suite quits can take well over five seconds to finish releasing the process.
+EXIT_WAIT_MS=60000
 FIXTURES=['vcs_test_import_alpha','vcs_test_import_beta',
           'vcs_test_import_fast_alpha','vcs_test_import_fast_beta']
 
@@ -63,29 +67,109 @@ def run(label,binary,pin,filters,fault=None,sync=False):
           'client_version':__import__('msaccess_vcs_mcp').__version__}
     data['legacy_fixture_context']={p.relative_to(container).as_posix():sha(p) for p in legacy.rglob('*') if p.is_file()}
     app=handle=project=module=None
+    current_phase=None  # Phase whose Access instance this run still holds, if any.
+    opened_phases=[]
     def save():
         (OUT/(label+'.json')).write_text(json.dumps(data,indent=2,default=str),encoding='utf-8')
     def open_owned(phase):
-        nonlocal app,handle
+        """Create the owned instance, recording ownership as each step succeeds.
+
+        The DispatchEx reference is kept before any wrapping, and the PID and create
+        time are recorded before the process handle is opened, so cleanup can still
+        quit the instance when a later step fails.
+        """
+        nonlocal app,handle,current_phase
         assert list_access_pids_or_none()==set()
-        app=win32com.client.gencache.EnsureDispatch(win32com.client.DispatchEx('Access.Application'))
-        pid=pid_from_access_app(app); stamp=process_create_time(pid)
-        assert pid and stamp
-        handle=win32api.OpenProcess(0x1000|0x100000,False,pid)
-        data[phase]={'pid':pid,'create_time':stamp}
-        app.OpenCurrentDatabase(str(host));app.Visible=True
-        assert Path(app.CurrentProject.FullName).resolve()==host.resolve()
+        app=handle=None
+        current_phase=phase
+        opened_phases.append(phase)
+        info=data[phase]={}
+        try:
+            app=win32com.client.DispatchEx('Access.Application')
+            app=win32com.client.gencache.EnsureDispatch(app)
+            pid=pid_from_access_app(app)
+            info['pid']=pid
+            assert pid,'Owned Access PID unavailable'
+            info['create_time']=process_create_time(pid)
+            assert info['create_time'],'Owned Access create time unavailable'
+            handle=win32api.OpenProcess(0x1000|0x100000,False,pid)
+            app.OpenCurrentDatabase(str(host));app.Visible=True
+            assert Path(app.CurrentProject.FullName).resolve()==host.resolve()
+        except Exception as exc:
+            info['init_error']=repr(exc)
+            raise
+    def identity_mismatch(info):
+        """Return what contradicts the recorded identity of the held instance, if anything.
+
+        A check that cannot run is recorded but does not block quitting: the held
+        reference is the instance this phase created with DispatchEx.
+        """
+        pid=info.get('pid')
+        if not pid:return None
+        try:
+            if pid_from_access_app(app)!=pid:return 'pid'
+        except Exception as exc:info['pid_check_error']=repr(exc)
+        if info.get('create_time'):
+            try:
+                if process_create_time(pid)!=info['create_time']:return 'create_time'
+            except Exception as exc:info['create_time_check_error']=repr(exc)
+        return None
+    def wait_for_no_access(timeout_ms):
+        deadline=time.monotonic()+timeout_ms/1000
+        while True:
+            if list_access_pids_or_none()==set():return True
+            if time.monotonic()>=deadline:return False
+            time.sleep(0.5)
+    def shutdown_owned(phase):
+        """Quit the instance this phase created and record how it ended. Never raises.
+
+        Only the held COM instance is quit, and not when its recorded PID or create
+        time contradicts it. Database, identity, quit, exit-timeout and handle failures
+        are recorded under separate keys, and a failed check never prevents the quit.
+        """
+        nonlocal app,handle,project,module,current_phase
+        info=data.setdefault(phase,{})
+        project=module=None  # Release code-module references before quitting.
+        gc.collect()
+        quit_attempted=False
+        if app is not None:
+            try:info['database_at_close']=str(Path(app.CurrentProject.FullName).resolve())
+            except Exception as exc:info['database_check_error']=repr(exc)
+            mismatch=identity_mismatch(info)
+            if mismatch:
+                info['identity_mismatch']=mismatch
+            else:
+                quit_attempted=True
+                try:app.Quit(2)
+                except Exception as exc:info['quit_error']=repr(exc)
+        app=None;gc.collect()
+        wait_ms=EXIT_WAIT_MS if quit_attempted else 0
+        info['exit_wait_ms']=wait_ms
+        exited=False
+        if handle is not None:
+            try:
+                result=win32event.WaitForSingleObject(handle,wait_ms)
+                exited=result==win32event.WAIT_OBJECT_0
+                info['original_handle_exit']=exited
+                info['exit_timeout']=result==win32event.WAIT_TIMEOUT
+            except Exception as exc:info['exit_wait_error']=repr(exc)
+            try:handle.Close()
+            except Exception as exc:info['handle_close_error']=repr(exc)
+            handle=None
+        else:
+            # No handle was opened: the exclusive-use precondition makes an empty process list the evidence.
+            exited=wait_for_no_access(wait_ms)
+            info['process_list_exit']=exited
+        pids=list_access_pids_or_none()
+        info['pids_after_exit']=sorted(pids) if pids is not None else None
+        info['closure_confirmed']=bool(exited and pids==set())
+        current_phase=None
     def close_owned(phase):
-        nonlocal app,handle,project,module
-        assert process_create_time(data[phase]['pid'])==data[phase]['create_time']
-        assert pid_from_access_app(app)==data[phase]['pid']
-        assert Path(app.CurrentProject.FullName).resolve()==host.resolve()
-        module=project=None
-        app.Quit(2);app=None;gc.collect()
-        data[phase]['original_handle_exit']=win32event.WaitForSingleObject(handle,5000)==win32event.WAIT_OBJECT_0
-        handle.Close();handle=None
-        assert data[phase]['original_handle_exit']
-        assert list_access_pids_or_none()==set()
+        shutdown_owned(phase)
+        info=data[phase]
+        assert not info.get('identity_mismatch'),'Owned Access identity changed'
+        assert Path(info.get('database_at_close',''))==host.resolve(),'Owned Access database changed'
+        assert info['closure_confirmed'],'Owned Access closure not confirmed'
     def api(method,*args):
         value=app.Run(str(INSTALLED.with_suffix(''))+'.API',method,*args)
         return value[0] if isinstance(value,tuple) else value
@@ -193,40 +277,74 @@ def run(label,binary,pin,filters,fault=None,sync=False):
     except Exception as exc:
         data['error']=repr(exc)
     finally:
-        project=module=None
-        if app is not None and handle is not None:
-            try:
-                phase='reopen_process' if 'reopen_process' in data else 'initial_process'
-                close_owned(phase)
-            except Exception as exc:data['close_error']=repr(exc)
-        app=None;gc.collect()
-        if handle:handle.Close()
+        # Quit whatever instance is still held, even if initialization stopped early.
+        if current_phase is not None:
+            try:shutdown_owned(current_phase)
+            except Exception as exc:data['cleanup_error']=repr(exc)
+        project=module=app=None;gc.collect()
+        if handle is not None:
+            try:handle.Close()
+            except Exception as exc:data['handle_close_error']=repr(exc)
         pythoncom.CoUninitialize()
-        data['after_pids']=sorted(list_access_pids_or_none() or [])
+        pids=list_access_pids_or_none()
+        data['after_pids']=sorted(pids) if pids is not None else None
         save()
-    assert list_access_pids_or_none()==set() and not data.get('close_error'),data
+    # Final process and cleanup checks are recorded, never asserted, so they cannot skip
+    # the archive attempt below. They fail the command after the evidence is retained.
+    failures=[]
+    for phase in opened_phases:
+        info=data[phase]
+        bad=[k for k in ('init_error','identity_mismatch','quit_error','exit_timeout','exit_wait_error','handle_close_error')
+             if info.get(k)]
+        if bad:failures.append(phase+': '+', '.join(bad))
+        if not info.get('closure_confirmed'):failures.append(phase+': closure not confirmed')
+    for key in ('cleanup_error','handle_close_error'):
+        if data.get(key):failures.append(key)
+    if data.get('after_pids')!=[]:failures.append('Access processes remain or cannot be listed')
+    data['closure_confirmed']=bool(opened_phases) and not failures
     # Retain all failure binaries and host files in verified archives before disposal.
-    archive=OUT/(label+'-host.zip')
-    manifest={}
-    with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as z:
-        for p in container.rglob('*'):
-            if p.is_file():
-                name=p.relative_to(container).as_posix();raw=p.read_bytes()
-                z.writestr(name,raw);manifest[name]=hashlib.sha256(raw).hexdigest()
-    with zipfile.ZipFile(archive) as z:
-        assert all(hashlib.sha256(z.read(k)).hexdigest()==v for k,v in manifest.items())
-    data['archive']={'path':str(archive),'sha256':sha(archive),'files':len(manifest),'verified':True}
-    data['git_status_after']=git(folder,'status','--porcelain')
-    # Preserve failed reopen hosts raw as well, for later diagnosis.
-    if data.get('reopen_is_compiled') and not data.get('error'):
-        target=folder.resolve();owned_container=container.resolve()
-        assert target.parent==owned_container and owned_container.parent==(OUT/'hosts').resolve()
-        subprocess.run(['git','-C',str(REPO),'worktree','remove','--force',str(target)],check=True)
-        shutil.rmtree(owned_container)
-        data['disposed']=not owned_container.exists()
-    else:data['retained_raw']=True
+    # The archive takes its final name only after verification, so a partial file is never
+    # mistaken for evidence. Active files may block it; that is recorded and the host kept.
+    archive_path=OUT/(label+'-host.zip')
+    partial_path=OUT/(label+'-host.zip.partial')
+    archive=data['archive']={'path':str(archive_path),'verified':False}
+    try:
+        assert not archive_path.exists(),'Archive already exists'
+        manifest={}
+        with zipfile.ZipFile(partial_path,'x',zipfile.ZIP_DEFLATED) as z:
+            for p in container.rglob('*'):
+                if p.is_file():
+                    name=p.relative_to(container).as_posix();raw=p.read_bytes()
+                    z.writestr(name,raw);manifest[name]=hashlib.sha256(raw).hexdigest()
+        with zipfile.ZipFile(partial_path) as z:
+            assert sorted(z.namelist())==sorted(manifest),'Archive members differ from the manifest'
+            assert all(hashlib.sha256(z.read(k)).hexdigest()==v for k,v in manifest.items()),'Archive content differs'
+        os.replace(partial_path,archive_path)
+        archive.update(sha256=sha(archive_path),files=len(manifest),verified=True)
+    except Exception as exc:
+        archive['error']=repr(exc)
+        failures.append('host archive not verified')
+    try:data['git_status_after']=git(folder,'status','--porcelain')
+    except Exception as exc:data['git_status_error']=repr(exc)
+    # Preserve failed reopen hosts raw as well, for later diagnosis. A host is disposed of
+    # only when closure is confirmed and its archive is verified.
+    retain=list(failures)
+    if not data.get('reopen_is_compiled') or data.get('error'):retain.append('lifecycle did not complete cleanly')
+    if not retain:
+        try:
+            target=folder.resolve();owned_container=container.resolve()
+            assert target.parent==owned_container and owned_container.parent==(OUT/'hosts').resolve()
+            subprocess.run(['git','-C',str(REPO),'worktree','remove','--force',str(target)],check=True)
+            shutil.rmtree(owned_container)
+            data['disposed']=not owned_container.exists()
+        except Exception as exc:
+            data['dispose_error']=repr(exc);failures.append('host disposal failed');retain.append('disposal failed')
+    if retain:
+        data['retained_raw']=True;data['retained_reasons']=retain
+    data['infrastructure_failures']=failures
     save()
     print(json.dumps({k:v for k,v in data.items() if k not in ['tests','source_manifest','initial_project','after_project','reopened_project']},indent=2),flush=True)
+    assert not failures,'; '.join(failures)
     return data
 
 if __name__=='__main__':

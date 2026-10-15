@@ -51,7 +51,8 @@ repository's suite; it is not a requirement to discard developers' user database
 6. Copy results and logs outside the temporary checkout before disposal. Preserve
    failing binaries and diagnostics too. After confirmed owned closure/exit, remove
    the disposable database, sidecars and checkout. Verify disposal on success,
-   assertion failure and import failure; retain files when closure is uncertain.
+   assertion failure and import failure. Retain the raw host whenever closure is
+   uncertain or the archive could not be verified.
    Restore temporary trust/install-source settings and caller state, and
    leave unrelated Access processes intact.
 
