@@ -3244,7 +3244,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' refused request changes nothing, and the preflight prompts below are answered by
     ' the policy. ForceUnattended must be set before the root begins: Attended is
     ' captured once, at root creation, and is immutable for the life of the operation.
-    If intPolicy <> edpAsk Then
+    If intPolicy <> edpAsk Or Operation.InteractionMode = eimNonInteractive Then
         If blnHeadless Then Operation.ForceUnattended = True
         Set cRoot = Operation.TryBeginRoot(eotTestRun, intPolicy)
         If cRoot Is Nothing Then
@@ -3266,7 +3266,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' The web runner needs a person to click Run, so it is never used headless or under
     ' a decision policy.
     blnUseWebRunner = Options.UseWebTestRunner And modTestRunnerUI.EdgeTestRunnerSupported() _
-        And Not blnHeadless And intPolicy = edpAsk
+        And Not blnHeadless And intPolicy = edpAsk And Not InteractionIsNonInteractive
 
     ' Web runner path: open the form only. Do NOT begin an Operation here — bridge
     ' callbacks own the operation lifecycle when the user clicks Run. Beginning here

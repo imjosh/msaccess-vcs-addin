@@ -1422,7 +1422,7 @@ Public Function WriteFileVerified(strText As String, strPath As String, ByRef st
     VerifyPath strFolder & PathSep
     If FSO.FolderExists(strFolder) Then WriteFile strText, strPath
 
-    If FSO.FileExists(strPath) Then
+    If Log.ErrorJournalCount = lngJournal And FSO.FileExists(strPath) Then
         WriteFileVerified = True
         Exit Function
     End If

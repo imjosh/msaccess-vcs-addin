@@ -23,6 +23,9 @@ import win32com.client
 import argparse
 import gc
 import sys
+import hashlib
+import win32api
+import win32event
 from msaccess_vcs_mcp.access_com.process_qos import list_access_pids_or_none, pid_from_access_app
 from msaccess_vcs_mcp.access_com.instance_registry import process_create_time
 from msaccess_vcs_mcp import tools
@@ -38,7 +41,19 @@ Public Function CheckRefusal(ByVal strPolicy As String) As String
     Dim blnHelper As Boolean
     Operation.Source = eosUserInterface
     Translation.SetLanguage "POL_TEST"
-    Set dResult = ParseJson(VCS.RunFilteredTests(strPolicy))
+    Select Case strPolicy
+        Case "mode_only"
+            VCS.SetInteractionMode 2
+            Set dResult = ParseJson(VCS.RunFilteredTests())
+        Case "session"
+            VCS.SetOperationPolicy "block"
+            Set dResult = ParseJson(VCS.RunFilteredTests())
+        Case "automation"
+            Operation.Source = eosExternalAPI
+            Set dResult = ParseJson(VCS.RunFilteredTests("block"))
+        Case Else
+            Set dResult = ParseJson(VCS.RunFilteredTests(strPolicy))
+    End Select
     dResult.Add "operationResult", CLng(Operation.Result)
     dResult.Add "operationReady", (Operation.Status = eosReady)
     dResult.Add "canceled", (Operation.Result = eorCanceled)
@@ -47,6 +62,10 @@ Public Function CheckRefusal(ByVal strPolicy As String) As String
         If cmp.Name = "modTestAssert" Then blnHelper = True
     Next cmp
     dResult.Add "helperInstalled", blnHelper
+    dResult.Add "liveMode", CLng(Operation.InteractionMode)
+    dResult.Add "liveBlocked", Operation.DecisionBlocked
+    dResult.Add "liveJournalCount", Operation.Decisions.Count
+    If strPolicy = "session" Then VCS.ClearOperationPolicy
     CheckRefusal = ConvertToJson(dResult)
 End Function
 '''
@@ -74,8 +93,13 @@ async def check(database_path, policy):
     payload = await tools.vcs_call_vba(str(database_path), "PolicyLibrary.CheckRefusal", args=[policy])
     assert payload["success"], payload
     decoded = json.loads(payload["result"])
-    assert decoded["success"] is False, decoded
     assert decoded["operationReady"] is True, decoded
+    if policy == "automation":
+        assert decoded["helperInstalled"] is True and not decoded.get("decision_required"), decoded
+        assert decoded["liveMode"] == 0 and not decoded["liveBlocked"], decoded
+        (EVIDENCE/(policy+".json")).write_text(json.dumps(decoded,indent=2),encoding="utf-8")
+        return
+    assert decoded["success"] is False, decoded
     assert decoded["helperInstalled"] is False, decoded
     if policy == "decline":
         assert decoded["error"] == REFUSAL, decoded
@@ -86,6 +110,9 @@ async def check(database_path, policy):
         assert decoded["error_pattern"] == "decision_required", decoded
         assert decoded["decisionRequiredOutcome"] is True, decoded
         assert decoded["decisions"], decoded
+    if policy in ["mode_only","session"]:
+        assert not decoded["liveBlocked"] and decoded["liveJournalCount"] == 0, decoded
+        assert decoded["liveMode"] == (2 if policy == "session" else 0), decoded
     (EVIDENCE/(policy+".json")).write_text(json.dumps(decoded,indent=2),encoding="utf-8")
     print(json.dumps({"policy": policy, "decoded": decoded}, ensure_ascii=False), flush=True)
 
@@ -105,7 +132,9 @@ def main():
     scratch = args.evidence
     scratch.mkdir(parents=True, exist_ok=True)
     pythoncom.CoInitialize()
-    app = None
+    app=handle=project=component=None
+    pid=stamp=None
+    receipt={'binary':str(args.binary.resolve()),'binary_sha256':hashlib.sha256(args.binary.read_bytes()).hexdigest()}
     try:
         with ExitStack() as cleanup:
             directory = scratch
@@ -122,6 +151,8 @@ def main():
             pid=pid_from_access_app(app)
             stamp=process_create_time(pid)
             assert pid and stamp
+            handle=win32api.OpenProcess(0x1000|0x100000,False,pid)
+            receipt.update(pid=pid,create_time=stamp)
             app.OpenCurrentDatabase(str(library))
             project = next(
                 project for project in app.VBE.VBProjects
@@ -134,7 +165,7 @@ def main():
                 component.CodeModule.DeleteLines(1, component.CodeModule.CountOfLines)
             component.CodeModule.AddFromString(WRAPPER.replace("\n", "\r\n"))
             app.DoCmd.Save(5, "modPolicy")  # acModule
-            del component, project
+            component=project=None
             try:
                 app.DoCmd.RunCommand(126)  # acCmdCompileAndSaveAllModules
                 app.CloseCurrentDatabase()
@@ -156,6 +187,9 @@ def main():
                     try:
                         await check(database_path,"decline")
                         await check(database_path,"block")
+                        await check(database_path,"mode_only")
+                        await check(database_path,"session")
+                        await check(database_path,"automation")
                     finally:
                         server.stop()
                         if previous is None: os.environ.pop('ACCESS_VCS_CALLBACK_URL',None)
@@ -165,12 +199,21 @@ def main():
                 assert pid_from_access_app(app)==pid and process_create_time(pid)==stamp
                 app.Quit(2)  # acQuitSaveNone
                 app = None
+        receipt["verified"]=True
         print("Policy localized preflight checks passed.")
     finally:
+        component=project=None
         if app is not None:
+            assert pid_from_access_app(app)==pid and process_create_time(pid)==stamp
             app.Quit(2)
+        app=None
         gc.collect()
+        receipt['original_handle_exit']=handle is not None and win32event.WaitForSingleObject(handle,5000)==win32event.WAIT_OBJECT_0
+        if handle is not None:handle.Close()
         pythoncom.CoUninitialize()
+        (args.evidence/'cleanup.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
+        if pid is not None:assert receipt['original_handle_exit'],'Owned host did not exit; artifacts retained'
+
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ python Testing/check_policy_workflow.py --evidence '<evidence>' --label workflow
 python tools/verify-caller-error-translation.py --binary '<closed source-built .accda>' --evidence '<new evidence folder>'
 ```
 
-The completion driver runs 23 cases through direct VBA and MCP. The workflow
+The completion driver runs 24 cases through direct VBA and MCP. The workflow
 driver creates a fresh user database for each policy, uses export format 5.1.0
 so SQL is authoritative, and verifies actual database values after import. The
 translation driver edits only a disposable library copy and preserves its files.
@@ -49,8 +49,10 @@ policy's action against the source and database, then run another clean operatio
 Exercise single-object and category import/export results under a caller-owned
 policy, plus MergeBuild start refusal and terminal completion separately.
 
-Test a missing `modTestAssert` helper with `decline` and `block`. Neither may install
-the helper without an authorized choice. The translation probe is
+Direct VBA test preflight offers to install a missing `modTestAssert`. `decline`
+refuses it and `block` records an unanswered decision. API and MCP test runs keep
+the existing headless setup behavior and install the helper automatically. The
+translation probe checks both routes, including mode-only and caller-owned policies:
 [`verify-caller-error-translation.py`](../tools/verify-caller-error-translation.py).
 
 `ConfigureBlockedCompileFixture` is a parameterized setup-hook probe for disposable
