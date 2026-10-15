@@ -71,7 +71,7 @@ def add_translation(database):
 
 
 async def check(database_path, policy):
-    payload = tools.vcs_call_vba(str(database_path), "PolicyLibrary.CheckRefusal", args=[policy])
+    payload = await tools.vcs_call_vba(str(database_path), "PolicyLibrary.CheckRefusal", args=[policy])
     assert payload["success"], payload
     decoded = json.loads(payload["result"])
     assert decoded["success"] is False, decoded

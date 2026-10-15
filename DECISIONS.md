@@ -92,11 +92,11 @@ contradictory guidance.
 - Put compile failure into `runtime_error`/`errorNumber`: misclassifies a runner failure as a VBA runtime exception and conflicts with the existing contract.
 - Preserve compile failure in `run_error`/`run_error_pattern`, then restore ownership before delivery: chosen; the shared contract defines these fields before implementation.
 
-**Decision**: Both sync JSON and async completion use the same idempotent decision overlay. `decision_required` remains primary; compile text and `project_not_compiled` become secondary. Capture the journal, own log, results path or available inline results, and persistence errors before releasing infrastructure. Completion construction faults carry `completion_error`/`completion_error_number` and cannot invent success. Every restoration step is attempted independently. Retain the admitted callback emitter across teardown and make one terminal attempt after restoration, even when delivery fails. Preserve A34's scope acquisition and caller-owned session policy.
+**Decision**: Both sync JSON and async completion use the same idempotent decision overlay. `decision_required` remains primary; compile text and `project_not_compiled` become secondary. Capture the journal, own log, results path or available inline results, and persistence errors before releasing infrastructure. Completion construction faults carry `completion_error`/`completion_error_number` and cannot invent success. Every restoration step is attempted independently. Retain the admitted callback emitter across teardown and make one terminal attempt after restoration, even when delivery fails. Preserve mode-only scope acquisition and caller-owned session policy.
 
-**What this rules out**: Duplicate dictionary keys, overwriting a primary decision with compile or construction failure, using lease termination to repair an already-completed root, or letting callback availability determine cleanup. Network delivery remains a single attempt, not a retry guarantee. MCP must preserve the exact secondary fields and partial results too; ship the counterpart together.
+**What this rules out**: Duplicate dictionary keys, overwriting a primary decision with compile or construction failure, using lease termination to repair an already-completed root, or letting callback availability determine cleanup. Network delivery remains a single attempt, not a retry guarantee. Clients must preserve the exact secondary fields and partial results too.
 
-**Relevant files**: `clsOperation.cls`, `clsVersionControl.cls`, `clsTestRunner.cls`, `modDialogPolicy.bas`, `modJsonEmit.bas`, `modTestBlockedCompile.bas`; shared spec section 2, MCP A35 decision, and [A35 verification](../../verification/A35/README.md).
+**Relevant files**: `clsOperation.cls`, `clsVersionControl.cls`, `clsTestRunner.cls`, `modDialogPolicy.bas`, `modJsonEmit.bas`, `modTestBlockedCompile.bas`; `docs/noninteractive-dialogs.md`.
 
 ---
 

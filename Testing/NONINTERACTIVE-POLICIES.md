@@ -26,6 +26,22 @@ API, or use an explicitly owned COM harness. This pin identifies historical test
 tooling. It does not establish support in a published client. Session-enforced
 clients require a later add-in stage; keep their gates intact.
 
+Run the public drivers with that client's source on `PYTHONPATH`, using the MCP
+project's virtual environment. Keep all evidence outside the contribution checkout:
+
+```powershell
+$env:PYTHONPATH = '<pinned client checkout>\src'
+python Testing/check_noninteractive_policies.py --evidence '<evidence>' --label completion --client-source $env:PYTHONPATH
+python Testing/check_policy_workflow.py --evidence '<evidence>' --label workflow --client-source $env:PYTHONPATH
+python tools/verify-caller-error-translation.py --binary '<closed source-built .accda>' --evidence '<new evidence folder>'
+```
+
+The completion driver runs 23 cases through direct VBA and MCP. The workflow
+driver creates a fresh user database for each policy, uses export format 5.1.0
+so SQL is authoritative, and verifies actual database values after import. The
+translation driver edits only a disposable library copy and preserves its files.
+All three drivers preserve their disposable user databases for inspection.
+
 In a separate disposable user database, export a query baseline and modify both
 the database query and its source. Exercise all five policies. `block` must leave
 the conflicting bytes intact and report `decision_required`. Verify each other

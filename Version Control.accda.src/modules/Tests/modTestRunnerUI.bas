@@ -1759,7 +1759,11 @@ Private Sub EndInteractiveBridgeRun()
         modTestRunnerDiag.DiagEnd "teardown.global"
         SaveWebRunnerRunLog
         modTestRunnerDiag.DiagBegin "teardown.op_finish"
-        m_cBridgeRoot.Complete IIf(TestRunner.State = etrsCancelled, eorCanceled, eorSuccess)
+        Select Case TestRunner.State
+            Case etrsCancelled: m_cBridgeRoot.Complete eorCanceled
+            Case etrsFailed: m_cBridgeRoot.Complete eorFailed
+            Case Else: m_cBridgeRoot.Complete eorSuccess
+        End Select
         Set m_cBridgeRoot = Nothing
         modTestRunnerDiag.DiagEnd "teardown.op_finish"
     End If
