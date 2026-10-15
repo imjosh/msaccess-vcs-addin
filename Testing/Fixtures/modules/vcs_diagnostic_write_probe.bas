@@ -27,6 +27,10 @@ Public Function DiagnosticWriteProbe(ByVal strCallback As String, ByVal strMessa
     MCP.RegisterCallback strCallback
     d.Add "active", MCP.IsActive
     MCPDebugLog strMessage
+    MCP.RegisterCallback "{invalid callback"
+    d.Add "registration_error_consumed", Err.Number = 0
+    d.Add "failed_registration_released", Not MCP.IsActive
+    d.Add "failed_registration_fields_cleared", Len(MCP.CallbackUrl) = 0 And Len(MCP.OperationId) = 0
     d.Add "journal_delta", Log.ErrorJournalCount - lngJournal
     d.Add "error_delta", Log.ErrorCount - lngErrors
     d.Add "level_unchanged", Operation.ErrorLevel = eLevel

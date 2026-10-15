@@ -3,6 +3,9 @@
 `MCPDebugLog` drops a failed diagnostic write. `TryAppendToFile` returns `False`
 without logging the failure, changing operation error state, or retrying a locked
 file. Successful writes create a UTF-8 BOM once and append CRLF-terminated lines.
+The helper consumes an inbound `Err` without logging it and returns with `Err`
+cleared. Capture any error details before calling it. It uses a local filesystem
+object to avoid the shared getter's logging and retries.
 This does not suppress other logged errors or introduce a decision-policy API.
 
 1. Commit the source and rebuild it through the supported
@@ -26,10 +29,11 @@ python Testing/check_diagnostic_writes.py <evidence> normal --mode normal
 python Testing/check_diagnostic_writes.py <evidence> broad --broad
 ```
 
-The focused run must execute all three `TestTryAppendToFile*` tests, with passing
+The focused run must execute all five `TestTryAppendToFile*` tests, with passing
 assertions. The blocker and locked probes must report zero journal/error deltas,
 unchanged operation level/status/mode, an active then released callback, preserved
-original bytes, and a successful public version query after the write attempt.
+original bytes, a failed registration after an active callback that releases
+callbacks and consumes the parse error, and a successful public version query after the write attempt.
 The normal probe must contain its marker with one BOM. All runs must compile
 independently after fresh reopen, preserve readable components, and confirm both
 owned process exits. An all-EMPTY run does not qualify.

@@ -33,7 +33,8 @@ def behavior_checks(record):
         tests = record.get('tests', {})
         summary = tests.get('summary', {})
         cases = tests.get('tests', {})
-        required = ['TestTryAppendToFileAppendsLines', 'TestTryAppendToFileFailsQuietly', 'TestTryAppendToFileLocked']
+        required = ['TestTryAppendToFileAppendsLines', 'TestTryAppendToFileFailsQuietly', 'TestTryAppendToFileLocked',
+                    'TestTryAppendToFileWithLiveErrorWrites', 'TestTryAppendToFileWithLiveErrorFailsQuietly']
         checks = {'passing_assertions': summary.get('passed', 0) > 0,
                 'no_failed_assertions': summary.get('failed') == 0,
                 'no_errored_tests': summary.get('errored') == 0,
@@ -46,6 +47,9 @@ def behavior_checks(record):
     probe = record.get('probe', {})
     checks = {'callback_active': probe.get('active') is True,
               'callback_released': probe.get('callback_released') is True,
+              'failed_registration_released': probe.get('failed_registration_released') is True,
+              'registration_error_consumed': probe.get('registration_error_consumed') is True,
+              'failed_registration_fields_cleared': probe.get('failed_registration_fields_cleared') is True,
               'before_root': probe.get('status_before') == 0,
               'normal_mode': probe.get('mode_before') == 0,
               'no_journal_entries': probe.get('journal_delta') == 0,
@@ -61,6 +65,7 @@ def behavior_checks(record):
     else:
         checks['one_bom'] = record.get('one_bom') is True
         checks['marker_present'] = record.get('marker_present') is True
+        checks['registration_error_details_preserved'] = record.get('registration_error_details_preserved') is True
     return checks
 
 def run(out, label, mode, filters, transport):
@@ -193,6 +198,7 @@ def run(out, label, mode, filters, transport):
                 record['log_hex'] = raw.hex()
                 record['one_bom'] = raw.startswith(b'\xef\xbb\xbf') and raw.count(b'\xef\xbb\xbf') == 1
                 record['marker_present'] = b'diagnostic probe one\r\n' in raw
+                record['registration_error_details_preserved'] = b'clsMCP.RegisterCallback: ERROR - Error parsing JSON:' in raw
             record['public_version_after'] = api('GetVCSVersion')
         record['before_close_components'] = inspect()
         close_owned()

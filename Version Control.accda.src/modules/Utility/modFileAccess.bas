@@ -585,14 +585,21 @@ Public Function TryAppendToFile(strText As String, strPath As String) As Boolean
     Dim bteAppend() As Byte
     Dim blnExists As Boolean
     Dim strFolder As String
+    Dim fs As Scripting.FileSystemObject
 
-    LogUnhandledErrors
+    ' Diagnostics consume any inbound Err without logging it. Callers must save
+    ' error details first. Unlike normal writers, this also bypasses the shared
+    ' FSO getter, whose error handling logs and retries.
     On Error Resume Next
+    Err.Clear
 
-    strFolder = FSO.GetParentFolderName(strPath)
-    If Not FSO.FolderExists(strFolder) Then FSO.CreateFolder strFolder
+    Set fs = New Scripting.FileSystemObject
     If Err Then GoTo CleanUp
-    blnExists = FSO.FileExists(strPath)
+
+    strFolder = fs.GetParentFolderName(strPath)
+    If Not fs.FolderExists(strFolder) Then fs.CreateFolder strFolder
+    If Err Then GoTo CleanUp
+    blnExists = fs.FileExists(strPath)
 
     ' Encode as UTF-8, keeping the BOM only when this creates the file
     With New ADODB.Stream
