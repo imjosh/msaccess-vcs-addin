@@ -483,7 +483,7 @@ Private Sub CheckTryAppendWithLiveError(ByVal blnBlock As Boolean)
 
     TestAssert lngInbound = 11, "diagnostic helper entered from a live division error handler"
     TestAssert lngAfter = 0, "diagnostic helper consumes the inbound error"
-    TestAssert blnWritten = Not blnBlock, "write result depends only on the destination"
+    TestAssert blnWritten = (Not blnBlock), "write result depends only on the destination"
     TestAssert Log.ErrorJournalCount = lngJournal, "live error adds no journal entry"
     TestAssert Log.ErrorCount = lngErrors, "live error adds no error count"
     TestAssert Operation.ErrorLevel = eLevel, "live error leaves operation level unchanged"
