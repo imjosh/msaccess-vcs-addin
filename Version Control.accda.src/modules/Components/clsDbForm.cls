@@ -222,7 +222,7 @@ Private Sub IDbComponent_Merge(strFile As String)
 
     ' Don't attempt to merge forms with same names as add-in forms.
     If ObjectExists(acForm, strName, True) Then
-        Log.Error eelError, "Merging not supported for add-in forms. Use full build instead.", _
+        Log.Error eelError, T("Merging not supported for add-in forms. Use full build instead."), _
             ModuleName(Me) & ".Merge"
         Exit Sub
     End If

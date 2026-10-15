@@ -83,6 +83,89 @@ contradictory guidance.
 
 ---
 
+## 2026-10-02 — Decision precedence preserves compile diagnostics through teardown
+
+**Trigger**: A blocked setup confirmation followed by compile failure added `error_pattern` twice. Completion stopped before releasing the root; the timer fallback concealed that failure without repairing ownership.
+
+**Options explored**:
+- Replace the duplicate `Add` only: prevents that exception but leaves other payload or callback failures able to skip restoration.
+- Put compile failure into `runtime_error`/`errorNumber`: misclassifies a runner failure as a VBA runtime exception and conflicts with the existing contract.
+- Preserve compile failure in `run_error`/`run_error_pattern`, then restore ownership before delivery: chosen; the shared contract defines these fields before implementation.
+
+**Decision**: Both sync JSON and async completion use the same idempotent decision overlay. `decision_required` remains primary; compile text and `project_not_compiled` become secondary. Capture the journal, own log, results path or available inline results, and persistence errors before releasing infrastructure. Completion construction faults carry `completion_error`/`completion_error_number` and cannot invent success. Every restoration step is attempted independently. Retain the admitted callback emitter across teardown and make one terminal attempt after restoration, even when delivery fails. Preserve A34's scope acquisition and caller-owned session policy.
+
+**What this rules out**: Duplicate dictionary keys, overwriting a primary decision with compile or construction failure, using lease termination to repair an already-completed root, or letting callback availability determine cleanup. Network delivery remains a single attempt, not a retry guarantee. MCP must preserve the exact secondary fields and partial results too; ship the counterpart together.
+
+**Relevant files**: `clsOperation.cls`, `clsVersionControl.cls`, `clsTestRunner.cls`, `modDialogPolicy.bas`, `modJsonEmit.bas`, `modTestBlockedCompile.bas`; shared spec section 2, MCP A35 decision, and [A35 verification](../../verification/A35/README.md).
+
+---
+
+
+## 2026-10-01 — A compile-gated test run fails without cancellation
+
+**Trigger**: The test runner used its cancelled state when the host project did not compile, so MCP replaced the compile explanation with "Test run was cancelled" on both transports.
+
+**Decision**: A failed compile check is a runner-level failure, not a failed assertion or a cancellation. The final JSON and error callback carry `success: false`, `cancelled: false`, `error_pattern: project_not_compiled`, and the translated "Project has compile errors. Please resolve before running tests." The runner owns the error and clears it when a run begins or counts reset. The existing results file carries the same error on callback and synchronous paths. The web runner finishes its root as failed too.
+
+**What this rules out**: Inferring cancellation from a run that executed no tests, counting a compile failure as an errored test, or requiring clients to parse translated text to distinguish an uncompilable project from failing tests. A real cancellation retains its existing state and contract. MCP already preserves explicit failure results and requires no code change.
+
+**Relevant files**: `clsTestRunner.cls`, `modJsonEmit.bas`, `clsVersionControl.cls`, `clsOperation.cls`, `modTestRunnerUI.bas`; `docs/noninteractive-dialogs.md`.
+
+---
+
+## 2026-10-01 - Automation test runs stay headless
+
+API test runs use the headless runner. The interactive console remains available
+through the ribbon. A caller that needs conservative prompt handling supplies a
+decision policy and verifies its acknowledgment before dispatching later calls.
+Without a policy, the legacy helper-install preflight can still show a prompt.
+
+---
+
+## 2026-09-30 — Policy set and clear are acknowledged by their return values
+
+**Trigger**: The automation client read any non-refusal `SetOperationPolicy` reply as success, including the `Empty` an older add-in returns on reentry.
+
+**Decision**: The add-in's contract is the acknowledgment: `SetOperationPolicy` returns `{"success":true,"policy":"<lower-cased name>"}`, and `ClearOperationPolicy` returns `{"success":true}`. Callers must require exactly that. The acknowledgment confirms the requested state. A missing or malformed reply does not confirm acceptance.
+
+**What this rules out**: Treating `Empty` or a reply without `policy` as acceptance.
+
+---
+
+## 2026-09-30 — Interaction scopes: owner tokens, opened after Begin, `skip` equals `prefer_database`
+
+**Trigger**: A review of the first noninteractive-policy commit (`cd22aa3`) found policy scopes leaking between operations: `Finish` could pop a scope it had not opened, a policy applied while another operation ran changed that operation, and a test module switching to silent mode could turn a `block` run into one that approved defaults. `prefer_database` and `skip` were documented as different but behaved the same.
+
+**Options explored**:
+- *Pop the top of the scope stack on `Finish`*: rejected. It closes whatever is on top, including a scope a caller opened. Scopes are closed by owner token instead, and closing a token restores the state saved when it opened and discards inner scopes. Closing an unknown token is a no-op. Each scope is operation-owned (`Finish` closes it) or caller-owned (a session policy from `SetOperationPolicy`, closed only by `ClearOperationPolicy` or a replacing set).
+- *Open the policy scope before `Operation.Begin`*: rejected. A refused begin (`operation_already_running`) would then leave a scope open and change the state of the operation that is running. The scope now opens as part of `TryBeginRoot`, so a refusal changes nothing, and its mode and policy ride in the registry-backed state through the Stage and Restore cycle of a timer-driven merge.
+- *Keep `skip` and `prefer_database` as two behaviours*: rejected. Nothing distinguishes them (both keep the database object and skip the source file), and documenting a difference that does not exist misleads callers. Both names stay accepted and the docs and enum comments say they are equivalent. Give them distinct behaviour only if a caller needs it.
+
+**Decision**: `clsInteractionScope` owns mode, policy, blocked flag, decision journal and saved error level, with open-by-token and close-by-token. While any enclosing scope is noninteractive, a request for silent mode leaves the mode noninteractive. `clsOperation` opens an operation-owned scope for each root that begins under a policy, so one root's blocked flag and decisions do not carry into the next.
+
+**What this rules out**: A "pop the top" operation. A policy scope that opens before the operation is granted. Two policy names with no behavioural difference between them being presented as different. Revisit `skip` and `prefer_database` if a caller needs to tell them apart.
+
+**Relevant files**: `Infrastructure/clsInteractionScope.cls`, `Infrastructure/clsOperation.cls`, `Utility/modDialogPolicy.bas`, `API/clsVersionControl.cls`, `docs/noninteractive-dialogs.md`.
+
+---
+
+## 2026-09-30 — The sync return of `MergeBuild` is a start result only
+
+**Trigger**: MCP assumed `MergeBuild` returns the merge's final result. The merge continues on a timer after `MergeBuild` returns, so the caller cannot have the outcome then.
+
+**Options explored**:
+- *Make `MergeBuild` synchronous and return the final outcome*: rejected. The merge is staged on a timer after `MergeBuild` returns, so the outcome does not exist yet. Making it synchronous is a redesign of the merge, out of scope for the hardening work.
+- *Return `success: true` once the merge is staged*: rejected. A caller would read it as a merged database, when the merge can still block on a prompt or fail.
+- *Send nothing to the callback for a refusal*: rejected. A caller waiting on the callback would wait for a completion that never comes.
+
+**Decision**: `MergeBuild` returns JSON that says only whether the merge started: `{"success":true,"started":true,"operation_id":...}`, or a refusal with an `error_pattern` (`invalid_decision_policy`, `merge_not_available`, `operation_already_running`, `decision_required`). A refusal is also posted to the completion callback when MCP is active, and the final outcome arrives only through the callback. Calling `MergeBuild` as a statement still works. `RunFilteredTests` is not a start result: it runs the tests before it returns, so its return is the final results JSON.
+
+**What this rules out**: Reading `success: true` from `MergeBuild` as a completed merge. A synchronous `MergeBuild`. Revisit if the merge stops being timer-driven.
+
+**Relevant files**: `API/clsVersionControl.cls` (`MergeBuild`, `RunFilteredTests`), `docs/noninteractive-dialogs.md`.
+
+---
+
 ## 2026-10-09 — Capture driver-completed ODBC connections via Database.Connect
 
 **Trigger**: A project linked to SQL Server through ODBC Driver 18 prompted for the

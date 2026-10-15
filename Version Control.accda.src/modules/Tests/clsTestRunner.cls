@@ -35,6 +35,7 @@ Public Enum eTestRunnerState
     etrsRunning = 3
     etrsComplete = 4
     etrsCancelled = 5
+    etrsFailed = 6
 End Enum
 
 ' Test result status
@@ -67,10 +68,18 @@ Private Type udtTestRunner
     LastRunDurationMs As Long
     LastRunKeys As Collection
     LastResultsPath As String
+    ResultsSaveError As String
+    RunError As String
+    RunErrorPattern As String
     McpDots As String
     LastMcpDotFlush As Currency
 End Type
 Private this As udtTestRunner
+
+' Instance-owned, one-shot seams for orchestration regressions. Arm in setup;
+' no loaded-project mutation or invalid VBA is needed to reach the compile gate.
+Private m_blnCompileFailureForTest As Boolean
+Private m_strResultsFileForTest As String
 
 
 '---------------------------------------------------------------------------------------
@@ -171,6 +180,44 @@ Public Property Get LastResultsPath() As String
 End Property
 
 
+' A runner failure belongs to the run, rather than to an individual test.
+Public Property Get RunError() As String
+    RunError = this.RunError
+End Property
+
+Public Property Get RunErrorPattern() As String
+    RunErrorPattern = this.RunErrorPattern
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ResultsSaveError
+' Date      : 09/30/2026
+' Purpose   : The logged error text when the most recent SaveResults could not write
+'           : its file. Empty when the file was written or no save has happened.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get ResultsSaveError() As String
+    ResultsSaveError = this.ResultsSaveError
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearLastResultsPath
+' Date      : 09/30/2026
+' Purpose   : Forget the previous run's results file, save error, and runner error. clsOperation
+'           : calls this when a test-run root begins, so a run that fails before Scan
+'           : cannot report them.
+'---------------------------------------------------------------------------------------
+'
+Public Sub ClearLastResultsPath()
+    this.RunError = vbNullString
+    this.RunErrorPattern = vbNullString
+    this.LastResultsPath = vbNullString
+    this.ResultsSaveError = vbNullString
+End Sub
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : Scan
 ' Author    : Adam Waller
@@ -182,6 +229,7 @@ End Property
 Public Sub Scan()
 
     this.LastResultsPath = vbNullString
+    this.ResultsSaveError = vbNullString
     this.State = etrsScanning
     ScanDiscover
     this.State = etrsReady
@@ -319,14 +367,16 @@ Public Sub RunSelected(colTestKeys As Collection)
     DoEvents
     On Error GoTo 0
     If modTestRunnerUI.WebRunnerActive() Then modTestRunnerUI.RefocusWebRunner
-    If Not Application.IsCompiled Then
+    If CompileCheckFailed() Then
         modTestRunnerDiag.Diag "run.skip", "not compiled"
-        Log.Add T("Project has compile errors. Please resolve before running tests."), , , "red"
+        this.RunError = T("Project has compile errors. Please resolve before running tests.")
+        this.RunErrorPattern = ERR_PROJECT_NOT_COMPILED
+        Log.Add this.RunError, , , "red"
         ' Notify the web runner (no-op in console mode); this path exits before the
         ' normal StreamRunCancelled/StreamRunComplete events, so without it the page
         ' gets no feedback at all.
-        modTestRunnerUI.StreamRunError T("Project has compile errors. Please resolve before running tests.")
-        this.State = etrsCancelled
+        modTestRunnerUI.StreamRunError this.RunError
+        this.State = etrsFailed
         GoTo CleanUp
     End If
 
@@ -370,6 +420,7 @@ Public Sub RunSelected(colTestKeys As Collection)
         ' Allow pending UI events (e.g. form close) to fire
         DoEvents
         modTestRunnerUI.PollBridgeCancel
+        ' An MCP cancel request arrives through Cancel, like a form close.
 
         ' Check both internal flag and operation-level cancellation
         If this.CancelRequested Or (Operation.Status <> eosRunning) Then
@@ -407,7 +458,7 @@ Public Sub RunSelected(colTestKeys As Collection)
         End If
 
         If dTest("sourceType") = "class" Then
-            ' --- Class-based test: instantiate and invoke in the tested project ---
+            ' --- Class-based test: instantiate via factory, call via CallByName ---
             curStart = Perf.MicroTimer
             On Error Resume Next
             Set obj = Application.Run(BuildRunCmd("TestClassFactory"), CStr(dTest("moduleName")))
@@ -427,7 +478,7 @@ Public Sub RunSelected(colTestKeys As Collection)
 
             On Error Resume Next
             ' Resolve class/form types in the tested project. Cross-project CallByName
-            ' can fail before a class test starts when both add-in copies are loaded.
+            ' can fail before a form-policy test starts when both add-in copies are loaded.
             varInvokeResult = Empty
             varInvokeResult = Application.Run(BuildRunCmd("TestClassInvoke"), obj, strProcName)
             lngErrNum = Err.Number
@@ -633,6 +684,20 @@ End Function
 '           : No-op when the procedure is absent. Hook errors are logged and non-fatal.
 '---------------------------------------------------------------------------------------
 '
+Friend Property Let CompileFailureForTest(ByVal blnFail As Boolean)
+    m_blnCompileFailureForTest = blnFail
+End Property
+
+Friend Property Let ResultsFileForTest(ByVal strPath As String)
+    m_strResultsFileForTest = strPath
+End Property
+
+Private Function CompileCheckFailed() As Boolean
+    CompileCheckFailed = m_blnCompileFailureForTest Or Not Application.IsCompiled
+    m_blnCompileFailureForTest = False
+End Function
+
+
 Public Sub InvokeGlobalTestSetup()
     InvokeOptionalGlobalHook GlobalTestSetupProc
 End Sub
@@ -909,11 +974,11 @@ Public Function GetResultsAsJson(Optional ByVal strJUnitPath As String = vbNullS
     modTestRunnerDiag.DiagBegin "results.json"
     GetResultsAsJson = modJsonEmit.EmitTestResultsJson(this.Tests, RunDurationMs, _
         (this.State = etrsCancelled), _
-        (this.State <> etrsCancelled) And _
+        (this.State <> etrsCancelled And this.State <> etrsFailed) And _
             (this.FailedCount = 0 And this.ErroredCount = 0 And this.PassedCount > 0), _
         this.PassedCount, this.FailedCount, this.ErroredCount, this.EmptyCount, _
         this.TotalAssertions, this.PassedAssertions, this.FailedAssertions, _
-        strJUnitPath, strStatePath, strLogPath, strResultsPath)
+        strJUnitPath, strStatePath, strLogPath, strResultsPath, this.RunError, this.RunErrorPattern)
     modTestRunnerDiag.DiagEnd "results.json", "chars=" & Len(GetResultsAsJson)
     modTestRunnerDiag.DiagSize "results.json", Len(GetResultsAsJson)
 
@@ -971,7 +1036,9 @@ End Function
 ' Author    : Adam Waller
 ' Date      : 5/7/2026
 ' Purpose   : Write test results to a timestamped JSON file in the logs folder.
-'           : Retention follows Options.MaxLogFiles via Log.CleanupOldLogs.
+'           : Retention follows Options.MaxLogFiles via Log.CleanupOldLogs. When the
+'           : file cannot be written, LastResultsPath stays empty, ResultsSaveError
+'           : keeps the error text, and the return value is empty.
 '---------------------------------------------------------------------------------------
 '
 Public Function SaveResults() As String
@@ -980,17 +1047,21 @@ Public Function SaveResults() As String
     Dim strFile As String
 
     strFolder = Options.GetExportFolder & "logs" & PathSep
-    VerifyPath strFolder
     strFile = strFolder & "TestResults_" & _
         Format$(Now, "yyyymmdd\_hhnnss") & "_" & _
         Format$(Timer * 1000 Mod 1000, "000") & ".json"
 
+    If Len(m_strResultsFileForTest) > 0 Then strFile = m_strResultsFileForTest
+    m_strResultsFileForTest = vbNullString
+    this.LastResultsPath = vbNullString
     modTestRunnerDiag.DiagBegin "save.results"
-    WriteFile GetResultsAsJson, strFile
-    this.LastResultsPath = strFile
-    SaveResults = strFile
-
-    Log.CleanupOldLogs strFolder, "TestResults_*.json", Options.MaxLogFiles
+    If WriteFileVerified(GetResultsAsJson, strFile, this.ResultsSaveError) Then
+        this.LastResultsPath = strFile
+        SaveResults = strFile
+        Log.CleanupOldLogs strFolder, "TestResults_*.json", Options.MaxLogFiles
+    Else
+        Log.Add this.ResultsSaveError, False, , "orange"
+    End If
     modTestRunnerDiag.DiagEnd "save.results"
 
 End Function
@@ -2373,6 +2444,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Private Sub ResetCounts()
+    this.RunError = vbNullString
+    this.RunErrorPattern = vbNullString
     this.PassedCount = 0
     this.FailedCount = 0
     this.ErroredCount = 0

@@ -424,7 +424,7 @@ End Property
 '---------------------------------------------------------------------------------------
 '
 Public Property Get OperationId() As String
-    OperationId = this.OperationId
+    If this.IsActive Then OperationId = this.OperationId
 End Property
 
 

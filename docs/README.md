@@ -38,6 +38,7 @@ and abandoned.
 | [`mcp-runvba.md`](mcp-runvba.md) | Running VBA over MCP: reading schema metadata SQL cannot reach, error-break suppression, the auto-injected `errorLine`, multi-error handlers, and `On Error GoTo -1`. |
 | [`agentic-rebuild.md`](agentic-rebuild.md) | Unattended rebuild of the add-in itself via `vcs_rebuild_addin` / `VCS.RebuildAddIn`: single-instance guard, status-file contract, and failure modes. |
 | [`agent-test-runs.md`](agent-test-runs.md) | Running the suite over MCP in a disposable development host: repository context, retained fixtures, close/reopen qualification, evidence and whole-host disposal. |
+| [`noninteractive-dialogs.md`](noninteractive-dialogs.md) | Running merge builds and test runs without prompts: decision policies, the start-result contract, error patterns (`decision_required`, `operation_already_running`, `merge_not_available`), and how the interaction scope is restored. |
 | [`perf-techniques.md`](perf-techniques.md) | VBA idioms that measured faster on real export paths: early-bound Dictionary access, typed line buffers, length gates, prefix tests, and how to re-measure them. |
 | [`automation-contract.md`](automation-contract.md) | What a CI pipeline can rely on: the headless build entry points, their JSON result shape, hook ordering and `ValidateAfterBuild`, silent install, and interaction mode. |
 | [`testing-strategy.md`](testing-strategy.md) | The three testing layers, the `modTest*` convention, the object round-trip harness, the bug-as-fixture workflow, headless CI runs, and where results land. |

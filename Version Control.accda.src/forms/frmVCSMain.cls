@@ -34,6 +34,10 @@ Public strLastTestResultsPath As String
 ' Use this property to set the path to the source files (such as a build triggered from the API)
 Public strSourcePath As String
 
+' Set by an API caller that wants the build to run under a noninteractive decision
+' policy. Operation.Begin opens the scope; edpAsk (the default) leaves it interactive.
+Public intDecisionPolicy As eDecisionPolicy
+
 ' Design-time and test-console client dimensions (twips; match frmVCSMain.form Width).
 Private Const DESIGN_INSIDE_WIDTH As Long = 9360
 Private Const TEST_INSIDE_WIDTH As Long = 12300
@@ -91,9 +95,11 @@ Public Sub ApplyTestConsoleLayout()
     m_dblInitialInsideWidth = dblDesignW
     m_dblInitialInsideHeight = dblDesignH
 
-    Me.Visible = True
-    DoEvents
-    Me.Repaint
+    If Not InteractionIsNonInteractive() Then
+        Me.Visible = True
+        DoEvents
+        Me.Repaint
+    End If
 
 End Sub
 
@@ -120,6 +126,17 @@ Public Sub cmdBuild_Click()
         Exit Sub
     End If
 
+    ' Under a noninteractive policy, take the root first so the policy scope also
+    ' answers the prompts while resolving the source folder.
+    intBuildType = IIf(chkFullBuild, eotBuild, eotMerge)
+    If Me.intDecisionPolicy <> edpAsk Then
+        Set cRoot = Operation.TryBeginRoot(intBuildType, Me.intDecisionPolicy)
+        If cRoot Is Nothing Then
+            DoCmd.Hourglass False
+            Exit Sub
+        End If
+    End If
+
     ' Get source files folder
     If Len(Me.strSourcePath) Then
         ' Use specified build folder
@@ -130,6 +147,8 @@ Public Sub cmdBuild_Click()
         strFolder = GetSourceFolder
         ' Exit out of build if the user cancelled any of the confirmations.
         If strFolder = vbNullString Then
+            ' Complete first: closing the form while the root is running reads as a cancel.
+            If Not cRoot Is Nothing Then cRoot.Complete eorCanceled
             DoCmd.Close acForm, Me.Name
             DoCmd.Hourglass False
             Exit Sub
@@ -140,8 +159,7 @@ Public Sub cmdBuild_Click()
     ' (Use a timer so we can release the reference to this form before beginning the
     '  build process, just in case we need to import a form with the same name.)
     If strFolder <> vbNullString Then
-        intBuildType = IIf(chkFullBuild, eotBuild, eotMerge)
-        Set cRoot = Operation.TryBeginRoot(intBuildType)
+        If cRoot Is Nothing Then Set cRoot = Operation.TryBeginRoot(intBuildType)
         If Not cRoot Is Nothing Then
             strToken = cRoot.DetachForContinuation()
             SetTimer "Build", strFolder, chkFullBuild, strToken
@@ -206,6 +224,15 @@ Private Function GetSourceFolder() As String
     ' If we aren't doing the current database, then prompt user to find a folder
     ' with source files to use for the build.
     If GetSourceFolder = vbNullString Then
+
+        If InteractionIsNonInteractive() Then
+            ' A folder picker cannot be answered by a decision policy.
+            Operation.RecordDecision NewDecision(DECISION_REQUIRED, T("Select Source Folder"), _
+                T("No project export folder was found, and a folder picker cannot be shown."), _
+                DECISION_BLOCKED, "file_dialog")
+            DoCmd.Hourglass False
+            Exit Function
+        End If
 
         ' Show a folder picker to select the file with source code.
         DoCmd.Hourglass False
@@ -340,6 +367,12 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Private Function ConfirmCancel() As Boolean
+    ' A noninteractive run already asked the caller to cancel by closing the window,
+    ' and no decision policy can answer this confirmation. Do not open or block on one.
+    If InteractionIsNonInteractive() Then
+        ConfirmCancel = True
+        Exit Function
+    End If
     ConfirmCancel = MsgBox2(T("Cancel Current Operation?"), _
         T("You are in the midst of a running process. Are you sure you want to cancel?"), _
         T("Click [Yes] to cancel the process, or [No] to resume."), _
@@ -444,7 +477,7 @@ Public Sub ResetForOperation()
     On Error GoTo 0
 
     Log.SetConsole Me.txtLog, GetProgressBar
-    Me.Visible = True
+    SetMainFormVisible Me
 
 End Sub
 
@@ -685,7 +718,8 @@ Private Sub Form_Unload(Cancel As Integer)
 
     ' Check to see if we have an active job running. Staged (paused) roots are
     ' left alone: pause scopes close forms without meaning the user canceled.
-    If Operation.Status = eosRunning Then
+    If MainFormWaitsForRoot(Operation.Status, Operation.OperationType, _
+        (TestRunner.State = etrsRunning)) Then
         ' Keep the form open either way so the owning procedure can finish
         ' the root after the loop observes the cancel signal.
         Cancel = True

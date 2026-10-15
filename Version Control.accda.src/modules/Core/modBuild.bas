@@ -152,7 +152,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                     vbOK) = vbOK Then
 
                 ' Launch the GUI form (it was closed a moment ago)
-                DoCmd.OpenForm "frmVCSMain"
+                ShowMainForm
                 Form_frmVCSMain.StartBuild blnFullBuild
                 Log.Error eelCritical, T("{0} aborted. Name mismatch.", var0:=strType), FunctionName
                 GoTo CleanUp
@@ -299,7 +299,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
     ' is still watched by someone unless it explicitly said otherwise, and the form
     ' is where they watch it. Everything below tolerates the form being absent.
     If Operation.InteractionMode <> eimSilent Then
-        DoCmd.OpenForm "frmVCSMain"
+        ShowMainForm
         Form_frmVCSMain.StartBuild blnFullBuild
     End If
 
@@ -477,9 +477,13 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                 Log.Add T("Resolving source conflicts"), False
                 .Resolve
             Else
-                ' Cancel build/merge
+                ' Stop on cancellation or an uncovered conflict decision.
                 Log.Spacer
-                Log.Add T("Build Canceled")
+                If Operation.DecisionBlocked Then
+                    Log.Add T("Merge blocked: a conflict decision is required.")
+                Else
+                    Log.Add T("Build Canceled")
+                End If
                 Operation.ErrorLevel = eelCritical
                 GoTo CleanUp
             End If
@@ -1378,11 +1382,16 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
                     Log.Add T("Resolving source conflicts"), False
                     .Resolve
                 Else
-                    ' Cancel export
                     Log.Spacer
-                    Log.Add T("Import Canceled"), , , "Red", True
+                    If Operation.DecisionBlocked Then
+                        Log.Add T("Import blocked: a conflict decision is required."), , , "Red", True
+                        intResult = eorDecisionRequired
+                    Else
+                        ' Cancel export
+                        Log.Add T("Import Canceled"), , , "Red", True
+                        intResult = eorCanceled
+                    End If
                     Operation.ErrorLevel = eelCritical
-                    intResult = eorCanceled
                     GoTo CleanUp
                 End If
             End If
@@ -1504,7 +1513,6 @@ Public Sub RunBuildFromContinuation(strRootToken As String, strSourceFolder As S
     Optional strAlternatePath As String, Optional blnResumed As Boolean = False)
 
     Dim cRoot As clsRootOperationLease
-    Dim blnSuccess As Boolean
 
     Set cRoot = Operation.ResumeRoot(strRootToken)
     If cRoot Is Nothing Then
@@ -1520,12 +1528,7 @@ Public Sub RunBuildFromContinuation(strRootToken As String, strSourceFolder As S
         cRoot.DetachForContinuation
         Exit Sub
     End If
-    blnSuccess = (Operation.ErrorLevel <> eelCritical)
-    If Not blnSuccess Or Operation.ErrorLevel = eelCritical Then
-        cRoot.Complete eorFailed
-    Else
-        cRoot.Complete eorSuccess
-    End If
+    cRoot.Complete BuildContinuationResult(Operation)
     Exit Sub
 
 ErrHandler:
@@ -2302,3 +2305,144 @@ Private Sub OpenFormInCurrentDb(FormName, Optional View As AcFormView = acNormal
     End If
 
 End Sub
+
+
+Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
+    colErrors As Collection) As String
+
+    Dim dResult As Dictionary
+    Dim intLevel As eErrorLevel
+
+    ' Read the outcome first. Finish closes the operation's interaction scope, which
+    ' restores the error level from before the operation, so under a noninteractive
+    ' policy a refused merge would otherwise report success.
+    intLevel = cOp.ErrorLevel
+    If cOp.Status = eosRunning Then
+        cOp.Finish IIf(intLevel >= eelCritical, eorFailed, eorSuccess)
+    End If
+
+    If cOp.Result = eorDecisionRequired Then
+        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", (intLevel < eelError)
+        If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+    End If
+    AddDecisionJournal dResult, cOp.LastDecisions
+    dResult.Add "logPath", strLogPath
+    FinishSingleObjectImport = ConvertToJson(dResult)
+
+End Function
+
+
+Public Function FinishSingleObjectExport(cOp As clsOperation, strLogPath As String, _
+    dResult As Dictionary) As String
+
+    Dim dFinal As Dictionary
+    Dim intLevel As eErrorLevel
+
+    ' Read the error level before Finish restores it (see FinishSingleObjectImport).
+    intLevel = cOp.ErrorLevel
+    If cOp.Status = eosRunning Then cOp.Finish
+
+    If cOp.Result = eorDecisionRequired Then
+        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
+    Else
+        Set dFinal = dResult
+        If Not dFinal.Exists("success") Then
+            dFinal.Add "success", (intLevel < eelError)
+            If intLevel >= eelError Then
+                dFinal.Add "error", T("Export completed with errors. Check the log for details.")
+            End If
+        End If
+    End If
+    AddDecisionJournal dFinal, cOp.LastDecisions
+    If Len(strLogPath) > 0 And Not dFinal.Exists("logPath") Then dFinal.Add "logPath", strLogPath
+    FinishSingleObjectExport = ConvertToJson(dFinal)
+
+End Function
+
+
+Public Function FinishScopedOperation(cOp As clsOperation, dResult As Dictionary, _
+    ByVal intResult As eOperationResult, strLogPath As String) As String
+
+    Dim dFinal As Dictionary
+
+    cOp.Finish intResult
+    If intResult = eorDecisionRequired Then
+        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
+        If Len(strLogPath) > 0 Then dFinal.Add "logPath", strLogPath
+    Else
+        Set dFinal = dResult
+        AddDecisionJournal dFinal, cOp.LastDecisions
+    End If
+    FinishScopedOperation = ConvertToJson(dFinal)
+
+End Function
+
+
+Public Function FailSingleObjectOperation(cOp As clsOperation, strLogPath As String, _
+    lngNumber As Long, strDescription As String) As String
+
+    Dim dResult As Dictionary
+    Dim blnBlocked As Boolean
+
+    If Not cOp Is Nothing Then
+        If cOp.Status = eosRunning Then cOp.Finish eorFailed
+        blnBlocked = (cOp.Result = eorDecisionRequired)
+    End If
+
+    If blnBlocked Then
+        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
+        dResult.Add "runtime_error", strDescription
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", False
+        dResult.Add "error", strDescription
+        If Not cOp Is Nothing Then AddDecisionJournal dResult, cOp.LastDecisions
+    End If
+    dResult.Add "errorNumber", lngNumber
+    If Len(strLogPath) > 0 Then dResult.Add "logPath", strLogPath
+    FailSingleObjectOperation = ConvertToJson(dResult)
+
+End Function
+
+
+Private Function SingleObjectImportError(colErrors As Collection) As String
+
+    Dim varEntry As Variant
+    Dim dEntry As Dictionary
+    Dim strFirst As String
+    Dim lngCount As Long
+
+    If Not colErrors Is Nothing Then
+        For Each varEntry In colErrors
+            Set dEntry = varEntry
+            Select Case CStr(dEntry("level"))
+                Case "error", "critical"
+                    lngCount = lngCount + 1
+                    If lngCount = 1 Then strFirst = CStr(dEntry("message"))
+            End Select
+        Next varEntry
+    End If
+
+    Select Case lngCount
+        Case 0:     SingleObjectImportError = T("Import completed with errors. Check the log for details.")
+        Case 1:     SingleObjectImportError = strFirst
+        Case Else:  SingleObjectImportError = strFirst & T(" (and {0} more errors in the log)", _
+                        var0:=lngCount - 1)
+    End Select
+
+End Function
+
+
+Public Function BuildContinuationResult(cOp As clsOperation) As eOperationResult
+    Select Case cOp.Result
+        Case eorSuccess
+            BuildContinuationResult = IIf(cOp.ErrorLevel = eelCritical, eorFailed, eorSuccess)
+        Case eorUnknown
+            BuildContinuationResult = eorFailed
+        Case Else
+            BuildContinuationResult = cOp.Result
+    End Select
+End Function

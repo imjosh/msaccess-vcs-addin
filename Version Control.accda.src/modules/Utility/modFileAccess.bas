@@ -1404,3 +1404,41 @@ Public Function PathSep() As String
     If strSeparator = vbNullString Then strSeparator = Mid$(FSO.BuildPath("a", "b"), 2, 1)
     PathSep = strSeparator
 End Function
+
+
+Public Function WriteFileVerified(strText As String, strPath As String, ByRef strError As String) As Boolean
+
+    Dim strFolder As String
+    Dim lngJournal As Long
+    Dim colLogged As Collection
+    Dim dEntry As Dictionary
+
+    strError = vbNullString
+    strFolder = FSO.GetParentFolderName(strPath)
+    lngJournal = Log.ErrorJournalCount
+
+    ' A file where the folder should be counts as an existing folder to VerifyPath,
+    ' so check for the folder itself before writing.
+    VerifyPath strFolder & PathSep
+    If FSO.FolderExists(strFolder) Then WriteFile strText, strPath
+
+    If FSO.FileExists(strPath) Then
+        WriteFileVerified = True
+        Exit Function
+    End If
+
+    Set colLogged = Log.GetErrorJournalSince(lngJournal)
+    If colLogged.Count > 0 Then
+        ' Keep the last logged error, without its "ERROR: " prefix.
+        Set dEntry = colLogged(colLogged.Count)
+        strError = Replace(CStr(dEntry("message")), "ERROR: ", vbNullString, 1, 1)
+        If Len(CStr(dEntry("errDescription"))) > 0 Then
+            strError = strError & " (" & dEntry("errDescription") & ")"
+        End If
+    ElseIf Not FSO.FolderExists(strFolder) Then
+        strError = T("Could not create the folder: {0}", var0:=strFolder)
+    Else
+        strError = T("The file was not written: {0}", var0:=strPath)
+    End If
+
+End Function

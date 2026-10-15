@@ -41,6 +41,7 @@ Public Const API_REFUSED_PREFIX As String = "VCS_API_REFUSED: "
 Public Enum eInteractionMode
     eimNormal = 0
     eimSilent = 1
+    eimNonInteractive = 2   ' Suppress UI. Unresolved decisions block; they are not approved.
 End Enum
 
 ' Formats used when exporting table data.
@@ -206,9 +207,9 @@ End Function
 '           : interaction mode to silent during an automated build.)
 '---------------------------------------------------------------------------------------
 '
-Public Sub SetInteractionMode(intMode As eInteractionMode)
-    Operation.InteractionMode = intMode
-End Sub
+Public Function SetInteractionMode(intMode As eInteractionMode) As String
+    SetInteractionMode = SelectInteractionMode(Operation, intMode)
+End Function
 
 
 '---------------------------------------------------------------------------------------

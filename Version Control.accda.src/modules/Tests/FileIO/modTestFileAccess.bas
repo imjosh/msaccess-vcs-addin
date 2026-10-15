@@ -441,3 +441,77 @@ ErrHandler:
     strErr = Err.Description
     Resume CleanUp
 End Sub
+
+
+Public Sub TestWriteFileVerifiedReportsSuccess()
+
+    Dim strFolder As String
+    Dim strPath As String
+    Dim strError As String
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
+
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_verified_ok")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strPath = strFolder & "\sub\results.json"
+
+    strError = "left over"
+    TestAssert WriteFileVerified("{}", strPath, strError), "a good write reports success"
+    TestAssert Len(strError) = 0, "and clears any earlier error text"
+    TestAssert FSO.FileExists(strPath), "the file exists, with its folder created"
+
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestWriteFileVerifiedReportsSuccess", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestWriteFileVerifiedNamesFolderItCannotCreate()
+
+    Dim strFolder As String
+    Dim strBlocker As String
+    Dim strError As String
+    Dim lngJournal As Long
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
+
+    ' The layout: a file where the logs folder should be. Nothing can be written, so
+    ' the caller must be told, with text that names the folder.
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_verified_fail")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strBlocker = strFolder & "\logs"
+    WriteFile "not a folder", strBlocker
+    lngJournal = Log.ErrorJournalCount
+
+    TestAssert Not WriteFileVerified("{}", strBlocker & "\TestResults.json", strError), _
+        "a write under a file reports failure"
+    TestAssert InStr(strError, strBlocker) > 0, "the error names the folder"
+    TestAssert Log.ErrorJournalCount = lngJournal, "no error was logged for it"
+    TestAssert ReadFile(strBlocker) = "not a folder" & vbCrLf, "the blocking file is untouched"
+
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestWriteFileVerifiedNamesFolderItCannotCreate", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub

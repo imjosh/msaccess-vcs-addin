@@ -168,6 +168,7 @@ Public Enum eOperationResult
     eorFailed
     eorTimeout
     eorCanceled
+    eorDecisionRequired     ' Noninteractive operation stopped; a policy did not cover a prompt.
 End Enum
 
 ' Source of the current operation
@@ -273,6 +274,21 @@ End Enum
 '           : LatestExportFormat both read this list, so nothing else needs updating.
 '---------------------------------------------------------------------------------------
 '
+Public Const DECISION_REQUIRED As String = "decision_required"      ' Kind and resolution: not answered
+Public Const DECISION_ACKNOWLEDGED As String = "acknowledged"       ' Kind and resolution: OK-only prompt
+Public Const DECISION_APPLIED As String = "applied"                 ' Kind: a policy answered it
+Public Const DECISION_DECLINED As String = "declined"               ' Resolution: answered No/Cancel/Abort
+Public Const DECISION_BLOCKED As String = "blocked"                 ' Resolution: nothing could answer it
+Public Const DECISION_KEEP_DATABASE As String = "keep_database"     ' Resolution: conflicts kept the database object
+Public Enum eDecisionPolicy
+    edpAsk = 0
+    edpBlock = 1            ' Required decisions return decision_required.
+    edpPreferSource = 2     ' Conflicts: source file wins.
+    edpPreferDatabase = 3   ' Conflicts: keep the database object.
+    edpSkip = 4             ' Conflicts: skip the source file.
+    edpDecline = 5          ' Confirmations: No/Cancel/Abort. Conflicts: keep the database object.
+End Enum
+
 Public Function GetExportFormatVersions() As Collection
 
     Dim col As Collection

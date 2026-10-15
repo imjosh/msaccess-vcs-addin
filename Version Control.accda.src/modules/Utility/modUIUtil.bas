@@ -79,6 +79,10 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     Dim strMsg As String
     Dim varLines(0 To 3) As String
     Dim intCursor As Integer
+    Dim strResolution As String
+    Dim cOutcome As clsPromptOutcome
+    Dim strMessage As String
+    Dim strDetail As String
     Dim blnShowDialog As Boolean
 
     intCursor = Screen.MousePointer
@@ -89,7 +93,9 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     varLines(2) = Replace(strLine2, "'", "''")
     varLines(3) = Replace(strTitle, "'", "''")
 
-    blnShowDialog = PromptWouldDisplay(blnUserGesturePrompt)
+    ' A noninteractive scope wins over the user-gesture exception: nobody is
+    ' there to click, so its policy answers the prompt instead of a dialog.
+    blnShowDialog = PromptWouldDisplay(blnUserGesturePrompt) And Not InteractionIsNonInteractive
 
     If blnShowDialog Then
         ' Normal user interaction with MsgBox
@@ -98,18 +104,22 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
         Perf.PauseTiming
         MsgBox2 = Eval(strMsg)
         Perf.ResumeTiming
+    ElseIf InteractionIsNonInteractive Then
+        ' No dialog. Informational OK prompts are logged and acknowledged.
+        ' A confirmation is applied only for an explicit decline policy; otherwise
+        ' it is recorded as decision_required and the non-destructive button is
+        ' returned so the caller does not treat the prompt as approved.
+        strMessage = strBold
+        If Len(strLine1) Then strMessage = strMessage & " " & strLine1
+        If Len(strLine2) Then strMessage = strMessage & " " & strLine2
+        Set cOutcome = Operation.ResolvePrompt(intButtons, strTitle, strMessage)
+        MsgBox2 = cOutcome.Result
+        strResolution = cOutcome.Resolution
+        LogSuppressedMessage strBold, strLine1, strLine2, strTitle, T("Resolution: {0}", var0:=strResolution)
     Else
         ' Silent mode. Don't display any message, but log it instead.
-        With New clsConcat
-            .AppendOnAdd = vbCrLf
-            .Add "[**MessageBox Not Displayed**]"
-            If Len(strTitle) Then .Add "Title: " & strTitle
-            If Len(strBold) Then .Add strBold
-            If Len(strLine1) Then .Add strLine1
-            If Len(strLine2) Then .Add strLine2
-            If intButtons <> vbOKOnly Then .Add "Buttons Flag: " & intButtons
-            Log.Add .GetStr
-        End With
+        If intButtons <> vbOKOnly Then strDetail = T("Buttons Flag: {0}", var0:=intButtons)
+        LogSuppressedMessage strBold, strLine1, strLine2, strTitle, strDetail
         ' Return default (unattended) result
         MsgBox2 = intDefaultResult
     End If
@@ -118,6 +128,30 @@ Public Function MsgBox2(strBold As String, Optional strLine1 As String, Optional
     If intCursor > 0 Then Screen.MousePointer = intCursor
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : LogSuppressedMessage
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Log a message box that was not displayed, with any extra detail line.
+'---------------------------------------------------------------------------------------
+'
+Private Sub LogSuppressedMessage(ByVal strBold As String, ByVal strLine1 As String, _
+    ByVal strLine2 As String, ByVal strTitle As String, ByVal strDetail As String)
+
+    With New clsConcat
+        .AppendOnAdd = vbCrLf
+        .Add T("[**MessageBox Not Displayed**]")
+        If Len(strTitle) Then .Add T("Title: {0}", var0:=strTitle)
+        If Len(strBold) Then .Add strBold
+        If Len(strLine1) Then .Add strLine1
+        If Len(strLine2) Then .Add strLine2
+        If Len(strDetail) Then .Add strDetail
+        Log.Add .GetStr
+    End With
+
+End Sub
 
 
 '---------------------------------------------------------------------------------------

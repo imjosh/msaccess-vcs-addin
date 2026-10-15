@@ -28,11 +28,15 @@ Private Const NO_SOURCE_FOLDER As String = "C:\vcs-no-such-source-folder\"
 Public Sub TestBuildHeadlessRefusalIsWellFormed()
 
     Dim dResult As Dictionary
+    Dim intBefore As eOperationState
 
+    ' The suite itself runs inside an operation, so compare with the state before
+    ' the call rather than expecting the session to be idle.
+    intBefore = Operation.Status
     Set dResult = ParseJson(VCS.BuildHeadless(NO_SOURCE_FOLDER))
     TestAssert Not CBool(dResult("success")), "folder without vcs-options.json fails"
     TestAssert Len(CStr(dResult("error"))) > 0, "failure carries a reason"
-    TestAssert Operation.Status <> eosRunning, "refusal does not leave an operation running"
+    TestAssert Operation.Status = intBefore, "refusal does not start or end an operation"
 
 End Sub
 
@@ -40,11 +44,15 @@ End Sub
 Public Sub TestMergeHeadlessRefusalIsWellFormed()
 
     Dim dResult As Dictionary
+    Dim intBefore As eOperationState
 
+    ' The suite itself runs inside an operation, so compare with the state before
+    ' the call rather than expecting the session to be idle.
+    intBefore = Operation.Status
     Set dResult = ParseJson(VCS.MergeHeadless(NO_SOURCE_FOLDER))
     TestAssert Not CBool(dResult("success")), "folder without vcs-options.json fails"
     TestAssert Len(CStr(dResult("error"))) > 0, "failure carries a reason"
-    TestAssert Operation.Status <> eosRunning, "refusal does not leave an operation running"
+    TestAssert Operation.Status = intBefore, "refusal does not start or end an operation"
 
 End Sub
 

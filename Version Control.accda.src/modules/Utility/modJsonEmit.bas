@@ -316,7 +316,9 @@ Public Function EmitTestResultsJson(dTests As Dictionary, _
     Optional strJUnitPath As String = vbNullString, _
     Optional strStatePath As String = vbNullString, _
     Optional strLogPath As String = vbNullString, _
-    Optional strResultsPath As String = vbNullString) As String
+    Optional strResultsPath As String = vbNullString, _
+    Optional strRunError As String = vbNullString, _
+    Optional strRunErrorPattern As String = vbNullString) As String
 
     Dim buf As clsConcat
     Dim varKey As Variant
@@ -331,7 +333,12 @@ Public Function EmitTestResultsJson(dTests As Dictionary, _
     AppendStringField buf, "addinVersion", GetVCSVersion, False
     buf.Add ",""durationMs"":", CStr(lngDurationMs)
     AppendBoolField buf, "cancelled", blnCancelled
-    AppendBoolField buf, "allPassed", blnAllPassed
+    AppendBoolField buf, "allPassed", blnAllPassed And Len(strRunError) = 0
+    If Len(strRunError) > 0 Then
+        AppendBoolField buf, "success", False
+        AppendStringField buf, "error", strRunError, False
+        AppendOptionalStringField buf, "error_pattern", strRunErrorPattern
+    End If
     AppendOptionalStringField buf, "junitPath", strJUnitPath
     AppendOptionalStringField buf, "statePath", strStatePath
     AppendOptionalStringField buf, "logPath", strLogPath
@@ -692,4 +699,72 @@ Private Function WebStatusString(ByVal lngStatus As Long) As String
         Case Else:       WebStatusString = "pending"
     End Select
 
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : OverlayTestResultsSaveError
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Final synchronous test result: retain assertion details and any primary
+'           : decision/runtime error while reporting that results persistence failed.
+'           : The caller supplies only this run's save error; a passing control is unchanged.
+'---------------------------------------------------------------------------------------
+'
+Public Function OverlayTestResultsSaveError(ByVal strJson As String, _
+    ByVal strResultsError As String) As String
+
+    Dim dResult As Object
+
+    OverlayTestResultsSaveError = strJson
+    If Len(strResultsError) = 0 Then Exit Function
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    Set dResult = ParseJson(strJson)
+    dResult("success") = False
+    dResult("allPassed") = False
+    dResult("results_error") = strResultsError
+    If Not dResult.Exists("error") Then
+        dResult("error") = T("The test run finished, but its results file could not be written.")
+    End If
+    OverlayTestResultsSaveError = ConvertToJson(dResult)
+    Exit Function
+
+ErrHandler:
+    ' Keep the persistence failure visible even if the original payload is malformed.
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    dResult.Add "allPassed", False
+    dResult.Add "results_error", strResultsError
+    dResult.Add "error", T("The test run finished, but its results file could not be written.")
+    OverlayTestResultsSaveError = ConvertToJson(dResult)
+
+End Function
+
+' Propagate a completion-construction failure to the synchronous test caller.
+' Preserve its primary decision/runner error and available test results.
+Public Function OverlayTestCompletionFailure(ByVal strJson As String, _
+    ByVal dCompletion As Dictionary) As String
+    Dim dResult As Object
+    OverlayTestCompletionFailure = strJson
+    If dCompletion Is Nothing Then Exit Function
+    If Not dCompletion.Exists("completion_error") Then Exit Function
+    LogUnhandledErrors
+    On Error GoTo Fallback
+    Set dResult = ParseJson(strJson)
+    GoTo ApplyFailure
+Fallback:
+    Resume MinimalResult
+MinimalResult:
+    On Error Resume Next
+    Set dResult = New Dictionary
+ApplyFailure:
+    dResult("success") = False
+    dResult("allPassed") = False
+    dResult("completion_error") = dCompletion("completion_error")
+    dResult("completion_error_number") = dCompletion("completion_error_number")
+    If Not dResult.Exists("error") Then dResult("error") = dCompletion("error")
+    OverlayTestCompletionFailure = ConvertToJson(dResult)
 End Function

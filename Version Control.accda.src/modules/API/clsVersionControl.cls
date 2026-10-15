@@ -21,6 +21,10 @@ Option Explicit
 
 Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 
+' Instance-owned test seams for scoped calls; see the Friend properties below.
+Private m_lngFaultAfterBegin As Long
+Private m_blnCancelAfterBegin As Boolean
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : Show
@@ -30,7 +34,7 @@ Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 '---------------------------------------------------------------------------------------
 '
 Public Sub Show()
-    DoCmd.OpenForm "frmVCSMain"
+    ShowMainForm
 End Sub
 
 
@@ -131,7 +135,7 @@ Private Sub RunExport(Optional intFilter As eContainerFilter = ecfAllObjects, Op
         End If
         ' Set full export checkbox if requested
         If blnFullExport Then .chkFullExport = True
-        .Visible = True
+        SetMainFormVisible Form_frmVCSMain
         .cmdExport_Click
         If Operation.ErrorLevel < eelError Then .AutoClose
     End With
@@ -160,24 +164,74 @@ End Sub
 ' Procedure : MergeBuild
 ' Author    : Adam Waller
 ' Date      : 2/21/2023
-' Purpose   : Merge modified source files into the existing database.
+' Purpose   : Merge modified source files into the existing database. Returns a JSON
+'           : start result only: started, or refused with an error_pattern. The final
+'           : outcome always arrives through the completion callback. Calling this as a
+'           : statement ignores the result.
 '---------------------------------------------------------------------------------------
 '
-Public Sub MergeBuild()
+Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
+
+    Dim intPolicy As eDecisionPolicy
+    Dim intStatusBefore As eOperationState
+    Dim strNotAvailable As String
+    Dim cPolicyOverride As clsFormPolicyOverride
+
+    ' An explicit policy makes this merge noninteractive. The policy scope opens only
+    ' once the root is granted (TryBeginRoot inside cmdBuild_Click), and Finish closes it.
+    ' An unknown policy, or a policy request while another operation is running, is
+    ' refused before anything opens or changes. An empty policy keeps the interactive
+    ' (or previously configured) behavior.
+    If Len(strDecisionPolicy) > 0 Then
+        MergeBuild = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+        If Len(MergeBuild) > 0 Then Exit Function
+        If Operation.Status <> eosReady Then
+            MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            Exit Function
+        End If
+    End If
+
+    intStatusBefore = Operation.Status
+    If intStatusBefore = eosReady Then Operation.Result = eorUnknown
+
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
         ' See if merge build is available
         If .chkFullBuild.Enabled Then
             ' Initiate the merge build
             .chkFullBuild = False
+            ' The override puts the form's policy back even if cmdBuild_Click raises.
+            Set cPolicyOverride = New clsFormPolicyOverride
+            cPolicyOverride.Init Form_frmVCSMain, intPolicy
             .cmdBuild_Click
+            cPolicyOverride.Restore
         Else
-            MsgBox2 T("Merge Build Not Available"), _
-                T("A full build or full export must be performed before you can merge from source."), _
-                T("Please perform a full build or full export of this database first."), vbInformation
+            strNotAvailable = T("A full build or full export must be performed before you can merge from source.")
+            If intPolicy = edpAsk Then
+                MsgBox2 T("Merge Build Not Available"), strNotAvailable, _
+                    T("Please perform a full build or full export of this database first."), vbInformation
+            End If
+            MergeBuild = RefusalJson(ERR_MERGE_NOT_AVAILABLE, strNotAvailable)
+            Exit Function
         End If
     End With
-End Sub
+
+    ' The merge continues on a timer once it has begun (staged).
+    If intStatusBefore <> eosReady Then
+        ' Begin showed its own dialog. Post the refusal for an async caller.
+        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+    ElseIf Operation.Status = eosStaged Then
+        MergeBuild = StartedJson()
+    ElseIf Operation.Result = eorDecisionRequired Then
+        ' Stopped on a prompt before the timer started. Finish already posted the
+        ' callback, so return the decisions without posting again.
+        MergeBuild = DecisionRequiredJson(Operation.LastDecisions)
+    Else
+        ' Declined in the UI (or a guard in cmdBuild_Click). Nothing was started.
+        MergeBuild = RefusalJson(vbNullString, T("The merge did not start."), False)
+    End If
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -428,6 +482,15 @@ Public Sub BuildAs()
     End If
 
 End Sub
+
+
+
+
+
+' A supplied destination must name its drive root or its UNC server and share.
+' Check the caller's path before resolving it: absolute conversion would hide
+' drive-relative and root-relative inputs. Keep existing file/folder validation.
+
 
 
 '---------------------------------------------------------------------------------------
@@ -1092,7 +1155,8 @@ End Sub
 '           : Accepts any type string recognized by ResolveComponentType (singular,
 '           : plural, or alias forms). For core Access objects the name is required;
 '           : for single-file component types the name is ignored.
-'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}
+'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}, or
+'           : decision_required with "decisions" when the policy blocked a prompt.
 '           : Public method for external API access (e.g., via MCP tools).
 '---------------------------------------------------------------------------------------
 '
@@ -1105,6 +1169,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim dItems As Dictionary
     Dim varKey As Variant
     Dim blnFound As Boolean
+    Dim blnBegun As Boolean
     Dim dResult As Dictionary
 
     LogUnhandledErrors
@@ -1158,6 +1223,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 ExportObject = ConvertToJson(dResult)
                 Exit Function
             End If
+            blnBegun = True
 
             modExport.ExportSingleObject objItem, , _
                 blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)
@@ -1171,6 +1237,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 ExportObject = ConvertToJson(dResult)
                 Exit Function
             End If
+            blnBegun = True
 
             ' Set up options and logging (mirrors ExportSingleObject setup)
             If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
@@ -1276,25 +1343,12 @@ ExportCleanUp:
 
     End Select
 
-    ' Build result if not already set by an error path above
-    If Not dResult.Exists("success") Then
-        dResult.Add "success", (Operation.ErrorLevel < eelError)
-        If Operation.ErrorLevel >= eelError Then
-            dResult.Add "error", "Export completed with errors. Check the log for details."
-        End If
-        dResult.Add "logPath", Log.SavedLogFilePath
-    End If
-
-    Operation.Finish
-    ExportObject = ConvertToJson(dResult)
+    ' Finishing the operation releases the Log singleton, so read the log path first.
+    ExportObject = FinishSingleObjectExport(Operation, Log.SavedLogFilePath, dResult)
     Exit Function
 
 ErrHandler:
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    ExportObject = ConvertToJson(dResult)
+    ExportObject = ApiOperationErrHandler("ExportObject", blnBegun)
 
 End Function
 
@@ -1307,7 +1361,8 @@ End Function
 '           : Accepts any type string recognized by ResolveComponentType (singular,
 '           : plural, or alias forms). For single-file component types the name is
 '           : ignored and the entire category is imported.
-'           : Returns JSON: {"success":true/false, "error":"..."}
+'           : Returns JSON: {"success":true/false, "logPath":"...", "error":"..."}, or
+'           : decision_required with "decisions" when the policy blocked a prompt.
 '           : Public method for external API access (e.g., via MCP tools).
 '---------------------------------------------------------------------------------------
 '
@@ -1321,6 +1376,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim strSourceFile As String
     Dim strLogPath As String
     Dim blnFound As Boolean
+    Dim blnBegun As Boolean
     Dim dResult As Dictionary
 
     LogUnhandledErrors
@@ -1424,28 +1480,60 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
         ImportObject = ConvertToJson(dResult)
         Exit Function
     End If
+    blnBegun = True
 
     ' Completing the operation releases the Log singleton, so the log path has to come
-    ' back through the out-param rather than be read from Log afterwards.
+    ' back through the out-param, and the error journal has to be read before it.
     LoadSingleObject cComponent, strObjectName, strSourceFile, _
         blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
         strSavedLogPath:=strLogPath
-    CompleteLoadSingleObject IIf(Operation.ErrorLevel >= eelCritical, eorFailed, eorSuccess)
-
-    dResult.Add "success", (Operation.ErrorLevel < eelError)
-    If Operation.ErrorLevel >= eelError Then
-        dResult.Add "error", "Import completed with errors. Check the log for details."
-    End If
-    dResult.Add "logPath", strLogPath
-    ImportObject = ConvertToJson(dResult)
+    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0))
     Exit Function
 
 ErrHandler:
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    ImportObject = ConvertToJson(dResult)
+    ImportObject = ApiOperationErrHandler("ImportObject", blnBegun)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ApiOperationErrHandler
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Shared ErrHandler for ImportObject, ExportObject, ImportByType and
+'           : ExportByType. blnBegun is True only once the call's own Begin succeeded.
+'           : Then the error goes into that operation's log, the log is saved while the
+'           : Log singleton still holds it, and the operation is finished. Before that,
+'           : any running root is another caller's, so nothing of it is touched.
+'---------------------------------------------------------------------------------------
+'
+Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Boolean) As String
+
+    Dim lngNumber As Long
+    Dim strDescription As String
+    Dim strLogPath As String
+    Dim cOp As clsOperation
+
+    ' Read the error first; the On Error below clears it. Nothing here may raise a
+    ' second error, or the operation would stay open after all.
+    lngNumber = Err.Number
+    strDescription = Err.Description
+    On Error Resume Next
+
+    If blnBegun Then
+        ReleaseTableDataSortExport
+        If Log.Active Then
+            Log.Error eelError, T("Unexpected error {0}: {1}", var0:=lngNumber, var1:=strDescription), _
+                ModuleName(Me) & "." & strProcedure
+            Perf.EndTiming
+            Log.SaveFile
+            Log.Active = False
+        End If
+        strLogPath = Log.SavedLogFilePath
+        Set cOp = Operation
+    End If
+
+    ApiOperationErrHandler = FailSingleObjectOperation(cOp, strLogPath, lngNumber, strDescription)
 
 End Function
 
@@ -1476,6 +1564,7 @@ Public Function ExportByType(ByVal varTypes As Variant, _
     Dim dResult As Dictionary
     Dim colContainers As Collection
     Dim strError As String
+    Dim blnBegun As Boolean
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -1510,14 +1599,20 @@ Public Function ExportByType(ByVal varTypes As Variant, _
         ExportByType = ConvertToJson(dResult)
         Exit Function
     End If
+    blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Export")
-    modExport.ExportScoped colContainers, blnFullExport
+    If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
+    If m_blnCancelAfterBegin Then
+        VCSIndex.Conflicts.UserCanceled = True
+    Else
+        modExport.ExportScoped colContainers, blnFullExport
+    End If
     ExportByType = FinishScopedSync(dResult, colContainers, True)
     Exit Function
 
 ErrHandler:
-    ExportByType = ScopedSyncErrHandler(dResult)
+    ExportByType = ApiOperationErrHandler("ExportByType", blnBegun)
 
 End Function
 
@@ -1550,6 +1645,7 @@ Public Function ImportByType(ByVal varTypes As Variant, _
     Dim dResult As Dictionary
     Dim colContainers As Collection
     Dim strError As String
+    Dim blnBegun As Boolean
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -1584,16 +1680,48 @@ Public Function ImportByType(ByVal varTypes As Variant, _
         ImportByType = ConvertToJson(dResult)
         Exit Function
     End If
+    blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Import")
-    modBuild.MergeScoped colContainers, blnFullImport
+    If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
+    If m_blnCancelAfterBegin Then
+        VCSIndex.Conflicts.UserCanceled = True
+    Else
+        modBuild.MergeScoped colContainers, blnFullImport
+    End If
     ImportByType = FinishScopedSync(dResult, colContainers, False)
     Exit Function
 
 ErrHandler:
-    ImportByType = ScopedSyncErrHandler(dResult)
+    ImportByType = ApiOperationErrHandler("ImportByType", blnBegun)
 
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FaultAfterBegin
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : An error number that ImportByType and ExportByType raise once they have
+'           : begun their own operation and started its log. The work itself swallows
+'           : its errors, so this is the only way to reach their error path after
+'           : acquisition. Friend scope keeps it off the COM and CallByName API, and
+'           : VCS returns a new instance per call, so it cannot outlive a check.
+'---------------------------------------------------------------------------------------
+'
+Friend Property Let FaultAfterBegin(ByVal lngNumber As Long)
+    m_lngFaultAfterBegin = lngNumber
+End Property
+
+
+' Test seam: simulate the conflict dialog's Cancel before any scoped work writes
+' objects. Instance-owned and unavailable through COM or CallByName.
+Friend Property Let CancelAfterBegin(ByVal blnCancel As Boolean)
+    m_blnCancelAfterBegin = blnCancel
+End Property
+
+
+
 
 
 '---------------------------------------------------------------------------------------
@@ -1646,7 +1774,9 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Dim blnUserCanceled As Boolean
     Dim intResult As eOperationResult
     Dim strColor As String
+    Dim strLogPath As String
 
+    ' The conflict dialog records a confirmed user cancellation.
     blnUserCanceled = VCSIndex.Conflicts.UserCanceled
     blnCritical = (Operation.ErrorLevel = eelCritical)
     blnCanceled = blnCritical Or blnUserCanceled
@@ -1679,7 +1809,10 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
         VCSIndex.Save
     End If
 
-    If blnUserCanceled Then
+    If Operation.DecisionBlocked Then
+        ' A prompt no policy answered is not a plain failure or cancel.
+        intResult = eorDecisionRequired
+    ElseIf blnUserCanceled Then
         intResult = eorCanceled
     ElseIf blnCritical Or Operation.ErrorLevel >= eelError Then
         intResult = eorFailed
@@ -1687,6 +1820,8 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
         intResult = eorSuccess
     End If
 
+    ' Finish releases the Log singleton, so read the path first.
+    strLogPath = Log.SavedLogFilePath
     If Not dResult.Exists("success") Then
         dResult.Add "success", (intResult = eorSuccess)
         If intResult <> eorSuccess Then
@@ -1694,34 +1829,11 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
                 "Operation was canceled.", _
                 "Operation completed with errors. Check the log for details.")
         End If
-        dResult.Add "logPath", Log.SavedLogFilePath
+        dResult.Add "logPath", strLogPath
     End If
+    If intResult = eorCanceled Then dResult.Add "cancelled", True
 
-    Operation.Finish intResult
-    FinishScopedSync = ConvertToJson(dResult)
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : ScopedSyncErrHandler
-' Purpose   : Ensure scoped sync operations always finish the Operation on error.
-'---------------------------------------------------------------------------------------
-'
-Private Function ScopedSyncErrHandler(dResult As Dictionary) As String
-
-    If Operation.Status = eosRunning Then
-        Perf.EndTiming
-        ReleaseTableDataSortExport
-        Log.Active = False
-        Operation.Finish eorFailed
-    End If
-
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    ScopedSyncErrHandler = ConvertToJson(dResult)
+    FinishScopedSync = FinishScopedOperation(Operation, dResult, intResult, strLogPath)
 
 End Function
 
@@ -2667,6 +2779,9 @@ Public Function GetVCSVersion() As String
 End Function
 
 
+
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : GetExportFolder
 ' Author    : Adam Waller
@@ -2963,26 +3078,13 @@ End Function
 ' Date      : 5/21/2026
 ' Purpose   : Ribbon entry point for running tests. Reads the DefaultTestFilter option
 '           : and applies it automatically. If the option is empty, runs all tests.
+'           : ExecuteTests reads the option, after it has validated the policy and begun
+'           : the root, so the policy answers any error that loading the options logs.
 '---------------------------------------------------------------------------------------
 '
-Public Function RunFilteredTests() As String
-
-    Dim strFilter As String
-    Dim arrParts() As String
-    Dim lngIdx As Long
-
-    strFilter = Trim$(Nz(Options.DefaultTestFilter, vbNullString))
-
-    If Len(strFilter) = 0 Then
-        RunFilteredTests = ExecuteTests(Empty, False)
-    Else
-        arrParts = Split(strFilter, ",")
-        For lngIdx = LBound(arrParts) To UBound(arrParts)
-            arrParts(lngIdx) = Trim$(arrParts(lngIdx))
-        Next lngIdx
-        RunFilteredTests = ExecuteTests(CVar(arrParts), True)
-    End If
-
+Public Function RunFilteredTests(Optional ByVal strDecisionPolicy As String) As String
+    RunFilteredTests = ExecuteTests(Empty, False, strDecisionPolicy:=strDecisionPolicy, _
+        blnDefaultFilter:=True)
 End Function
 
 
@@ -3084,10 +3186,17 @@ End Sub
 '           : RunTestsHeadless. Scans for tests, optionally applies filters, runs the
 '           : suite, and returns a JSON summary. Headless mode is for automation/CI:
 '           : no forms, no prompts, console path forced, JUnit always exported.
+'           : A decision policy makes the run noninteractive: the root begins first so
+'           : the policy answers every prompt, the web runner is never used, and each
+'           : exit finishes the operation through CleanUp.
+'           : blnDefaultFilter replaces varFilters with the DefaultTestFilter option,
+'           : read once the policy root (if any) is held.
 '---------------------------------------------------------------------------------------
 '
 Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
-    Optional ByVal blnHeadless As Boolean = False) As String
+    Optional ByVal blnHeadless As Boolean = False, _
+    Optional ByVal strDecisionPolicy As String, _
+    Optional ByVal blnDefaultFilter As Boolean = False) As String
 
     Dim blnAllPassed As Boolean
     Dim lngPassed As Long
@@ -3098,10 +3207,26 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim lngIdx As Long
     Dim strFilter As String
     Dim blnLogWasActive As Boolean
+    Dim blnLogSet As Boolean
     Dim blnUseWebRunner As Boolean
     Dim strJUnitPath As String
+    Dim strJsonPath As String
+    Dim strResultsError As String
+    Dim blnCanceled As Boolean
+    Dim intPolicy As eDecisionPolicy
+    Dim intResult As eOperationResult
     Dim cRoot As clsRootOperationLease
     Dim cTrapping As clsVbeErrorTrappingScope
+    Dim strError As String
+    Dim lngError As Long
+
+    LogUnhandledErrors
+    On Error GoTo ErrHandler
+
+    If Len(strDecisionPolicy) > 0 Then
+        ExecuteTests = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+        If Len(ExecuteTests) > 0 Then Exit Function
+    End If
 
     ' An automation session has no one to click Run in the web runner and no
     ' console to watch, so any API/MCP-initiated run is headless regardless of
@@ -3110,69 +3235,38 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     If Operation.AutomationSource Then blnHeadless = True
     If blnHeadless Then Set cTrapping = BeginVbeErrorTrappingScope(eetBreakOnUnhandledErrors)
 
-    If Not DatabaseFileOpen Then
-        If blnHeadless Then
-            ExecuteTests = "{""error"":""No database open""}"
-        Else
-            MsgBox2 T("No Database Open"), _
-                T("Please open a database file before running tests."), _
-                , vbInformation
-        End If
-        Exit Function
-    End If
+    ' Every exit past this point reaches CleanUp, which restores logging and finishes
+    ' the operation (if one began) with this result. Finish reports decision_required
+    ' instead when a prompt was blocked.
+    intResult = eorFailed
 
-    ' A test run needs two projects: the installed add-in, loaded as a library, hosts
-    ' the runner singleton and the TestAssert every assertion routes through, while the
-    ' code under test is whatever CurrentVBProject holds. Opening the installed copy as
-    ' the current database collapses both roles onto one file -- scanning then finds the
-    ' library's own components, and InstallTestAssertModule below would write a module
-    ' into a VBA project that is currently executing, which resets it mid-run. Refuse
-    ' before either can happen; the development copy in the repository is the host.
-    If CurrentDbIsInstalledAddIn Then
-        If blnHeadless Then
-            ExecuteTests = "{""error"":""Refusing to run tests in the installed add-in. " & _
-                "Open the development copy of the add-in and run them there.""}"
-        Else
-            MsgBox2 T("Wrong Database for Tests"), _
-                T("Tests cannot be run in the installed add-in, which is only meant to " & _
-                  "be loaded as a library."), _
-                T("Open the development copy of the add-in and run the tests there."), _
-                vbExclamation
-        End If
-        Exit Function
-    End If
-
-    ' Ensure modTestAssert is present (installed silently in headless mode; an
-    ' automation session has no one to answer a prompt)
-    If Not TestAssertModuleExists Then
-        If blnHeadless Then
-            InstallTestAssertModule
-        ElseIf vbYes = MsgBox2(T("Test Helper Not Found"), _
-            T("The modTestAssert module was not found in the current project."), _
-            T("Would you like to install it now?"), _
-            vbYesNo + vbQuestion) Then
-            InstallTestAssertModule
-        Else
-            Exit Function
+    ' A policy caller begins first. The policy scope opens as part of the root, so a
+    ' refused request changes nothing, and the preflight prompts below are answered by
+    ' the policy. ForceUnattended must be set before the root begins: Attended is
+    ' captured once, at root creation, and is immutable for the life of the operation.
+    If intPolicy <> edpAsk Then
+        If blnHeadless Then Operation.ForceUnattended = True
+        Set cRoot = Operation.TryBeginRoot(eotTestRun, intPolicy)
+        If cRoot Is Nothing Then
+            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            GoTo CleanUp
         End If
     End If
 
-    ' Offer to migrate if no module (other than modTestAssert) uses TestAssert yet
-    ' (skipped in headless mode)
-    If Not TestAssertInUse And Not blnHeadless Then
-        If vbYes = MsgBox2(T("TestAssert Not In Use"), _
-            T("No test modules are using TestAssert yet. Would you like to migrate " & _
-              "Debug.Assert calls to TestAssert in your test modules?"), _
-            T("You can always do this manually later."), _
-            vbYesNo + vbQuestion) Then
-            MigrateDebugAssert
-        End If
-    End If
+    ' Loading the options can log an error (a conflicted options file, for one). Under a
+    ' policy the root above is already held, so its scope answers that error's message
+    ' box and a refused or invalid request never loads them.
+    If blnDefaultFilter Then blnFiltered = ReadDefaultTestFilter(varFilters)
+
+    If Not TestRunPreflight(blnHeadless, ExecuteTests, intResult) Then GoTo CleanUp
 
     blnLogWasActive = Log.Active
+    blnLogSet = True
 
+    ' The web runner needs a person to click Run, so it is never used headless or under
+    ' a decision policy.
     blnUseWebRunner = Options.UseWebTestRunner And modTestRunnerUI.EdgeTestRunnerSupported() _
-        And Not blnHeadless
+        And Not blnHeadless And intPolicy = edpAsk
 
     ' Web runner path: open the form only. Do NOT begin an Operation here — bridge
     ' callbacks own the operation lifecycle when the user clicks Run. Beginning here
@@ -3193,13 +3287,19 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         Exit Function
     End If
 
-    ' ForceUnattended must be set before the root begins: Attended is captured once, at
-    ' root creation, and is immutable for the life of the operation.
-    If blnHeadless Then Operation.ForceUnattended = True
+    ' Begin the root here unless a policy caller already did.
+    If cRoot Is Nothing Then
+        If blnHeadless Then Operation.ForceUnattended = True
+        Set cRoot = Operation.TryBeginRoot(eotTestRun)
+        If cRoot Is Nothing Then
+            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            GoTo CleanUp
+        End If
+    End If
 
-    Set cRoot = Operation.TryBeginRoot(eotTestRun)
-    If cRoot Is Nothing Then Exit Function
-
+    ' Suppress blocking MsgBox dialogs so import/build errors surface in the test log
+    ' instead. Inside a noninteractive scope this request is ignored, so the policy
+    ' stays in force (silent mode would approve defaults).
     Operation.InteractionMode = eimSilent
     Log.Active = True
     Log.ClearErrorJournal
@@ -3245,10 +3345,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     If TestRunner.Tests.Count = 0 Then
         Log.Add T("No test subs found in the current project.")
         If Not blnHeadless Then FinalizeTestConsole True
-        Log.Active = blnLogWasActive
-        Log.SuppressDebugOutput = False
-        cRoot.Complete eorSuccess
-        Exit Function
+        intResult = eorSuccess
+        GoTo CleanUp
     End If
 
     ' Apply filter if specified (resolves module, suite, procedure, and tag matches)
@@ -3257,10 +3355,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         If colKeys.Count = 0 Then
             Log.Add T("No tests found matching filter: {0}", var0:=strFilter)
             If Not blnHeadless Then FinalizeTestConsole True
-            Log.Active = blnLogWasActive
-            Log.SuppressDebugOutput = False
-            cRoot.Complete eorSuccess
-            Exit Function
+            intResult = eorSuccess
+            GoTo CleanUp
         End If
         Log.Add T("Found {0} sub(s) matching filter. Running...", var0:=colKeys.Count)
     Else
@@ -3278,8 +3374,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Else
         TestRunner.RunAll
     End If
-    Dim strJsonPath As String
     strJsonPath = TestRunner.SaveResults
+    strResultsError = TestRunner.ResultsSaveError
     modTestState.PersistAfterRun
 
     ' CI must always get the JUnit XML, regardless of the export option
@@ -3287,7 +3383,6 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 
     ' Detect cancellation (before computing summary, so "all passed" is not
     ' incorrectly reported when only a subset ran before the user canceled)
-    Dim blnCanceled As Boolean
     blnCanceled = (TestRunner.State = etrsCancelled)
 
     ' Summary
@@ -3295,7 +3390,9 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     lngFailed = TestRunner.FailedCount
     lngErrored = TestRunner.ErroredCount
     lngEmpty = TestRunner.EmptyCount
-    blnAllPassed = (Not blnCanceled) And (lngFailed = 0 And lngErrored = 0 And lngPassed > 0)
+    blnAllPassed = (Not blnCanceled) And TestRunner.State <> etrsFailed _
+        And (lngFailed = 0 And lngErrored = 0 And lngPassed > 0) _
+        And Len(strResultsError) = 0
 
     Log.Flush
     DoCmd.Hourglass False
@@ -3317,9 +3414,181 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
 
     TestRunner.InvokeGlobalTestTeardown
 
-    Log.Active = blnLogWasActive
-    Log.SuppressDebugOutput = False
-    cRoot.Complete IIf(blnCanceled, eorCanceled, IIf(blnAllPassed, eorSuccess, eorFailed))
+    If Len(strResultsError) > 0 Or TestRunner.State = etrsFailed Then
+        intResult = eorFailed
+    ElseIf blnCanceled Then
+        intResult = eorCanceled
+    ElseIf blnAllPassed Then
+        intResult = eorSuccess
+    End If
+
+CleanUp:
+    On Error Resume Next
+    DoCmd.Hourglass False
+    ExecuteTests = OverlayTestResultsSaveError(ExecuteTests, strResultsError)
+    If Len(strResultsError) > 0 Then intResult = eorFailed
+    If Not cRoot Is Nothing Then
+        If Operation.DecisionBlocked Then
+            ExecuteTests = OverlayDecisionRequired(ExecuteTests)
+        Else
+            ' Acknowledged and applied prompts are reported too, as the callback does.
+            ExecuteTests = OverlayDecisionJournal(ExecuteTests, Operation.Decisions)
+        End If
+    End If
+    If Len(ExecuteTests) = 0 And Operation.DecisionBlocked Then
+        ExecuteTests = DecisionRequiredJson()
+    End If
+    ' Restore what this run changed, then finish. Completing the lease is a no-op if
+    ' the operation already finished, and reports decision_required if a prompt was
+    ' blocked.
+    If blnLogSet Then
+        Log.Active = blnLogWasActive
+        Log.SuppressDebugOutput = False
+    End If
+    If Not cRoot Is Nothing Then
+        cRoot.Complete intResult
+        ExecuteTests = OverlayTestCompletionFailure(ExecuteTests, Operation.LastCompletion)
+    End If
+    Exit Function
+
+ErrHandler:
+    strError = Err.Description
+    lngError = Err.Number
+    ' An async caller reads only the completion callback, so the root keeps the error.
+    If Not cRoot Is Nothing Then cRoot.RecordRuntimeError strError, lngError
+    ExecuteTests = RuntimeErrorJson(strError, lngError)
+    Resume CleanUp
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ParsePolicyOrRefuse
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Parse a decision policy name. Returns an empty string and sets intPolicy
+'           : when the name is known, otherwise the invalid_decision_policy refusal.
+'---------------------------------------------------------------------------------------
+'
+Private Function ParsePolicyOrRefuse(ByVal strDecisionPolicy As String, _
+    ByRef intPolicy As eDecisionPolicy) As String
+
+    If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
+        ParsePolicyOrRefuse = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ReadDefaultTestFilter
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Split the DefaultTestFilter option into trimmed filter terms. Returns True
+'           : and sets varFilters when the option names a filter; False (run all tests)
+'           : when it is empty.
+'---------------------------------------------------------------------------------------
+'
+Private Function ReadDefaultTestFilter(ByRef varFilters As Variant) As Boolean
+
+    Dim strFilter As String
+    Dim arrParts() As String
+    Dim lngIdx As Long
+
+    varFilters = Empty
+    strFilter = Trim$(Nz(Options.DefaultTestFilter, vbNullString))
+    If Len(strFilter) = 0 Then Exit Function
+
+    arrParts = Split(strFilter, ",")
+    For lngIdx = LBound(arrParts) To UBound(arrParts)
+        arrParts(lngIdx) = Trim$(arrParts(lngIdx))
+    Next lngIdx
+    varFilters = arrParts
+    ReadDefaultTestFilter = True
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestRunPreflight
+' Author    : Adam Waller
+' Date      : 5/21/2026
+' Purpose   : Checks and prompts before a test run starts, so ExecuteTests only has to
+'           : decide what to do with the answer. Returns True when the run may proceed.
+'           : When it may not, strRefusal holds the JSON to return (empty when a blocked
+'           : prompt supplies it, or the person was shown a message instead) and
+'           : intResult is the result to finish the operation with.
+'---------------------------------------------------------------------------------------
+'
+Private Function TestRunPreflight(ByVal blnHeadless As Boolean, ByRef strRefusal As String, _
+    ByRef intResult As eOperationResult) As Boolean
+
+    If Not DatabaseFileOpen Then
+        If Not blnHeadless Then
+            MsgBox2 T("No Database Open"), _
+                T("Please open a database file before running tests."), _
+                , vbInformation
+        End If
+        If Not Operation.DecisionBlocked Then
+            strRefusal = "{""success"":false,""error"":""No database is open.""}"
+        End If
+        Exit Function
+    End If
+
+    ' A test run needs two projects: the installed add-in, loaded as a library, hosts
+    ' the runner singleton and the TestAssert every assertion routes through, while the
+    ' code under test is whatever CurrentVBProject holds. Opening the installed copy as
+    ' the current database collapses both roles onto one file -- scanning then finds the
+    ' library's own components, and InstallTestAssertModule below would write a module
+    ' into a VBA project that is currently executing, which resets it mid-run. Refuse
+    ' before either can happen; the development copy in the repository is the host.
+    If CurrentDbIsInstalledAddIn Then
+        If blnHeadless Then
+            strRefusal = "{""success"":false,""error"":""Refusing to run tests in the installed add-in. " & _
+                "Open the development copy of the add-in and run them there.""}"
+        Else
+            MsgBox2 T("Wrong Database for Tests"), _
+                T("Tests cannot be run in the installed add-in, which is only meant to " & _
+                  "be loaded as a library."), _
+                T("Open the development copy of the add-in and run the tests there."), _
+                vbExclamation
+        End If
+        Exit Function
+    End If
+
+    ' Ensure modTestAssert is present. A headless run installs it silently (an
+    ' automation session has no one to answer a prompt, and no decision policy
+    ' approves a generic confirmation).
+    If Not TestAssertModuleExists Then
+        If blnHeadless Then
+            InstallTestAssertModule
+        ElseIf vbYes = MsgBox2(T("Test Helper Not Found"), _
+            T("The modTestAssert module was not found in the current project."), _
+            T("Would you like to install it now?"), _
+            vbYesNo + vbQuestion) Then
+            InstallTestAssertModule
+        Else
+            If Not Operation.DecisionBlocked Then
+                strRefusal = RefusalJson(vbNullString, T("modTestAssert is not installed."), False)
+            End If
+            intResult = eorCanceled
+            Exit Function
+        End If
+    End If
+
+    ' Offer to migrate if no module (other than modTestAssert) uses TestAssert yet
+    ' (skipped in headless mode)
+    If Not TestAssertInUse And Not blnHeadless Then
+        If vbYes = MsgBox2(T("TestAssert Not In Use"), _
+            T("No test modules are using TestAssert yet. Would you like to migrate " & _
+              "Debug.Assert calls to TestAssert in your test modules?"), _
+            T("You can always do this manually later."), _
+            vbYesNo + vbQuestion) Then
+            MigrateDebugAssert
+        End If
+    End If
+
+    TestRunPreflight = True
 
 End Function
 
@@ -3745,6 +4014,75 @@ End Sub
 Public Sub GoToLinkDownload()
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin/releases"
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetInteractionMode
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Select the interaction mode (eInteractionMode) before an operation starts.
+'           : modAPI.SetInteractionMode is not reachable through API, which dispatches
+'           : with CallByName on this class, so callers such as the MCP server use this.
+'---------------------------------------------------------------------------------------
+'
+Public Function SetInteractionMode(ByVal intMode As Long) As String
+    SetInteractionMode = modAPI.SetInteractionMode(intMode)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetOperationPolicy
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Set a noninteractive decision policy for this session. It stays in force
+'           : across operations until ClearOperationPolicy, or another call to this,
+'           : replaces it. Finish does not close it.
+'---------------------------------------------------------------------------------------
+'
+Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
+    SetOperationPolicy = SetSessionPolicy(Operation, strDecisionPolicy)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearOperationPolicy
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Close the policy SetOperationPolicy set. Safe when none is set, and safe
+'           : to call twice.
+'---------------------------------------------------------------------------------------
+'
+Public Function ClearOperationPolicy() As String
+    ClearOperationPolicy = ClearSessionPolicy(Operation)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ListAddinDialogs
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : JSON list of open add-in forms. Requires a responsive Access instance.
+'---------------------------------------------------------------------------------------
+'
+Public Function ListAddinDialogs() As String
+    ListAddinDialogs = modDialogInspect.ListAddinDialogs()
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DismissAddinDialog
+' Author    : Josh
+' Date      : 09/29/2026
+' Purpose   : Close a finished add-in form, or cancel a running operation.
+'           : action is "close" or "cancel".
+'---------------------------------------------------------------------------------------
+'
+Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close") As String
+    DismissAddinDialog = modDialogInspect.DismissAddinDialog(strName, strAction)
+End Function
+
+
+ ' 
 
 
 '---------------------------------------------------------------------------------------
