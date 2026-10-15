@@ -37,12 +37,20 @@ def run(out,label,expect_red=False):
         while time.monotonic()<until:pythoncom.PumpWaitingMessages();time.sleep(.02)
         record['terminals']=endpoint.terminals()
         p=record['probe']
+        refusals={'invalid_policy':'invalid_decision_policy','test_refusal':'operation_already_running',
+                  'merge_refusal':'operation_already_running','ribbon_refusal':'operation_already_running'}
         record['checks']={'no_probe_error':'probe_error' not in p,'active_state_preserved':p.get('before')==p.get('after'),
+            'expected_refusals':all(p.get(key,{}).get('success') is False and p[key].get('error_pattern')==pattern
+                                    for key,pattern in refusals.items()),
             'no_refusal_terminal':p.get('attempts_during_refusals')==0,'one_owner_attempt':p.get('attempts_after_completion')==1,
             'one_owner_terminal':len(record['terminals'])==1 and record['terminals'][0].get('type')=='complete' and record['terminals'][0].get('operation_id')==identity,
             'root_released':p.get('completed',{}).get('status')=='ready' and not p.get('completed',{}).get('token')}
         record['verified']=all(record['checks'].values())
-        assert not record['verified'] if expect_red else record['verified'],record['checks']
+        if expect_red:
+            assert record['checks']['no_probe_error'] and p.get('before',{}).get('token'),record['checks']
+            assert p.get('attempts_during_refusals',0)>0 and not record['checks']['active_state_preserved'],record['checks']
+        else:
+            assert record['verified'],record['checks']
     finally:
         if app is not None:
             try:
