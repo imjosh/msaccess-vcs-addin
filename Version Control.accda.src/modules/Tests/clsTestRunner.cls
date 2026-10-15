@@ -266,6 +266,7 @@ Public Sub RunSelected(colTestKeys As Collection)
     Dim curStart As Currency
     Dim intErrorTrapping As Integer
     Dim obj As Object
+    Dim varInvokeResult As Variant
     Dim lngCurrent As Long
     Dim lngTotal As Long
     Dim lngErrAtStart As Long
@@ -406,7 +407,7 @@ Public Sub RunSelected(colTestKeys As Collection)
         End If
 
         If dTest("sourceType") = "class" Then
-            ' --- Class-based test: instantiate via factory, call via CallByName ---
+            ' --- Class-based test: instantiate and invoke in the tested project ---
             curStart = Perf.MicroTimer
             On Error Resume Next
             Set obj = Application.Run(BuildRunCmd("TestClassFactory"), CStr(dTest("moduleName")))
@@ -425,11 +426,18 @@ Public Sub RunSelected(colTestKeys As Collection)
             End If
 
             On Error Resume Next
-            CallByName obj, strProcName, VbMethod
+            ' Resolve class/form types in the tested project. Cross-project CallByName
+            ' can fail before a class test starts when both add-in copies are loaded.
+            varInvokeResult = Empty
+            varInvokeResult = Application.Run(BuildRunCmd("TestClassInvoke"), obj, strProcName)
             lngErrNum = Err.Number
             strErrDesc = Err.Description
             If lngErrNum <> 0 Then Err.Clear
             On Error GoTo 0
+            If lngErrNum = 0 And Len(CStr(varInvokeResult)) > 0 Then
+                lngErrNum = CLng(Left$(CStr(varInvokeResult), InStr(CStr(varInvokeResult), vbTab) - 1))
+                strErrDesc = Mid$(CStr(varInvokeResult), InStr(CStr(varInvokeResult), vbTab) + 1)
+            End If
 
             ' Release instance (fires Class_Terminate for teardown)
             Set obj = Nothing
@@ -1369,6 +1377,8 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
     On Error GoTo 0
     If cmp Is Nothing Then Exit Sub
 
+    EnsureClassInvoker cmp
+
     ' Find the BEGIN/END markers
     lngBegin = 0
     lngEnd = 0
@@ -1406,6 +1416,31 @@ Private Sub SyncFactoryEntries(proj As VBIDE.VBProject)
     End If
     cmp.CodeModule.InsertLines lngBegin + 1, strExpected
 
+End Sub
+
+
+' Invoke in the tested project so Access resolves its class/form type information
+' there, rather than through the installed runner's duplicate project types.
+Private Sub EnsureClassInvoker(cmp As VBIDE.VBComponent)
+    Dim strCode As String
+    Dim lngLine As Long
+    Dim lngCount As Long
+    strCode = cmp.CodeModule.Lines(1, cmp.CodeModule.CountOfLines)
+    If InStr(1, strCode, "TestClassInvoke = CStr(Err.Number) & vbTab & Err.Description", vbTextCompare) > 0 Then Exit Sub
+    If InStr(1, strCode, "Public Sub TestClassInvoke(", vbTextCompare) > 0 Or _
+       InStr(1, strCode, "Public Function TestClassInvoke(", vbTextCompare) > 0 Then
+        lngLine = cmp.CodeModule.ProcStartLine("TestClassInvoke", vbext_pk_Proc)
+        lngCount = cmp.CodeModule.ProcCountLines("TestClassInvoke", vbext_pk_Proc)
+        cmp.CodeModule.DeleteLines lngLine, lngCount
+    End If
+    cmp.CodeModule.InsertLines cmp.CodeModule.CountOfLines + 1, vbCrLf & _
+        "Public Function TestClassInvoke(ByVal obj As Object, ByVal strProcName As String) As String" & vbCrLf & _
+        "    On Error GoTo Failed" & vbCrLf & _
+        "    CallByName obj, strProcName, VbMethod" & vbCrLf & _
+        "    Exit Function" & vbCrLf & _
+        "Failed:" & vbCrLf & _
+        "    TestClassInvoke = CStr(Err.Number) & vbTab & Err.Description" & vbCrLf & _
+        "End Function" & vbCrLf
 End Sub
 
 
