@@ -55,14 +55,14 @@ production module deletion in a separate user database.
 The examples below assume the disposable checkout has already been prepared:
 
 ```
-vcs_run_tests("C:\scratch\addin-suite\msaccess-vcs-addin\Version Control.accda", "clsTestInstall")
+vcs_run_tests("C:\path\to\msaccess-vcs-addin\Version Control.accda", "clsTestInstall")
 ```
 
 MCP progress is best-effort in Cursor. For live per-test output, keep this
 CLI command in the foreground:
 
 ```text
-msaccess-vcs run-tests "C:\scratch\addin-suite\msaccess-vcs-addin\Version Control.accda" --filter clsTestInstall
+msaccess-vcs run-tests "C:\path\to\msaccess-vcs-addin\Version Control.accda" --filter clsTestInstall
 ```
 
 The stream is pytest-style: dots for fast passes, a named line after a test
