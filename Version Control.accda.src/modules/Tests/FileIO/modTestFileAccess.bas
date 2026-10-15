@@ -290,6 +290,7 @@ End Function
 ' The layout exporter uses this shared file writer. Verify actual UTF-8 bytes,
 ' including non-ASCII text and its absence of a BOM, in a disposable temp file.
 Public Sub TestLayoutSvgFileWriter()
+    Dim strFolder As String
     Dim strPath As String
     Dim strText As String
     Dim bData() As Byte
@@ -298,7 +299,8 @@ Public Sub TestLayoutSvgFileWriter()
     Dim lngErr As Long
     Dim strErr As String
     On Error GoTo ErrHandler
-    strPath = GetTempFolder & "vcs_utf8_" & FSO.GetTempName
+    strFolder = GetTempFolder("vcs_utf8")
+    strPath = strFolder & PathSep & "probe.txt"
     strText = "<svg>" & ChrW$(&H3A9) & "</svg>" & vbCrLf
     WriteFileNoBom strText, strPath
     TestAssert FSO.FileExists(strPath), "SVG writer creates its file"
@@ -312,8 +314,8 @@ Public Sub TestLayoutSvgFileWriter()
     TestAssert ReadFile(strPath) = strText, "SVG text survives UTF-8 write/read"
 CleanUp:
     On Error Resume Next
-    If Len(strPath) > 0 Then
-        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
     End If
     If lngErr <> 0 Then TestAssert False, "SVG file writer " & lngErr & ": " & strErr
     Exit Sub
@@ -325,13 +327,15 @@ End Sub
 
 
 Public Sub TestWriteFileNoBomSkipsUnchangedContent()
+    Dim strFolder As String
     Dim strPath As String
     Dim strText As String
     Dim dteBefore As Date
     Dim lngErr As Long
     Dim strErr As String
     On Error GoTo ErrHandler
-    strPath = GetTempFolder & "vcs_utf8_" & FSO.GetTempName
+    strFolder = GetTempFolder("vcs_utf8")
+    strPath = strFolder & PathSep & "probe.txt"
     strText = "unchanged " & ChrW$(&H3A9) & vbCrLf
     WriteFileNoBom strText, strPath
     TestAssert ReadFile(strPath) = strText, "Initial no-BOM content matches"
@@ -342,8 +346,8 @@ Public Sub TestWriteFileNoBomSkipsUnchangedContent()
     TestAssert ReadFile(strPath) = strText, "Identical no-BOM write preserves content"
 CleanUp:
     On Error Resume Next
-    If Len(strPath) > 0 Then
-        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
     End If
     If lngErr <> 0 Then TestAssert False, "Unchanged no-BOM write " & lngErr & ": " & strErr
     Exit Sub
@@ -355,13 +359,15 @@ End Sub
 
 
 Public Sub TestWriteFileNoBomOverwritesExistingFile()
+    Dim strFolder As String
     Dim strPath As String
     Dim strText As String
     Dim bData() As Byte
     Dim lngErr As Long
     Dim strErr As String
     On Error GoTo ErrHandler
-    strPath = GetTempFolder & "vcs_utf8_" & FSO.GetTempName
+    strFolder = GetTempFolder("vcs_utf8")
+    strPath = strFolder & PathSep & "probe.txt"
     WriteFile "Longer previous content" & vbCrLf, strPath
     ' Also cover the writer's existing trailing-CRLF behavior.
     strText = ChrW$(&H3A9)
@@ -373,8 +379,8 @@ Public Sub TestWriteFileNoBomOverwritesExistingFile()
     TestAssert ReadFile(strPath) = strText & vbCrLf, "Overwrite replaces previous text"
 CleanUp:
     On Error Resume Next
-    If Len(strPath) > 0 Then
-        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
     End If
     If lngErr <> 0 Then TestAssert False, "Overwrite no-BOM write " & lngErr & ": " & strErr
     Exit Sub

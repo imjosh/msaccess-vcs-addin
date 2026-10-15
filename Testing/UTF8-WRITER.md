@@ -23,7 +23,8 @@ Filter the runner to `modTestFileAccess`. These new procedures cover the writer:
 - `TestWriteFileNoBomOverwritesExistingFile` replaces a longer file with omega
   and checks its four bytes, including the writer's appended CRLF.
 
-The procedures create unique temporary files and clean up after trapped errors.
+The procedures write into unique temporary folders and delete them after
+trapped errors.
 The [test source](../Version%20Control.accda.src/modules/Tests/FileIO/modTestFileAccess.bas)
 contains the fixtures, so no separate data files are needed. A run with no
 assertions or only `EMPTY` results does not qualify the writer.
