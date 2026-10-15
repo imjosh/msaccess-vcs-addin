@@ -3,19 +3,74 @@
 Requires Windows, Access, and pywin32. The installed add-in is only a library.
 Use a rebuilt, closed development add-in in a disposable checkout for gettext.
 """
+if not __debug__:
+    raise SystemExit("UTF-8 caller checks require assertions. Run without -O, -OO, or PYTHONOPTIMIZE.")
+
 import argparse
 import gc
 import hashlib
 import json
 from pathlib import Path
-import winreg
+import subprocess
 import xml.etree.ElementTree as ET
 
-import pythoncom
-import win32api
-import win32com.client
-import win32event
-import win32process
+
+# The prepared development fixture contains these two translation languages.
+EXPECTED_PO_FILES = {"en_TEST.po", "pt_BR.po"}
+
+
+def validate_preparation(mode, database, library, disposable_host_marker=None):
+    if mode == "svg":
+        assert not database.exists(), "Use a new disposable database"
+        assert not Path(str(database) + ".src").exists(), "Use a path with no stale source folder"
+        return []
+    assert database.is_file() and (database.parent / "Translation").is_dir()
+    assert database != library, "The installed library must never be the host"
+    assert disposable_host_marker is not None, "Gettext requires --disposable-host-marker for this host"
+    marker = json.loads(disposable_host_marker.read_text(encoding="utf-8"))
+    assert marker.get("purpose") == "utf8-gettext-caller", "Incorrect disposable host marker purpose"
+    designated = Path(marker.get("database", ""))
+    assert designated.is_absolute() and designated.resolve() == database, "Disposable marker names a different host"
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(database.parent), *args],
+                              check=True, capture_output=True).stdout
+
+    root = Path(git("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve()
+    assert root == database.parent, "Gettext host must be in the disposable checkout root"
+    folder = database.parent / "Translation"
+    assert folder.resolve() == folder, "Translation folder must be inside the disposable checkout"
+    stale = sorted(p for pattern in ("*.po", "*.pot") for p in folder.glob(pattern))
+    assert all(p.is_file() and not p.is_symlink() for p in stale), "Translation inputs must be regular files"
+    tracked = {name.decode("utf-8") for name in
+               git("ls-tree", "-r", "--name-only", "-z", "HEAD", "--", "Translation").split(b"\0")
+               if name and Path(name.decode("utf-8")).parent == Path("Translation")
+               and Path(name.decode("utf-8")).suffix.lower() in (".po", ".pot")}
+    actual = {p.relative_to(root).as_posix() for p in stale}
+    assert actual == tracked, "Translation inputs include missing, untracked, or ignored POT/PO files"
+    assert EXPECTED_PO_FILES <= {p.name for p in stale}, "Prepare both en_TEST.po and pt_BR.po translation inputs"
+    # Diff against HEAD includes staged and unstaged edits, with Git's normal
+    # working-tree encoding and line-ending conversions.
+    try:
+        git("diff", "--exit-code", "HEAD", "--", *sorted(tracked))
+        git("diff", "--cached", "--exit-code", "HEAD", "--", *sorted(tracked))
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError("Translation POT/PO inputs have staged or unstaged edits; use a clean disposable checkout") from exc
+    # Git can hide working-tree edits behind assume-unchanged/skip-worktree.
+    # Hash actual input through Git's normal conversions without writing objects.
+    for name in sorted(tracked):
+        assert git("hash-object", "--path=" + name, name).strip() == git("rev-parse", "HEAD:" + name).strip(), \
+            "Translation POT/PO input differs from HEAD: " + name
+    return stale
+
+
+def validate_gettext_artifacts(records):
+    names = {record["name"] for record in records}
+    assert EXPECTED_PO_FILES <= names, "Missing expected PO outputs: " + ", ".join(sorted(EXPECTED_PO_FILES - names))
+    assert "MSAccessVCS.pot" in names, "Missing expected MSAccessVCS.pot output"
+    for record in records:
+        assert record["bytes"] and not record["bom"]
+        assert 'msgid ""' in record["text"] and 'msgstr ""' in record["text"]
 
 
 def first(value):
@@ -29,15 +84,18 @@ def artifact(path):
             "bom": data.startswith(b"\xef\xbb\xbf"), "text": data.decode("utf-8")}
 
 
-def run(mode, database, library):
+def run(mode, database, library, disposable_host_marker=None):
     database = database.resolve()
     library = library.resolve()
-    if mode == "svg":
-        assert not database.exists(), "Use a new disposable database"
-        assert not Path(str(database) + ".src").exists(), "Use a path with no stale source folder"
-    else:
-        assert database.exists() and (database.parent / "Translation").is_dir()
-        assert database != library, "The installed library must never be the host"
+    stale = validate_preparation(mode, database, library, disposable_host_marker)
+    # Keep Windows/COM imports after preparation so refusals cannot start Access.
+    import winreg
+    import pythoncom
+    import win32api
+    import win32com.client
+    import win32event
+    import win32process
+
     result = {"mode": mode, "database": str(database), "library": str(library)}
     app = handle = stamp = translation = label = form = None
     saved_contribute = None
@@ -109,8 +167,8 @@ def run(mode, database, library):
             assert result["fixture_compile"] and app.IsCompiled
             result["translation_path"] = str(database.parent / "Translation")
             # Remove committed POT/PO files so only this run's callers can recreate them.
-            stale = sorted(p for pattern in ("*.po", "*.pot")
-                           for p in (database.parent / "Translation").glob(pattern))
+            # Recheck immediately before deletion as well as before opening Access.
+            stale = validate_preparation(mode, database, library, disposable_host_marker)
             result["deleted_before_probe"] = [p.name for p in stale]
             for path in stale:
                 path.unlink()
@@ -122,13 +180,8 @@ def run(mode, database, library):
             assert result["translation_probe"] == "OK", result["translation_probe"]
             files = sorted((database.parent / "Translation").glob("*.po"))
             files += sorted((database.parent / "Translation").glob("*.pot"))
-            records = [artifact(path) for path in files]
-            result["artifacts"] = records
-            assert any(r["name"].endswith(".pot") for r in records)
-            assert any(r["name"].endswith(".po") for r in records)
-            for record in records:
-                assert record["bytes"] and not record["bom"]
-                assert 'msgid ""' in record["text"] and 'msgstr ""' in record["text"]
+            result["artifacts"] = [artifact(path) for path in files]
+            validate_gettext_artifacts(result["artifacts"])
         result["end_session"] = api("EndSession")
         result["success"] = True
     except Exception as exc:
@@ -245,9 +298,11 @@ if __name__ == "__main__":
     parser.add_argument("database", type=Path)
     parser.add_argument("library", type=Path)
     parser.add_argument("receipt", type=Path)
+    parser.add_argument("--disposable-host-marker", type=Path,
+                        help="JSON designation with purpose utf8-gettext-caller and the absolute database path")
     args = parser.parse_args()
     assert not args.receipt.exists(), "Use a new receipt path"
-    result = run(args.mode, args.database, args.library)
+    result = run(args.mode, args.database, args.library, args.disposable_host_marker)
     args.receipt.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in result.items() if k != "artifacts"}, indent=2))
     raise SystemExit(0 if result.get("success") and result.get("original_handle_exit") else 1)
