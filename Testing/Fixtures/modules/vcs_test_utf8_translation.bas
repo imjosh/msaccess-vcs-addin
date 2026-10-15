@@ -12,6 +12,7 @@ Public Function Utf8TranslationProbe(ByVal blnExport As Boolean) As String
     Dim strExpected As String
     Dim lngErr As Long
     Dim strErr As String
+    LogUnhandledErrors "vcs_test_utf8_translation.Utf8TranslationProbe"
     On Error GoTo ErrHandler
     Set cTranslation = New clsTranslation
     blnSavedContribute = cTranslation.Contribute

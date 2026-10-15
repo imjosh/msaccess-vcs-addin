@@ -11,10 +11,10 @@ Build the proposed source in an isolated checkout using the
 test runner against a fresh disposable development `.accda` with its matching
 source, repository, and fixtures. Follow the
 [test-run guidance](../docs/agent-test-runs.md). Keep import fixtures through an
-owned close, fresh reopen, and compilation check. Dispose of the whole host
-after preserving results. Preserve unrelated Access processes.
+owned close, fresh reopen, and compilation check. Preserve results before you
+dispose of the whole host.
 
-Filter the runner to `modTestFileAccess`. These new procedures cover the writer:
+Filter the runner to `modTestFileAccess`. These procedures cover the writer:
 
 - `TestLayoutSvgFileWriter` checks all 15 bytes of `<svg>` followed by omega,
   `</svg>`, and CRLF. Omega is `CE A9`, and the first byte is `3C`, not a BOM.
@@ -24,66 +24,86 @@ Filter the runner to `modTestFileAccess`. These new procedures cover the writer:
   and checks its four bytes, including the writer's appended CRLF.
 
 The procedures write into unique temporary folders and delete them after
-trapped errors.
-The [test source](../Version%20Control.accda.src/modules/Tests/FileIO/modTestFileAccess.bas)
+trapped errors. The
+[test source](../Version%20Control.accda.src/modules/Tests/FileIO/modTestFileAccess.bas)
 contains the fixtures, so no separate data files are needed. A run with no
 assertions or only `EMPTY` results does not qualify the writer.
 
 For a before-fix control, build an isolated copy of the base with these tests
-added and the rewind omitted. Run the same three filters. Record failures and
-actual output bytes. Do not edit a loaded VBA project to construct this control.
+added and the rewind omitted. Run the same three procedures. Record failures
+and actual output bytes. Do not edit a loaded VBA project to construct this control.
 
-## Check the callers
-
-1. In a separate disposable user database, create a form with a label whose
-   caption includes omega. Enable layout SVG export and export the form. Check
-   that the `.svg` is nonempty, parses as XML, has no BOM, and includes the label.
-2. In a disposable development checkout, use `Translation.ExportTemplate` and
-   `Translation.ExportTranslations` with its local `Translation` folder. Save
-   and restore any translation contribution or path settings. Check that the
-   generated POT and PO files are nonempty UTF-8 without a BOM and contain their
-   gettext headers and messages. Do not use a shared translation folder. The
-   driver deletes the checkout's committed `*.pot` and `*.po` files before the
-   probe, then creates a placeholder `MSAccessVCS.pot` so translation-path
-   discovery still recognizes the folder. The placeholder has no gettext
-   headers, so the run passes only if the callers replace it with a valid POT
-   and recreate the PO files. Restore them afterward with `git restore Translation`.
-3. Run existing file-access regressions on a fresh disposable host. For the
-   broader filtered check on this version, exclude the two existing import tests
-   named below. Compare results with an equivalently built base.
-
-This version's two module-import tests remove fixtures from their executing
-project. That prevents retaining those fixtures through close and fresh reopen.
-The writer check therefore uses this explicit filter:
+For a broader check on standalone UP-001, exclude the two existing module-import
+tests that remove fixtures from their executing project. Fixture-lifecycle repair
+and unfiltered verification belong to the separate UP-002 contribution. Use this
+explicit filter and compare results with an equivalently built base:
 
 ```text
 msaccess-vcs run-tests <fresh-disposable-dev.accda> --filter=-TestModuleImport_IndexesEachFileOnSharedInstance,-TestModuleImportFast_IndexesEachFileOnSharedInstance
 ```
 
-Describe that run as filtered. Fixture-lifecycle repair and full unfiltered
-verification belong to a separate test-host change. Verify that both excluded
-procedures are absent from the actual result map. An earlier custom caller passed
-both exclusions as one argument, so both tests ran; that run does not establish
-a failure of correctly filtered verification. Correctly filtered upstream controls
-compile after fresh reopen. Fresh focused writer hosts and the retained translation
-caller fixture also compile successfully after reopen.
+Describe that run as filtered. Verify that both excluded procedures are absent
+from the actual result map, and preserve the fresh-reopen compilation result.
 
-This fix preserves bytes on new writes. It does not change the export format or
-force unchanged forms to export again. To replace an existing empty SVG, export
-that object again or run a full export with layout SVG enabled. Regenerate POT
-and PO files through their existing translation commands.
+## Check the callers
 
 The Windows [caller driver](check_utf8_callers.py) requires Access and pywin32.
-It calls the installed add-in as a library and closes only its owned process.
-Use a new user database path for SVG, with no existing `.src` folder beside it,
-and a disposable development checkout for gettext. The [translation fixture](Fixtures/modules/vcs_test_utf8_translation.bas)
-imports once into that idle development host. It remains through close and fresh
-reopen validation. The driver restores the contribution setting exactly.
+Run it without `-O`, `-OO`, or `PYTHONOPTIMIZE`. It calls the installed add-in as
+a library and closes only its owned processes. Use the same rebuilt writer stage
+in the installed library and tested development host. Use a new receipt path for
+each run.
+
+For SVG, choose a new disposable user database path with no existing `.src`
+folder beside it:
 
 ```text
 python Testing/check_utf8_callers.py svg <new-user.accdb> <installed-addin.accda> <new-receipt.json>
-python Testing/check_utf8_callers.py gettext <disposable-dev.accda> <installed-addin.accda> <new-receipt.json>
 ```
 
-Keep the caller receipts and failure artifacts before disposing of each owned
-host. Use the same rebuilt writer stage in the installed runner and tested host.
+The driver creates a form with an omega label, enables layout SVG export, and
+exports it. It checks that the SVG is nonempty UTF-8 without a BOM, parses as
+XML, and contains omega.
+
+For gettext, prepare a separate disposable development checkout. Build and close
+its development `.accda` at the checkout root beside `Translation`. Prepare
+`tblLanguages` with `en_TEST` and `pt_BR`. Keep all `Translation/*.pot` and
+`Translation/*.po` files tracked at `HEAD` and clean in both the index and working
+tree, including `en_TEST.po` and `pt_BR.po`. Remove untracked or ignored POT and
+PO files from this disposable checkout before the run.
+
+Explicitly designate that database as disposable with a UTF-8 JSON marker. Run
+this PowerShell example from the repository root after replacing the paths:
+
+```powershell
+$probeDatabase = (Resolve-Path 'C:/path/to/disposable-checkout/Version Control.accda').Path
+$probeMarker = Join-Path (Split-Path $probeDatabase) 'utf8-disposable-host.json'
+$probeDesignation = @{
+	purpose = 'utf8-gettext-caller'
+	database = $probeDatabase
+} | ConvertTo-Json
+[IO.File]::WriteAllText($probeMarker, $probeDesignation, [Text.UTF8Encoding]::new($false))
+python Testing/check_utf8_callers.py gettext $probeDatabase '<installed-addin.accda>' '<new-receipt.json>' --disposable-host-marker $probeMarker
+```
+
+The driver imports the [translation fixture](Fixtures/modules/vcs_test_utf8_translation.bas)
+once into the idle development host and retains it through close, fresh reopen,
+and compilation. It restores the translation contribution setting exactly.
+Before the probe, it deletes the checkout's tracked POT and PO files and writes a
+placeholder `MSAccessVCS.pot` for path discovery. It requires fresh, nonempty,
+BOM-free UTF-8 `MSAccessVCS.pot`, `en_TEST.po`, and `pt_BR.po`, each with gettext
+headers. Missing either expected language fails the check.
+
+Keep the receipts and failure artifacts before you dispose of each owned host.
+After preserving the gettext outputs, run `git restore --source=HEAD --worktree -- Translation`
+in the disposable checkout to restore its tracked translation files.
+
+## Regenerate existing output
+
+The Forms and Reports exporter revisions increase from 3 to 4 and from 2 to 3.
+On the next completed export that includes those categories, unchanged forms
+and reports become eligible for re-export. With layout SVG enabled and no source
+conflicts, that export regenerates their missing or empty SVG sidecars.
+The inherited interrupted-export accounting can record a new category revision
+before every object finishes. An object or full export remains a manual recovery
+option for that case. Regenerate POT and PO files through the existing translation
+commands.

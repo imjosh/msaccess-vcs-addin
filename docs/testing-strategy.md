@@ -17,6 +17,10 @@ UI and its VBA-to-JavaScript bridge, see
 [web-test-runner.md](web-test-runner.md). For the filter syntax used by
 `VCS.RunTests`, see [AGENTS.md](../AGENTS.md).
 
+For the BOM-free UTF-8 writer regression and native SVG and gettext caller checks,
+see [Verify BOM-free UTF-8 file output](../Testing/UTF8-WRITER.md). The native
+caller checks require Windows, Access, and pywin32.
+
 ### Which project a run executes in
 
 A run spans two VBA projects, and almost every surprise in the harness traces back
