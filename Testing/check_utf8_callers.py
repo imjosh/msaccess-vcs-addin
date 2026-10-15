@@ -34,6 +34,7 @@ def run(mode, database, library):
     library = library.resolve()
     if mode == "svg":
         assert not database.exists(), "Use a new disposable database"
+        assert not Path(str(database) + ".src").exists(), "Use a path with no stale source folder"
     else:
         assert database.exists() and (database.parent / "Translation").is_dir()
         assert database != library, "The installed library must never be the host"
@@ -82,7 +83,9 @@ def run(mode, database, library):
             label = form = None
             app.DoCmd.Rename("frmUtf8Probe", constants.acForm, original_name)
             result["option"] = json.loads(api("SetOption", "ExportLayoutSvg", True))
+            assert result["option"].get("success") is True, result["option"]
             result["export"] = json.loads(api("ExportObject", "Forms", "frmUtf8Probe"))
+            assert result["export"].get("success") is True, result["export"]
             files = list(Path(str(database) + ".src").rglob("*.svg"))
             result["svg_files"] = [str(path) for path in files]
             assert len(files) == 1, "Expected one actual form SVG"

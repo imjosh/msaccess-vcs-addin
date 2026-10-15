@@ -73,8 +73,8 @@ and PO files through their existing translation commands.
 
 The Windows [caller driver](check_utf8_callers.py) requires Access and pywin32.
 It calls the installed add-in as a library and closes only its owned process.
-Use a new user database for SVG and a disposable development checkout for
-gettext. The [translation fixture](Fixtures/modules/vcs_test_utf8_translation.bas)
+Use a new user database path for SVG, with no existing `.src` folder beside it,
+and a disposable development checkout for gettext. The [translation fixture](Fixtures/modules/vcs_test_utf8_translation.bas)
 imports once into that idle development host. It remains through close and fresh
 reopen validation. The driver restores the contribution setting exactly.
 
