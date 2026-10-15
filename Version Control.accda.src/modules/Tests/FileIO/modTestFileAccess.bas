@@ -337,6 +337,7 @@ Public Sub TestWriteFileNoBomSkipsUnchangedContent()
     TestAssert ReadFile(strPath) = strText, "Initial no-BOM content matches"
     SetFileDate strPath, DateAdd("n", -5, Now), True
     dteBefore = GetLastModifiedDate(strPath)
+    TestAssert dteBefore < DateAdd("n", -1, Now), "Backdate applied"
     WriteFileNoBom strText, strPath
     TestAssert GetLastModifiedDate(strPath) = dteBefore, "Identical no-BOM write preserves timestamp"
     TestAssert ReadFile(strPath) = strText, "Identical no-BOM write preserves content"
