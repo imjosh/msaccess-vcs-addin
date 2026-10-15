@@ -11,7 +11,10 @@ Public Function DiagnosticWriteProbe(ByVal strCallback As String, ByVal strMessa
     Dim eLevel As eErrorLevel
     Dim eState As eOperationState
     Dim eMode As eInteractionMode
+    Dim eSavedMode As eInteractionMode
     On Error GoTo Failed
+    eSavedMode = Operation.InteractionMode
+    Operation.InteractionMode = eimNormal
     lngJournal = Log.ErrorJournalCount
     lngErrors = Log.ErrorCount
     eLevel = Operation.ErrorLevel
@@ -20,6 +23,7 @@ Public Function DiagnosticWriteProbe(ByVal strCallback As String, ByVal strMessa
     d.Add "export_folder", Options.GetExportFolder
     d.Add "status_before", CLng(eState)
     d.Add "mode_before", CLng(eMode)
+    d.Add "original_mode", CLng(eSavedMode)
     MCP.RegisterCallback strCallback
     d.Add "active", MCP.IsActive
     MCPDebugLog strMessage
@@ -30,10 +34,13 @@ Public Function DiagnosticWriteProbe(ByVal strCallback As String, ByVal strMessa
     d.Add "mode_unchanged", Operation.InteractionMode = eMode
     MCP.RegisterCallback vbNullString
     d.Add "callback_released", Not MCP.IsActive
+    Operation.InteractionMode = eSavedMode
+    d.Add "original_mode_restored", Operation.InteractionMode = eSavedMode
     DiagnosticWriteProbe = modJsonConverter.ConvertToJson(d)
     Exit Function
 Failed:
     d.Add "probe_error", CStr(Err.Number) & ": " & Err.Description
     MCP.RegisterCallback vbNullString
+    Operation.InteractionMode = eSavedMode
     DiagnosticWriteProbe = modJsonConverter.ConvertToJson(d)
 End Function
