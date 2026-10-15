@@ -41,7 +41,10 @@ actual output bytes. Do not edit a loaded VBA project to construct this control.
    `Translation.ExportTranslations` with its local `Translation` folder. Save
    and restore any translation contribution or path settings. Check that the
    generated POT and PO files are nonempty UTF-8 without a BOM and contain their
-   gettext headers and messages. Do not use a shared translation folder.
+   gettext headers and messages. Do not use a shared translation folder. The
+   driver deletes the checkout's committed `*.pot` and `*.po` files before the
+   probe, so the run passes only if its callers recreate them. Restore them
+   afterward with `git restore Translation`.
 3. Run existing file-access regressions on a fresh disposable host. For the
    broader filtered check on this version, exclude the two existing import tests
    named below. Compare results with an equivalently built base.

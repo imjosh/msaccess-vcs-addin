@@ -104,6 +104,12 @@ def run(mode, database, library):
             result["fixture_compile"] = api("CompileVBA", True)
             assert result["fixture_compile"] and app.IsCompiled
             result["translation_path"] = str(database.parent / "Translation")
+            # Remove committed POT/PO files so only this run's callers can recreate them.
+            stale = sorted(p for pattern in ("*.po", "*.pot")
+                           for p in (database.parent / "Translation").glob(pattern))
+            result["deleted_before_probe"] = [p.name for p in stale]
+            for path in stale:
+                path.unlink()
             result["translation_probe"] = first(app.Run(str(database.with_suffix("")) + ".Utf8TranslationProbe", True))
             assert result["translation_probe"] == "OK", result["translation_probe"]
             files = sorted((database.parent / "Translation").glob("*.po"))
