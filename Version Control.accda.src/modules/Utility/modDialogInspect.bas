@@ -117,7 +117,7 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
         dRoot.Add "success", True
         dRoot.Add "interrupted", True
         dRoot.Add "closed", False
-        dRoot.Add "message", T("Cancellation requested. The operation stops at its next check and Finish reports cancelled.")
+        dRoot.Add "message", T("Cancellation requested. The operation checks the request at its next cancellation check.")
         DismissAddinDialog = ConvertToJson(dRoot)
         Exit Function
     End If

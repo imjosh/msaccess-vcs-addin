@@ -32,6 +32,7 @@ project's virtual environment. Keep all evidence outside the contribution checko
 ```powershell
 $env:PYTHONPATH = '<pinned client checkout>\src'
 python Testing/check_noninteractive_policies.py --evidence '<evidence>' --label completion --client-source $env:PYTHONPATH
+python Testing/check_refusal_ownership.py --evidence '<evidence>' --label refusal-owner --client-source $env:PYTHONPATH
 python Testing/check_policy_workflow.py --evidence '<evidence>' --label workflow --client-source $env:PYTHONPATH
 python tools/verify-caller-error-translation.py --binary '<closed source-built .accda>' --evidence '<new evidence folder>'
 ```
@@ -40,7 +41,9 @@ The completion driver runs 24 cases through direct VBA and MCP. The workflow
 driver creates a fresh user database for each policy, uses export format 5.1.0
 so SQL is authoritative, and verifies actual database values after import. The
 translation driver edits only a disposable library copy and preserves its files.
-All three drivers preserve their disposable user databases for inspection.
+The refusal driver retains an active MCP root while invalid-policy, test, merge,
+and direct no-policy calls are refused. Require unchanged owner state, zero refusal
+terminal attempts, and exactly one owner completion. All four drivers preserve their disposable user databases for inspection.
 
 In a separate disposable user database, export a query baseline and modify both
 the database query and its source. Exercise all five policies. `block` must leave
@@ -77,4 +80,7 @@ Require their `OK` result. Preserve failure artifacts before closing the owned h
 
 Native dialog dismissal, cancellation polling, async admission isolation, named
 build output paths, export migration recovery, and compatibility sessions are
-outside this contribution. Native object-close mechanics remain inherited.
+outside this contribution. Dialog inspection can remain blocked by synchronous
+API reentrancy, and a requested cancellation can finish as failed in this stage.
+Active-dialog reachability and final cancellation classification require later
+qualification. Native object-close mechanics remain inherited.

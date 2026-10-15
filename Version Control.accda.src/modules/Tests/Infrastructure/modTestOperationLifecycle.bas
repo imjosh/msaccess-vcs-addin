@@ -540,3 +540,47 @@ Public Sub TestRegistryStateAdoptedOnlyByItsOwnProject()
     TestAssert Not cOp.CanAdoptRegistryState(strHwnd, vbNullString, CodeProject.FullName), _
         "a missing heartbeat is not adopted"
 End Sub
+
+
+' Parameterized public probe for an owned callback outside the test-runner root.
+' The caller owns a disposable user database and a persistent callback listener.
+Public Function RefusalOwnershipProbe(ByVal strCallbackInfo As String) As String
+    Dim cRoot As clsRootOperationLease
+    Dim cCallback As clsMCP
+    Dim dResult As Dictionary
+    Dim lngErr As Long
+    Dim strErr As String
+    On Error GoTo ErrHandler
+    Set dResult = New Dictionary
+    If Operation.IsActive Then
+        dResult.Add "probe_error", "A root is already active."
+        GoTo CleanUp
+    End If
+    Set cCallback = MCP
+    cCallback.RegisterCallback strCallbackInfo
+    Operation.Source = eosMCPTool
+    Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
+    dResult.Add "before", ParseJson(ModeOnlyScopeProbe("snapshot"))
+    dResult.Add "invalid_policy", ParseJson(VCS.MergeBuild("invalid-policy"))
+    dResult.Add "test_refusal", ParseJson(VCS.RunFilteredTests("block"))
+    dResult.Add "merge_refusal", ParseJson(VCS.MergeBuild("block"))
+    dResult.Add "ribbon_refusal", ParseJson(VCS.MergeBuild())
+    dResult.Add "after", ParseJson(ModeOnlyScopeProbe("snapshot"))
+    dResult.Add "attempts_during_refusals", cCallback.GetDiagnosticData()("terminalPostAttempts")
+    cRoot.Complete eorSuccess
+    dResult.Add "attempts_after_completion", cCallback.GetDiagnosticData()("terminalPostAttempts")
+    dResult.Add "completed", ParseJson(ModeOnlyScopeProbe("snapshot"))
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If lngErr <> 0 Then
+        dResult.Add "probe_error", strErr
+        dResult.Add "probe_error_number", lngErr
+    End If
+    RefusalOwnershipProbe = ConvertToJson(dResult)
+    Exit Function
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Function

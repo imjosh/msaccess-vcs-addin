@@ -679,10 +679,12 @@ End Function
 '---------------------------------------------------------------------------------------
 ' Procedure : PostRefusal
 ' Date      : 09/29/2026
-' Purpose   : Post a refusal to the MCP completion callback when MCP is active.
+' Purpose   : Post a pre-root refusal without using an active root's callback.
 '---------------------------------------------------------------------------------------
 '
 Private Sub PostRefusal(ByVal dResult As Dictionary, ByVal strMessage As String)
+    ' An active callback belongs to its root, including during direct VBA calls.
+    If Operation.IsActive Then Exit Sub
     If MCP.IsActive Then MCP.PostCallback "error", -1, -1, strMessage, dResult
 End Sub
 

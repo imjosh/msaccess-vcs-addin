@@ -185,10 +185,10 @@ Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
     If Len(strDecisionPolicy) > 0 Then
         MergeBuild = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
         If Len(MergeBuild) > 0 Then Exit Function
-        If Operation.Status <> eosReady Then
-            MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
-            Exit Function
-        End If
+    End If
+    If Operation.IsActive Then
+        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+        Exit Function
     End If
 
     intStatusBefore = Operation.Status
@@ -3226,6 +3226,11 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     If Len(strDecisionPolicy) > 0 Then
         ExecuteTests = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
         If Len(ExecuteTests) > 0 Then Exit Function
+    End If
+
+    If Operation.IsActive Then
+        ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+        Exit Function
     End If
 
     ' An automation session has no one to click Run in the web runner and no
