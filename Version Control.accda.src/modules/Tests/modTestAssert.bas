@@ -122,7 +122,28 @@ Public Function TestClassFactory(ByVal strClassName As String) As Object
         Case "clsTestSourceParser": Set TestClassFactory = New clsTestSourceParser
         Case "clsTestSqlFormatter": Set TestClassFactory = New clsTestSqlFormatter
         Case "clsTestSqlSyntax": Set TestClassFactory = New clsTestSqlSyntax
+        Case "clsTestTargetLocalInvocation": Set TestClassFactory = New clsTestTargetLocalInvocation
         Case "clsTestWorkerLifecycle": Set TestClassFactory = New clsTestWorkerLifecycle
     End Select
 '--- END TEST CLASS ENTRIES ---
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestClassInvoke
+' Purpose   : Invoke one test method on a class instance from inside this project, so
+'           : class and form types resolve here rather than through the installed runner.
+'           : Returns vbNullString on success, or the error as Err.Number & vbTab &
+'           : Err.Description. The VCS test runner installs or upgrades this procedure
+'           : when its version marker is missing or older. Keep it free of dependencies
+'           : on the VCS add-in.
+'---------------------------------------------------------------------------------------
+'
+Public Function TestClassInvoke(ByVal obj As Object, ByVal strProcName As String) As String
+    ' TestClassInvoke helper version 2
+    On Error GoTo Failed
+    CallByName obj, strProcName, VbMethod
+    Exit Function
+Failed:
+    TestClassInvoke = CStr(Err.Number) & vbTab & Err.Description
 End Function

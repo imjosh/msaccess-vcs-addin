@@ -5,7 +5,8 @@ development copy** of `Version Control.accda` with matching source/repository
 context, and drive the installed-library runner through MCP.
 
 The module-import tests retain distinct normal/batch fixtures in the disposable
-host and restore their error state on success or trapped failure. Build this
+host, restore their error state on success or trapped failure, and refuse to import
+in a host that is not explicitly designated disposable (step 3 below). Build this
 exported source through the supported rebuild before running the lifecycle below.
 
 For writing a test, see [.cursor/rules/testing.mdc](../.cursor/rules/testing.mdc).
@@ -29,20 +30,29 @@ repository's suite; it is not a requirement to discard developers' user database
    in the isolated checkout or copy the closed, compiled development `.accda` and
    its matching context there. Record source/binary hashes and the installed runner
    identity; never copy an open database or patch the installed library.
-3. Run focused checks and the original unfiltered suite through MCP. Start each
+3. Designate the host. The module-import tests refuse to import fixtures unless the
+   host database carries the text property `VCSDisposableTestHost`, set to the
+   database's own full path; repository context alone is insufficient. The driver
+   sets it in the host it owns. For a manually prepared host, open only the disposable
+   copy, import `Testing/Fixtures/modules/vcs_disposable_host_probe.bas`, and run
+   `?DesignateDisposableHost("")` in the VBA Immediate Window. Never designate a primary
+   development copy. Copying the host afterward invalidates the designation. See
+   [the disposable-host driver](../Testing/DISPOSABLE-HOSTS.md).
+4. Run focused checks and the original unfiltered suite through MCP. Start each
    independent run from a fresh disposable host. Retain alpha/beta modules through
    validation; normal and batch fixtures need distinct module names/source paths
    so both tests coexist without deletion or replacement of retained fixtures.
    Preserve both indexing assertions on one shared module instance per test.
    Restore transient options/error state needed by later tests.
-4. Gracefully close the identity-confirmed owned host, confirm original-handle
+5. Gracefully close the identity-confirmed owned host, confirm original-handle
    process exit, then freshly reopen that same disposable database. Read every
    retained import fixture and independently check compilation/IsCompiled. Repeat
    the full lifecycle from a fresh supported source build for qualification.
-5. Copy results and logs outside the temporary checkout before disposal. Preserve
+6. Copy results and logs outside the temporary checkout before disposal. Preserve
    failing binaries and diagnostics too. After confirmed owned closure/exit, remove
    the disposable database, sidecars and checkout. Verify disposal on success,
-   assertion failure and import failure; retain files when closure is uncertain.
+   assertion failure and import failure. Retain the raw host whenever closure is
+   uncertain or the archive could not be verified.
    Restore temporary trust/install-source settings and caller state, and
    leave unrelated Access processes intact.
 

@@ -15,6 +15,17 @@ container includes its own matching sibling copy. The driver archives that copy
 with the host and removes both after confirmed closure. Check for unexpected
 SKIP assertions as well as EMPTY procedures before accepting an unfiltered run.
 
+The module-import tests leave their fixture modules in the executing project, so
+they refuse to import unless the host is explicitly designated disposable. The
+designation is the database property `VCSDisposableTestHost`, whose text value is the
+full path of the database carrying it. A missing property, a non-text value, or a path
+naming another database records a failing assertion that names the reason, and the
+test exits without importing. Repository context alone never qualifies a host. The
+driver creates the designation in its owned host, before any test runs, by importing
+`Testing/Fixtures/modules/vcs_disposable_host_probe.bas` and calling its
+`DesignateDisposableHost`. It records the stored value as `designation` in the receipt.
+Copying a designated database to another path invalidates the designation.
+
 From this repository, run these commands with the MCP client's Python environment:
 
 ```powershell
@@ -50,13 +61,18 @@ import. Both must report failures, restore the prior error level, and complete t
 owned close, reopen, compilation, and disposal lifecycle. Neither uses malformed VBA.
 
 The class-error control installs a helper in the idle disposable current project
-that calls a nonexistent member. The helper catches error 438 and returns scalar
-error data. The external runner must record ERROR and release the class instance.
+that calls a nonexistent member. It carries the current helper version marker, so the
+scan treats it as a recognized helper and leaves it in place. The helper catches error
+438 and returns scalar error data. The external runner must record ERROR and release
+the class instance.
 The class writes `invocation-teardown.txt` in the disposable checkout. Require
 one `terminated` line for the error control. This marker survives VBA global-state
 resets after the external run, so a reset counter cannot hide successful teardown.
 The legacy-helper control seeds the earlier Sub helper. Scan must upgrade it to
 the scalar-returning Function, and all three class-invocation procedures must pass.
+Current source commits the helper in `modTestAssert`, so a fresh build needs no insertion.
+The scan installs or upgrades it only in older projects. A helper that carries the
+current version marker is never rewritten. No control here returns a malformed result.
 These controls never edit the loaded library.
 
 Add `--sync` to a focused command to verify the synchronous `RunFilteredTests`
@@ -64,11 +80,33 @@ JSON API through owned COM instead of MCP callbacks. The driver sets the session
 filter before dispatch, and API source forces headless execution. Require the same assertions
 and reopen checks. This switch does not change the unfiltered MCP qualification.
 
-Each receipt records errors separately from test results. The driver preserves a
-verified host archive and copies logs before disposal. A failed reopen remains raw
-for diagnosis. A zero exit code alone does not mean that expected test failures
-passed. Check the expected outcome, assertion counts, fixture readability,
-`reopen_is_compiled`, both process exits, and `disposed` in each receipt.
+Each receipt records errors separately from test results. For each owned process
+(`initial_process`, `reopen_process`) the driver records the PID and create time before
+it opens the process handle, then records an `init_error` if creating or initializing
+the instance fails. The wrapper is created apart from `DispatchEx`, so the driver still
+holds the instance when wrapping fails. Shutdown quits the held instance even when no
+process handle exists, `OpenCurrentDatabase` failed, or `CurrentProject.FullName` is
+missing or unexpected, after releasing its code-module references. It skips the quit
+only when the recorded PID or create time contradicts the held instance, and it never
+terminates another process. Each phase uses only its own recorded identity.
+
+After the quit the driver waits up to 60 seconds for the process to exit, through the
+original handle (`original_handle_exit`), or through an empty Access process list
+(`process_list_exit`) when no handle was opened. The receipt keeps `exit_timeout`,
+`quit_error`, `identity_mismatch`, handle errors and `closure_confirmed` as separate
+fields. The final process and cleanup checks are recorded under
+`infrastructure_failures` and fail the command only after the archive attempt.
+
+The driver copies logs, then writes the host archive as `<label>-host.zip.partial` and
+checks every member against its manifest. It renames the file to `<label>-host.zip` only
+after that check succeeds, and `archive.verified` is true only then. Active files can
+block archiving. The driver then records `archive.error` and keeps the raw host. It
+disposes of the host only when closure is confirmed, the archive is verified, and the
+lifecycle completed with a compiled reopen. Otherwise the host remains raw, with
+`retained_raw` and `retained_reasons` in the receipt. A zero exit code alone does not
+mean that expected test failures passed. Check the expected outcome, assertion counts,
+fixture readability, `reopen_is_compiled`, both process exits, `closure_confirmed`,
+`archive.verified`, and `disposed` in each receipt.
 
 For a safe base comparison, build the base with only the proposed class regressions
 and state-probe fixture added. Run the three class procedures. The helper-dependent
