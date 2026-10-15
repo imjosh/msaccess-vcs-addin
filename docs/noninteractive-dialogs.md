@@ -61,8 +61,9 @@ Scoped conflict cancellation returns `success:false`, `cancelled:true`, an error
 and `logPath`. Ordinary failures have no `cancelled` field.
 
 Refusal patterns include `invalid_decision_policy`, `merge_not_available`,
-`operation_already_running`, and `decision_required`. Active callbacks receive
-the same refusal. A blocked decision takes precedence over other outcomes and
+`operation_already_running`, and `decision_required`. A pre-root refusal can use
+its registered callback. Refusing a call while another root is active preserves
+that root's callback and state. A blocked decision takes precedence over other outcomes and
 retains the operation's own log path and escaped decision text.
 
 A runtime exception retains its original text and `errorNumber`. If a decision
@@ -100,7 +101,10 @@ async admission isolation, and mutual compatibility sessions are separate work.
 
 `ListAddinDialogs` and `DismissAddinDialog` enumerate responsive add-in forms.
 `close` refuses during an operation; `cancel` requests cancellation without
-finishing the root itself. These VBA calls require responsive Access COM.
+finishing the root itself. These VBA calls require responsive Access COM. Synchronous
+API reentrancy can prevent inspection while an operation runs. A cancellation
+request can finish as failed at this stage; active-dialog reachability and final
+cancellation classification require later qualification.
 A native dialog that blocks COM requires an external inspector or user action.
 
 Rebuild and use disposable verification hosts as described in
