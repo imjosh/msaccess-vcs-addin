@@ -1,4 +1,4 @@
-﻿Attribute VB_Name = "vcs_diagnostic_write_probe"
+Attribute VB_Name = "vcs_diagnostic_write_probe"
 Option Compare Database
 Option Explicit
 
