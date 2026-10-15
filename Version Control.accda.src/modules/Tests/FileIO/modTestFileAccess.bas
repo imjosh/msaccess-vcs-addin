@@ -285,3 +285,159 @@ Private Function LocalPathAsAdminShareUnc(ByVal strPath As String) As String
     End If
 
 End Function
+
+
+Public Sub TestTryAppendToFileAppendsLines()
+
+    Dim strFolder As String
+    Dim strPath As String
+    Dim strText As String
+    Dim bteData() As Byte
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
+
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_test")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strPath = strFolder & "\debug.log"
+
+    TestAssert TryAppendToFile("one", strPath), "first line written"
+    TestAssert TryAppendToFile("two", strPath), "second line written"
+    TestAssert TryAppendToFile("three" & vbCrLf, strPath), "terminated line written"
+    bteData = GetFileBytes(strPath)
+    TestAssert UBound(bteData) = 19, "one BOM and three CRLF-terminated lines"
+    TestAssert bteData(0) = &HEF And bteData(1) = &HBB And bteData(2) = &HBF, "initial UTF-8 BOM"
+    strText = ReadFile(strPath)
+    TestAssert strText = "one" & vbCrLf & "two" & vbCrLf & "three" & vbCrLf, "lines appended in order"
+    TestAssert InStr(strText, ChrW$(&HFEFF)) = 0, "no BOM in the middle of the file"
+
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestTryAppendToFileAppendsLines", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Public Sub TestTryAppendToFileFailsQuietly()
+
+    Dim strFolder As String
+    Dim strBlocker As String
+    Dim lngJournal As Long
+    Dim lngErrors As Long
+    Dim eLevel As eErrorLevel
+    Dim blnWritten As Boolean
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
+
+    ' A file where the log folder should be: an invalid diagnostic destination. The write must fail
+    ' without logging an error, which is what opened a message box.
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_fail")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strBlocker = strFolder & "\logs"
+    WriteFile "not a folder", strBlocker
+
+    lngJournal = Log.ErrorJournalCount
+    lngErrors = Log.ErrorCount
+    eLevel = Operation.ErrorLevel
+    blnWritten = TryAppendToFile("line", strBlocker & "\MCP_Debug.log")
+
+    TestAssert Not blnWritten, "a write under a file reports failure"
+    TestAssert Log.ErrorJournalCount = lngJournal, "nothing added to the error journal"
+    TestAssert Log.ErrorCount = lngErrors, "no error counted"
+    TestAssert Operation.ErrorLevel = eLevel, "operation error level unchanged"
+    TestAssert ReadFile(strBlocker) = "not a folder" & vbCrLf, "the blocking file is untouched"
+
+CleanUp:
+    On Error Resume Next
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestTryAppendToFileFailsQuietly", lngErr, strErr, strCleanUp
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+
+End Sub
+
+
+Private Function RemoveTestFolder(ByVal strFolder As String) As String
+
+    On Error Resume Next
+    Err.Clear
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    End If
+    If Err.Number <> 0 Then RemoveTestFolder = "error " & Err.Number & ": " & Err.Description
+    Err.Clear
+
+End Function
+
+
+Private Sub ReportFileTestErrors(ByVal strTest As String, ByVal lngErr As Long, _
+    ByVal strErr As String, ByVal strCleanUp As String)
+
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, strTest & ": unexpected error " & lngErr & ": " & strErr
+    If Len(strCleanUp) > 0 Then TestAssert False, strTest & ": temp folder cleanup failed, " & strCleanUp
+
+End Sub
+
+
+Public Sub TestTryAppendToFileLocked()
+    Dim strFolder As String
+    Dim strPath As String
+    Dim intFile As Integer
+    Dim blnOpen As Boolean
+    Dim blnWritten As Boolean
+    Dim lngJournal As Long
+    Dim lngErrors As Long
+    Dim eLevel As eErrorLevel
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCleanUp As String
+
+    On Error GoTo ErrHandler
+    strFolder = ExpandEnvironmentVariables("%TEMP%\vcs_try_append_locked")
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    strPath = strFolder & "\debug.log"
+    TestAssert TryAppendToFile("original", strPath), "seed line written"
+    lngJournal = Log.ErrorJournalCount
+    lngErrors = Log.ErrorCount
+    eLevel = Operation.ErrorLevel
+    intFile = FreeFile
+    Open strPath For Binary Access Read Write Lock Read Write As #intFile
+    blnOpen = True
+    blnWritten = TryAppendToFile("must not replace", strPath)
+    Close #intFile
+    blnOpen = False
+    TestAssert Not blnWritten, "locked file reports failure"
+    TestAssert Log.ErrorJournalCount = lngJournal, "locked file adds no journal entry"
+    TestAssert Log.ErrorCount = lngErrors, "locked file adds no error"
+    TestAssert Operation.ErrorLevel = eLevel, "locked file leaves error level unchanged"
+    TestAssert ReadFile(strPath) = "original" & vbCrLf, "locked file bytes preserved"
+    TestAssert TryAppendToFile("after unlock", strPath), "append succeeds after unlock"
+    TestAssert ReadFile(strPath) = "original" & vbCrLf & "after unlock" & vbCrLf, "existing line retained after unlock"
+CleanUp:
+    On Error Resume Next
+    If blnOpen Then Close #intFile
+    strCleanUp = RemoveTestFolder(strFolder)
+    ReportFileTestErrors "TestTryAppendToFileLocked", lngErr, strErr, strCleanUp
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
