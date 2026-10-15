@@ -114,6 +114,10 @@ def run(mode, database, library):
             result["deleted_before_probe"] = [p.name for p in stale]
             for path in stale:
                 path.unlink()
+            # Path discovery requires the master POT to exist. This placeholder
+            # has no gettext headers, so the checks below require a fresh export.
+            template = database.parent / "Translation" / "MSAccessVCS.pot"
+            template.write_text("# UTF-8 caller probe: replace this placeholder.\n", encoding="utf-8")
             result["translation_probe"] = first(app.Run(str(database.with_suffix("")) + ".Utf8TranslationProbe", True))
             assert result["translation_probe"] == "OK", result["translation_probe"]
             files = sorted((database.parent / "Translation").glob("*.po"))
