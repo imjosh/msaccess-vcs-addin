@@ -32,11 +32,17 @@ def behavior_checks(record):
     if record['mode'] == 'suite':
         tests = record.get('tests', {})
         summary = tests.get('summary', {})
-        return {'passing_assertions': summary.get('passed', 0) > 0,
+        cases = tests.get('tests', {})
+        required = ['TestTryAppendToFileAppendsLines', 'TestTryAppendToFileFailsQuietly', 'TestTryAppendToFileLocked']
+        checks = {'passing_assertions': summary.get('passed', 0) > 0,
                 'no_failed_assertions': summary.get('failed') == 0,
                 'no_errored_tests': summary.get('errored') == 0,
                 'all_passed': tests.get('allPassed') is True,
-                'exclusions_applied': all(f[1:] not in tests.get('tests', {}) for f in record['filters'] if f.startswith('-'))}
+                'exclusions_applied': all(f[1:] not in cases for f in record['filters'] if f.startswith('-'))}
+        for name in required:
+            case = cases.get('modTestFileAccess.'+name, {})
+            checks[name] = case.get('status') == 'PASSED' and any(a.get('passed') is True for a in case.get('assertions', []))
+        return checks
     probe = record.get('probe', {})
     checks = {'callback_active': probe.get('active') is True,
               'callback_released': probe.get('callback_released') is True,
