@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import time
+import traceback
 import zipfile
 from pathlib import Path
 
@@ -126,10 +127,12 @@ def run(out, label, mode, filters, transport):
         else:
             project = next(p for p in app.VBE.VBProjects if Path(p.FileName).resolve() == host.resolve())
             module = project.VBComponents.Import(str(folder/'Testing/Fixtures/modules/vcs_diagnostic_write_probe.bas'))
+            record['probe_module_name'] = module.Name
             assert module.Name == 'vcs_diagnostic_write_probe'
             app.DoCmd.Save(5,module.Name)
             module = project = None
-            assert compile_project()
+            record['probe_compile'] = compile_project()
+            assert record['probe_compile'], 'Probe import did not establish compilation'
             logs = source/'logs'
             if logs.exists():
                 shutil.move(str(logs),str(source/'probe-original-logs'))
@@ -165,6 +168,7 @@ def run(out, label, mode, filters, transport):
         close_owned()
     except Exception as exc:
         record['error'] = repr(exc)
+        record['traceback'] = traceback.format_exc()
     finally:
         if lock: lock.Close()
         project = module = None
@@ -208,4 +212,4 @@ if __name__ == '__main__':
     parser.add_argument('--broad',action='store_true',help='Run all tests except the two unsafe base import/deletion tests')
     parser.add_argument('--transport',choices=['sync','callback'],default='sync')
     args = parser.parse_args()
-    run(args.out,args.label,args.mode,EXCLUSIONS if args.broad else args.filter.split(','),args.transport)
+    run(args.out,args.label,args.mode,EXCLUSIONS if args.broad else (args.filter.split(',') if args.filter else []),args.transport)
