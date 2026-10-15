@@ -174,7 +174,13 @@ def run(out, label, mode, filters, transport):
         app = None
         gc.collect()
         pythoncom.CoUninitialize()
-        record['after_pids'] = sorted(list_access_pids_or_none() or [])
+        record['final_inventory_samples'] = []
+        for _ in range(5):
+            remaining = list_access_pids_or_none()
+            record['final_inventory_samples'].append(None if remaining is None else sorted(remaining))
+            if remaining == set(): break
+            time.sleep(.5)
+        record['after_pids'] = None if remaining is None else sorted(remaining)
         save()
     assert not record.get('error') and not record.get('close_error'), record.get('error') or record.get('close_error')
     assert record['fresh_reopen_compiled'] and record['components_preserved'] and list_access_pids_or_none() == set()
