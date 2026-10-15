@@ -38,7 +38,7 @@ def run(mode, database, library):
         assert database.exists() and (database.parent / "Translation").is_dir()
         assert database != library, "The installed library must never be the host"
     result = {"mode": mode, "database": str(database), "library": str(library)}
-    app = handle = translation = label = form = None
+    app = handle = stamp = translation = label = form = None
     saved_contribute = None
     setting = r"Software\VB and VBA Program Settings\MSAccessVCS\Language"
     try:
@@ -53,9 +53,10 @@ def run(mode, database, library):
         window = app.hWndAccessApp
         window = window() if callable(window) else window
         pid = win32process.GetWindowThreadProcessId(window)[1]
+        result["pid"] = pid
         handle = win32api.OpenProcess(0x1000 | 0x100000, False, pid)
         stamp = win32process.GetProcessTimes(handle)["CreationTime"]
-        result.update(pid=pid, create_time=str(stamp))
+        result["create_time"] = str(stamp)
         if mode == "svg":
             database.parent.mkdir(parents=True, exist_ok=True)
             app.NewCurrentDatabase(str(database))
@@ -136,12 +137,19 @@ def run(mode, database, library):
                 result["contribute_setting_restored"] = True
             except Exception as exc:
                 result["restoration_error"] = repr(exc)
-        if app is not None and handle is not None:
+        if app is not None:
+            # app is the instance this script created with DispatchEx. Quit it even
+            # when its process handle was never opened, unless a recorded identity
+            # check shows that it is no longer that process.
+            owned = True
             try:
-                window = app.hWndAccessApp
-                window = window() if callable(window) else window
-                assert win32process.GetWindowThreadProcessId(window)[1] == result["pid"]
-                assert win32process.GetProcessTimes(handle)["CreationTime"] == stamp
+                if handle is not None:
+                    window = app.hWndAccessApp
+                    window = window() if callable(window) else window
+                    owned = win32process.GetWindowThreadProcessId(window)[1] == result["pid"]
+                    if owned and stamp is not None:
+                        owned = win32process.GetProcessTimes(handle)["CreationTime"] == stamp
+                    assert owned, "Owned Access process identity changed"
                 assert Path(app.CurrentProject.FullName).resolve() == database
                 result["end_session_cleanup"] = first(app.Run(str(library.with_suffix("")) + ".API", "EndSession"))
                 if mode == "gettext" and result.get("fixture_name") == "vcs_test_utf8_translation":
@@ -150,10 +158,14 @@ def run(mode, database, library):
                     app.DoCmd.RunCommand(win32com.client.constants.acCmdCompileAndSaveAllModules)
                     project = None
                     result["compile_and_save_before_close"] = bool(app.IsCompiled)
-                app.Quit(2)
-                result["graceful_quit"] = True
             except Exception as exc:
                 result["close_error"] = repr(exc)
+            if owned:
+                try:
+                    app.Quit(2)
+                    result["graceful_quit"] = True
+                except Exception as exc:
+                    result["close_error"] = repr(exc)
         app = None
         gc.collect()
         if handle is not None:
@@ -164,7 +176,8 @@ def run(mode, database, library):
         pythoncom.CoInitialize()
         reopened = reopen_handle = None
         try:
-            reopened = win32com.client.gencache.EnsureDispatch(win32com.client.DispatchEx("Access.Application"))
+            reopened = win32com.client.DispatchEx("Access.Application")
+            reopened = win32com.client.gencache.EnsureDispatch(reopened)
             reopened.OpenCurrentDatabase(str(database))
             reopened.Visible = True
             window = reopened.hWndAccessApp
@@ -188,9 +201,12 @@ def run(mode, database, library):
         except Exception as exc:
             result["reopen_error"] = repr(exc)
         finally:
-            if reopened is not None and reopen_handle is not None:
+            if reopened is not None:
                 try:
-                    assert Path(reopened.CurrentProject.FullName).resolve() == database
+                    if reopen_handle is not None:
+                        window = reopened.hWndAccessApp
+                        window = window() if callable(window) else window
+                        assert win32process.GetWindowThreadProcessId(window)[1] == result["reopened_pid"]
                     reopened.Quit(2)
                 except Exception as exc:
                     result["reopen_close_error"] = repr(exc)
