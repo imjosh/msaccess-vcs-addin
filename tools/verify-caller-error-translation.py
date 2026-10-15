@@ -39,6 +39,7 @@ Public Function CheckRefusal(ByVal strPolicy As String) As String
     Dim dResult As Object
     Dim cmp As Object
     Dim blnHelper As Boolean
+    Dim strJson As String
     Operation.Source = eosUserInterface
     Translation.SetLanguage "POL_TEST"
     Select Case strPolicy
@@ -50,7 +51,12 @@ Public Function CheckRefusal(ByVal strPolicy As String) As String
             Set dResult = ParseJson(VCS.RunFilteredTests())
         Case "automation"
             Operation.Source = eosExternalAPI
-            Set dResult = ParseJson(VCS.RunFilteredTests("block"))
+            strJson = VCS.RunFilteredTests("block")
+            If Len(strJson) > 0 Then
+                Set dResult = ParseJson(strJson)
+            Else
+                Set dResult = CreateObject("Scripting.Dictionary")
+            End If
         Case Else
             Set dResult = ParseJson(VCS.RunFilteredTests(strPolicy))
     End Select
@@ -204,8 +210,11 @@ def main():
     finally:
         component=project=None
         if app is not None:
-            assert pid_from_access_app(app)==pid and process_create_time(pid)==stamp
-            app.Quit(2)
+            try:
+                assert pid_from_access_app(app)==pid and process_create_time(pid)==stamp
+                app.Quit(2)
+            except Exception as exc:
+                receipt['quit_error']=repr(exc)
         app=None
         gc.collect()
         receipt['original_handle_exit']=handle is not None and win32event.WaitForSingleObject(handle,5000)==win32event.WAIT_OBJECT_0

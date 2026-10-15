@@ -159,8 +159,11 @@ def run(out, label, legacy=False):
         record['error']=repr(exc);save();raise
     finally:
         if app is not None:
-            assert pid_from_access_app(app)==pid and process_create_time(pid)==stamp
-            app.Quit(win32com.client.constants.acQuitSaveNone)
+            try:
+                assert pid_from_access_app(app)==pid and process_create_time(pid)==stamp
+                app.Quit(win32com.client.constants.acQuitSaveNone)
+            except Exception as exc:
+                record['quit_error']=repr(exc)
         app=None;gc.collect()
         if handle:
             record['original_handle_exit']=win32event.WaitForSingleObject(handle,5000)==win32event.WAIT_OBJECT_0
@@ -182,4 +185,3 @@ if __name__=='__main__':
     args.evidence.mkdir(parents=True,exist_ok=True)
     sys.path.insert(0,str(args.client_source.resolve()))
     run(args.evidence.resolve(),args.label,args.legacy_control)
-

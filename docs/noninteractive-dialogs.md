@@ -70,7 +70,10 @@ was blocked, the exception text also appears as `runtime_error` beside the prima
 decision result. A call finishes only a root it acquired. Pre-acquisition errors
 leave another caller's root, log, and policy intact.
 
-Automation tests are headless. Use the ribbon for the interactive test console.
+Automation tests are headless and install a missing test helper as setup. Direct
+VBA preflight offers installation under its effective policy. Its root owns any
+blocked decision, including under mode-only or caller-owned policy selection.
+Use the ribbon for the interactive test console.
 A failed compile gate returns `project_not_compiled`, `success:false`, and
 `cancelled:false`. When a decision was blocked too, the primary error is
 `decision_required`; `run_error` and `run_error_pattern` retain the compile diagnosis.

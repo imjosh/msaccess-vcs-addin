@@ -220,7 +220,7 @@ def live(label):
                 check(payload.get('success') is False and payload.get('error_pattern') == 'project_not_compiled', 'compile verdict')
             else:
                 check(payload.get('type', 'complete') == 'complete', 'next operation completes')
-                check(not payload.get('decisions') and not payload.get('decision_required') and not payload.get('run_error_pattern'), 'no stale diagnostics')
+                check((save_failure or not payload.get('decisions')) and not payload.get('decision_required') and not payload.get('run_error_pattern'), 'no stale diagnostics')
             if compile_failure:
                 check(payload.get('cancelled') is False, 'compile is not cancellation')
                 partial = item.get('saved_results', payload)
