@@ -28,6 +28,41 @@ EXCLUSIONS = ['-modTestConflicts.TestModuleImport_IndexesEachFileOnSharedInstanc
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def git(repo, *args): return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
 
+def behavior_checks(record):
+    if record['mode'] == 'suite':
+        tests = record.get('tests', {})
+        summary = tests.get('summary', {})
+        cases = tests.get('tests', {})
+        required = ['TestTryAppendToFileAppendsLines', 'TestTryAppendToFileFailsQuietly', 'TestTryAppendToFileLocked']
+        checks = {'passing_assertions': summary.get('passed', 0) > 0,
+                'no_failed_assertions': summary.get('failed') == 0,
+                'no_errored_tests': summary.get('errored') == 0,
+                'all_passed': tests.get('allPassed') is True,
+                'exclusions_applied': all(f[1:] not in cases for f in record['filters'] if f.startswith('-'))}
+        for name in required:
+            case = cases.get('modTestFileAccess.'+name, {})
+            checks[name] = case.get('status') == 'PASSED' and any(a.get('passed') is True for a in case.get('assertions', []))
+        return checks
+    probe = record.get('probe', {})
+    checks = {'callback_active': probe.get('active') is True,
+              'callback_released': probe.get('callback_released') is True,
+              'before_root': probe.get('status_before') == 0,
+              'normal_mode': probe.get('mode_before') == 0,
+              'no_journal_entries': probe.get('journal_delta') == 0,
+              'no_errors': probe.get('error_delta') == 0,
+              'level_preserved': probe.get('level_unchanged') is True,
+              'status_preserved': probe.get('status_unchanged') is True,
+              'mode_preserved': probe.get('mode_unchanged') is True,
+              'original_mode_restored': probe.get('original_mode_restored') is True,
+              'no_probe_error': 'probe_error' not in probe,
+              'public_result_preserved': record.get('public_version_after') == record.get('version')}
+    if record['mode'] in ['blocker', 'locked']:
+        checks['bytes_preserved'] = record.get('original_bytes_preserved') is True
+    else:
+        checks['one_bom'] = record.get('one_bom') is True
+        checks['marker_present'] = record.get('marker_present') is True
+    return checks
+
 def run(out, label, mode, filters, transport):
     out = out.resolve()
     assert not out.is_relative_to(REPO.resolve()), 'Keep evidence outside the contribution'
@@ -95,7 +130,7 @@ def run(out, label, mode, filters, transport):
         assert process_create_time(record[phase]['pid']) == record[phase]['create_time']
         assert Path(app.CurrentProject.FullName).resolve() == host.resolve()
         app.VBE.MainWindow.Visible = False
-        app.Quit(2)
+        app.Quit(win32com.client.constants.acQuitSaveNone)
         app = None
         gc.collect()
         record[phase]['original_handle_exit'] = win32event.WaitForSingleObject(handle,5000) == win32event.WAIT_OBJECT_0
@@ -129,7 +164,7 @@ def run(out, label, mode, filters, transport):
             module = project.VBComponents.Import(str(folder/'Testing/Fixtures/modules/vcs_diagnostic_write_probe.bas'))
             record['probe_module_name'] = module.Name
             assert module.Name == 'vcs_diagnostic_write_probe'
-            app.DoCmd.Save(5,module.Name)
+            app.DoCmd.Save(win32com.client.constants.acModule,module.Name)
             module = project = None
             record['probe_compile'] = compile_project()
             assert record['probe_compile'], 'Probe import did not establish compilation'
@@ -188,19 +223,25 @@ def run(out, label, mode, filters, transport):
         save()
     assert not record.get('error') and not record.get('close_error'), record.get('error') or record.get('close_error')
     assert record['fresh_reopen_compiled'] and record['components_preserved'] and list_access_pids_or_none() == set()
+    record['behavior_checks'] = behavior_checks(record)
+    record['qualified'] = all(record['behavior_checks'].values())
     archive = out/(label+'-host.zip')
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as z:
         for p in container.rglob('*'):
             if p.is_file(): z.write(p,p.relative_to(container))
     record['archive_sha256'] = sha(archive)
     record['git_status_after'] = git(folder,'status','--porcelain')
-    target = folder.resolve()
-    assert target.parent == container.resolve() and container.resolve().parent == (out/'hosts').resolve()
-    subprocess.run(['git','-C',str(REPO),'worktree','remove','--force',str(target)],check=True)
-    shutil.rmtree(container)
-    record['disposed'] = not container.exists()
+    if record['qualified']:
+        target = folder.resolve()
+        assert target.parent == container.resolve() and container.resolve().parent == (out/'hosts').resolve()
+        subprocess.run(['git','-C',str(REPO),'worktree','remove','--force',str(target)],check=True)
+        shutil.rmtree(container)
+        record['disposed'] = not container.exists()
+    else:
+        record['retained_failed_host'] = True
     save()
     print(json.dumps({k:v for k,v in record.items() if k not in ['source_manifest','tests','before_close_components','reopen_components','references']},indent=2),flush=True)
+    assert record['qualified'], record['behavior_checks']
     return record
 
 if __name__ == '__main__':
