@@ -55,10 +55,12 @@ msaccess-vcs run-tests <fresh-disposable-dev.accda> --filter=-TestModuleImport_I
 ```
 
 Describe that run as filtered. Fixture-lifecycle repair and full unfiltered
-verification belong to a separate test-host change. The filtered suite's base
-and candidate hosts also fail recompilation after fresh reopen. Preserve those
-failure artifacts. Fresh focused writer hosts and the retained translation
-caller fixture compile successfully after reopen.
+verification belong to a separate test-host change. Verify that both excluded
+procedures are absent from the actual result map. An earlier custom caller passed
+both exclusions as one argument, so both tests ran; that run does not establish
+a failure of correctly filtered verification. Correctly filtered upstream controls
+compile after fresh reopen. Fresh focused writer hosts and the retained translation
+caller fixture also compile successfully after reopen.
 
 This fix preserves bytes on new writes. It does not change the export format or
 force unchanged forms to export again. To replace an existing empty SVG, export
