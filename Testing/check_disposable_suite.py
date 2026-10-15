@@ -144,7 +144,7 @@ def run(label,binary,pin,filters,fault=None,sync=False):
             if fault=='legacy-invoker':
                 text='Public Sub TestClassInvoke(ByVal obj As Object, ByVal strProcName As String)\r\nCallByName obj, strProcName, VbMethod\r\nEnd Sub\r\n'
             else:
-                text='Public Function TestClassInvoke(ByVal obj As Object, ByVal strProcName As String) As String\r\nOn Error GoTo Failed\r\nCallByName obj, "NoSuchTestMethod", VbMethod\r\nExit Function\r\nFailed:\r\nTestClassInvoke = CStr(Err.Number) & vbTab & Err.Description\r\nEnd Function\r\n'
+                text='Public Function TestClassInvoke(ByVal obj As Object, ByVal strProcName As String) As String\r\n\' TestClassInvoke helper version 2\r\nOn Error GoTo Failed\r\nCallByName obj, "NoSuchTestMethod", VbMethod\r\nExit Function\r\nFailed:\r\nTestClassInvoke = CStr(Err.Number) & vbTab & Err.Description\r\nEnd Function\r\n'
             module.InsertLines(module.CountOfLines+1,text)
             data['control_helper']=text
             app.DoCmd.Save(5,'modTestAssert')

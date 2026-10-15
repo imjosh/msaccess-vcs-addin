@@ -61,13 +61,18 @@ import. Both must report failures, restore the prior error level, and complete t
 owned close, reopen, compilation, and disposal lifecycle. Neither uses malformed VBA.
 
 The class-error control installs a helper in the idle disposable current project
-that calls a nonexistent member. The helper catches error 438 and returns scalar
-error data. The external runner must record ERROR and release the class instance.
+that calls a nonexistent member. It carries the current helper version marker, so the
+scan treats it as a recognized helper and leaves it in place. The helper catches error
+438 and returns scalar error data. The external runner must record ERROR and release
+the class instance.
 The class writes `invocation-teardown.txt` in the disposable checkout. Require
 one `terminated` line for the error control. This marker survives VBA global-state
 resets after the external run, so a reset counter cannot hide successful teardown.
 The legacy-helper control seeds the earlier Sub helper. Scan must upgrade it to
 the scalar-returning Function, and all three class-invocation procedures must pass.
+Current source commits the helper in `modTestAssert`, so a fresh build needs no insertion.
+The scan installs or upgrades it only in older projects. A helper that carries the
+current version marker is never rewritten. No control here returns a malformed result.
 These controls never edit the loaded library.
 
 Add `--sync` to a focused command to verify the synchronous `RunFilteredTests`

@@ -155,7 +155,7 @@ flowchart TD
   F --> G
 ```
 
-Class-based discovery also keeps a `TestClassFactory` in `modTestAssert` in sync (an auto-generated `Select Case` between BEGIN/END markers — don't edit it by hand).
+Class-based discovery also keeps a `TestClassFactory` in `modTestAssert` in sync (an auto-generated `Select Case` between BEGIN/END markers — don't edit it by hand). Class tests run through a `TestClassInvoke` helper in the same module, which carries a version marker comment.
 
 ---
 
