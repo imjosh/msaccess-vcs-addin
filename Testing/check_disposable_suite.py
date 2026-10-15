@@ -107,11 +107,15 @@ def run(label,binary,pin,filters,fault=None,sync=False):
         pid=info.get('pid')
         if not pid:return None
         try:
-            if pid_from_access_app(app)!=pid:return 'pid'
+            current_pid=pid_from_access_app(app)
+            if current_pid is None:info['pid_check_unavailable']=True
+            elif current_pid!=pid:return 'pid'
         except Exception as exc:info['pid_check_error']=repr(exc)
         if info.get('create_time'):
             try:
-                if process_create_time(pid)!=info['create_time']:return 'create_time'
+                current_create_time=process_create_time(pid)
+                if current_create_time is None:info['create_time_check_unavailable']=True
+                elif current_create_time!=info['create_time']:return 'create_time'
             except Exception as exc:info['create_time_check_error']=repr(exc)
         return None
     def wait_for_no_access(timeout_ms):
