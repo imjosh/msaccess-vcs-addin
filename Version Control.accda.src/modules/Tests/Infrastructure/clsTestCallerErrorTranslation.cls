@@ -18,7 +18,7 @@ Option Explicit
 '@Folder("Tests.Infrastructure")
 '@Tag("unit")
 
-Private Const TEST_LANGUAGE As String = "POLICY_TEST"
+Private Const TEST_LANGUAGE As String = "POL_TEST"
 Private Const FALLBACK_MESSAGE As String = "Import completed with errors. Check the log for details."
 Private Const EXPORT_MESSAGE As String = "Export completed with errors. Check the log for details."
 Private Const MULTIPLE_MESSAGE As String = " (and {0} more errors in the log)"

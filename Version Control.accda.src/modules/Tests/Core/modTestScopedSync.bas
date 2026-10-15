@@ -277,4 +277,3 @@ End Function
 
 ' State every outcome of the call must leave: the root finished as expected, its owned
 ' state is released, the session's mode and policy are back, and the form was left open.
-
