@@ -15,6 +15,17 @@ container includes its own matching sibling copy. The driver archives that copy
 with the host and removes both after confirmed closure. Check for unexpected
 SKIP assertions as well as EMPTY procedures before accepting an unfiltered run.
 
+The module-import tests leave their fixture modules in the executing project, so
+they refuse to import unless the host is explicitly designated disposable. The
+designation is the database property `VCSDisposableTestHost`, whose text value is the
+full path of the database carrying it. A missing property, a non-text value, or a path
+naming another database records a failing assertion that names the reason, and the
+test exits without importing. Repository context alone never qualifies a host. The
+driver creates the designation in its owned host, before any test runs, by importing
+`Testing/Fixtures/modules/vcs_disposable_host_probe.bas` and calling its
+`DesignateDisposableHost`. It records the stored value as `designation` in the receipt.
+Copying a designated database to another path invalidates the designation.
+
 From this repository, run these commands with the MCP client's Python environment:
 
 ```powershell

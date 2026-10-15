@@ -126,6 +126,10 @@ def run(label,binary,pin,filters,fault=None,sync=False):
         assert module.Name=='vcs_disposable_host_probe'
         app.DoCmd.Save(5,'vcs_disposable_host_probe')
         module=project=None
+        # The import tests refuse any host without this explicit designation.
+        value=app.Run(str(host.with_suffix(''))+'.DesignateDisposableHost','')
+        data['designation']=value[0] if isinstance(value,tuple) else value
+        assert Path(data['designation']).resolve()==host.resolve(),'host designation mismatch'
         data['initial_compile']=api('CompileVBA',True)
         data['initial_is_compiled']=bool(app.IsCompiled)
         data['state_before']=snapshot()

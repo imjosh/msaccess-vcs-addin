@@ -11,3 +11,12 @@ Public Function DisposableHostSnapshot(ByVal ignored As String) As String
     state.Add "terminated_instances", TargetLocalTerminateCount
     DisposableHostSnapshot = ConvertToJson(state)
 End Function
+
+' Designate this project's database as a disposable suite host. The import tests refuse
+' to run in a host that lacks this property or whose property names another database.
+' Call once in the idle host, never on a primary development copy. Returns the stored
+' value so the caller can confirm it matches CurrentProject.FullName.
+Public Function DesignateDisposableHost(ByVal ignored As String) As String
+    SetDBProperty DISPOSABLE_HOST_PROPERTY, CurrentProject.FullName
+    DesignateDisposableHost = CStr(GetDBProperty(DISPOSABLE_HOST_PROPERTY))
+End Function
