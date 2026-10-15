@@ -66,6 +66,11 @@ def save_record(out, label, record):
     temporary.replace(target)
 
 
+def python_command(*args):
+    flags = ['-' + 'O' * min(sys.flags.optimize, 2)] if sys.flags.optimize else []
+    return [sys.executable, '-B', *flags, *map(str, args)]
+
+
 def qualification_checks(record):
     return {'no_error': not record.get('error') and not record.get('close_error'),
             'initial_compile': record.get('initial_compile') is True,
@@ -178,15 +183,17 @@ def supervise(command, out, label, seconds, recovery_seconds):
     if timed_out:
         record['worker_termination_error'] = kill_error
     if timed_out or code != 0:
-        record.update(qualified=False, retained_failed_host=True, disposed=False,
+        container = out/'hosts'/label
+        record.update(qualified=False, retained_failed_host=container.exists(), disposed=not container.exists(),
                       timed_out=timed_out, failed_phase=record.get('failed_phase') or record.get('active_phase'))
+        record['archived_host_available'] = bool(record.get('archive_sha256')) and (out/(label+'-host.zip')).is_file()
         record['error'] = record.get('error') or ('worker_timeout' if timed_out else 'worker_failed')
         # Save failure before recovery so even a recovery failure leaves a receipt.
         save_record(out, label, record)
         # Recovery has its own disposable process and deadline as well.
         with (out/(label+'-worker-console.txt')).open('a', encoding='utf-8') as log:
-            recovery = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--_recover',
-                str(out), label, str(recovery_seconds)], stdout=log, stderr=subprocess.STDOUT)
+            recovery = subprocess.Popen(python_command(Path(__file__).resolve(), '--_recover',
+                out, label, recovery_seconds), stdout=log, stderr=subprocess.STDOUT)
             try:
                 recovery_code = recovery.wait(timeout=recovery_seconds)
             except subprocess.TimeoutExpired:
@@ -199,7 +206,7 @@ def supervise(command, out, label, seconds, recovery_seconds):
         record = json.loads((out/(label+'.json')).read_bytes())
         record['recovery_worker'] = {'pid': recovery.pid, 'exit_code': recovery_code,
                                      'deadline_seconds': recovery_seconds}
-        record['recovery_cleanup'] = 'host retained; recursive cleanup prohibited'
+        record['recovery_cleanup'] = 'no further recursive cleanup; inspect raw-host and archive availability fields'
         save_record(out, label, record)
         raise RuntimeError(record['error'] + '; see ' + str(out/(label+'.json')))
     return record
@@ -221,10 +228,10 @@ def run(out, label, mode, filters, transport, timeout_seconds=300, recovery_seco
     config = out/(label+'-request.json')
     with config.open('x', encoding='utf-8') as file:
         json.dump({'out': str(out), 'label': label, 'mode': mode, 'filters': filters, 'transport': transport}, file)
-    command = [sys.executable, str(Path(__file__).resolve()), '--_worker', str(config)]
+    command = python_command(Path(__file__).resolve(), '--_worker', config)
     record = supervise(command, out, label, timeout_seconds, recovery_seconds)
     require(record.get('qualified') is True, 'Worker did not qualify')
-    supervise([sys.executable, str(Path(__file__).resolve()), '--_cleanup', str(config)],
+    supervise(python_command(Path(__file__).resolve(), '--_cleanup', config),
               out, label, cleanup_seconds, recovery_seconds)
     return json.loads((out/(label+'.json')).read_bytes())
 

@@ -45,11 +45,14 @@ available, recovery reports the remaining inventory and leaves unidentified
 processes alone. A recovery deadline or identity refusal requires inspection.
 
 Failed runs exit unsuccessfully and retain the host, source, logs, and available
-receipts. They never authorize recursive deletion. Successful runs archive the
+receipts. They never authorize recursive deletion. If disposal fails after a
+successful qualification, the receipt records whether raw contents remain and
+whether the closed archive is available. Successful runs archive the
 closed host, recheck qualification and inventory, and validate resolved paths
 before removing their worktree and container. Junctions and symbolic links are
 refused. These checks use explicit exceptions and remain active with `python -O`
-or `PYTHONOPTIMIZE`. Labels cannot reuse historical receipts.
+or `PYTHONOPTIMIZE`. Child workers inherit the supervisor's optimization mode.
+Labels cannot reuse historical receipts.
 
 Before native qualification, run the controlled tests without Access:
 

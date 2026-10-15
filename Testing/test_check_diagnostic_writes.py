@@ -117,6 +117,25 @@ class DriverTests(unittest.TestCase):
         self.assertIsNone(record['recovery_worker']['exit_code'])
         self.assertFalse(record['qualified'])
 
+    def test_disposal_failure_reports_actual_retention(self):
+        folder = self.out/'hosts'/'partial'
+        folder.mkdir(parents=True)
+        self.assertTrue(folder.resolve().is_relative_to(self.out.resolve()))
+        driver.save_record(self.out, 'partial', {'qualified': True, 'active_phase': 'remove_worktree', 'archive_sha256': 'saved'})
+        (self.out/'partial-host.zip').write_bytes(b'closed archive')
+        command = [sys.executable, '-c', 'import shutil,sys; shutil.rmtree(sys.argv[1]); sys.exit(7)', str(folder)]
+        with self.assertRaises(RuntimeError):
+            driver.supervise(command, self.out, 'partial', 5, 5)
+        record = json.loads((self.out/'partial.json').read_bytes())
+        self.assertFalse(record['qualified'])
+        self.assertFalse(record['retained_failed_host'])
+        self.assertTrue(record['archived_host_available'])
+
+    def test_child_optimization_matches_supervisor(self):
+        command = driver.python_command('-c', 'import sys; print(sys.flags.optimize)')
+        result = subprocess.check_output(command, text=True)
+        self.assertEqual(int(result), sys.flags.optimize)
+
     def test_recovery_refuses_reused_pid_and_wrong_image(self):
         record = {'initial_process': {'pid': 123, 'create_time': 1}}
         with patch.object(driver, 'process_create_time', return_value=2), patch.object(driver.win32api, 'OpenProcess') as opening:
