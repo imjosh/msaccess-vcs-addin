@@ -8,6 +8,7 @@ import time
 import uuid
 
 import pythoncom
+import win32com.client
 
 POLICIES = ['block', 'prefer_source', 'prefer_database', 'skip', 'decline']
 
@@ -382,7 +383,7 @@ class Cases:
                 module = project.VBComponents.Import(str(fixture.resolve()))
                 name = module.Name
                 require(name == 'clsPolicyOrphanFixture', 'Unexpected disposable class-module fixture')
-                self.app.DoCmd.Save(5, name)  # acModule; save only the owned fixture.
+                self.app.DoCmd.Save(win32com.client.constants.acModule, name)  # Save only the owned fixture.
                 module = project = None
                 seed = self.call('external', 'ExportObject', 'module', name, 'prefer_database')
                 self.outcome(seed, transferred=True)
@@ -395,7 +396,7 @@ class Cases:
                     source.write_bytes(b'\xef\xbb\xbf' + edited.encode())
                 group_before = {p.name: p.read_bytes() for p in source.parent.glob(name + '.*')}
                 history_before = self.history()
-                self.app.DoCmd.DeleteObject(5, name)  # acModule; create an actual DB orphan.
+                self.app.DoCmd.DeleteObject(win32com.client.constants.acModule, name)  # Create an actual DB orphan.
                 result = self.api('ExportByType', 'module', True, policy)
                 item.update(seed=seed, result=result, class_primary=str(source),
                             fixture_sha256=__import__('hashlib').sha256(fixture.read_bytes()).hexdigest(),
