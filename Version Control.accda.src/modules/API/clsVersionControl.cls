@@ -2057,6 +2057,7 @@ Private Function FindSourceFile(cComponent As IDbComponent, strObjectName As Str
         Case "clsDbModule":     aExtensions = Array(".bas", ".cls")
         Case "clsDbTableDef":   aExtensions = Array(".xml", ".sql")
         Case "clsDbMacro":      aExtensions = Array(".macro", ".bas")
+        Case "clsDbCommandBar": aExtensions = Array(".json")
         Case Else:              aExtensions = Array(".bas", ".cls", ".xml", ".sql")
     End Select
 

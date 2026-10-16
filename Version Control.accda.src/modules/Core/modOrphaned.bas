@@ -106,6 +106,8 @@ Private Sub ScanFolderForOrphans(cType As IDbComponent, strFolder As String, _
     Dim colSubFolders As New Collection
     Dim varItem As Variant
 
+    ' A prior group cleanup can remove a folder captured by its parent's scan.
+    If Not FSO.FolderExists(strFolder) Then Exit Sub
     ' Single-pass Win32 API scan for files and subfolders
     ScanFolderContents strFolder, colFiles, colSubFolders
 
@@ -113,19 +115,27 @@ Private Sub ScanFolderForOrphans(cType As IDbComponent, strFolder As String, _
     ' excluded from the scan progress bar (see modExport - the bar is sized to the object
     ' count only), so we do not increment progress here.
     For Each varItem In colFiles
-        CompareToIndex cType, CStr(varItem), dExtensions, dBaseNames
+        ' A complete unchanged group may already have removed this companion.
+        If FSO.FileExists(CStr(varItem)) Then
+            CompareToIndex cType, CStr(varItem), dExtensions, dBaseNames
+        End If
     Next varItem
 
     ' Recurse into subfolders
     For Each varItem In colSubFolders
-        ScanFolderForOrphans cType, CStr(varItem), dExtensions, dBaseNames
-        ' Remove subfolder if empty after cleanup
-        If FSO.GetFolder(CStr(varItem)).Files.Count = 0 _
-            And FSO.GetFolder(CStr(varItem)).SubFolders.Count = 0 Then
-            LogUnhandledErrors
-            On Error Resume Next
-            FSO.DeleteFolder CStr(varItem), True
-            CatchAny eelWarning, "Unable to delete empty folder: " & CStr(varItem), ModuleName & ".ScanFolderForOrphans"
+        ' Removing an unchanged primary also removes its nested artifact directory.
+        If FSO.FolderExists(CStr(varItem)) Then
+            ScanFolderForOrphans cType, CStr(varItem), dExtensions, dBaseNames
+            ' Recursion may itself have removed the captured directory.
+            If FSO.FolderExists(CStr(varItem)) Then
+                If FSO.GetFolder(CStr(varItem)).Files.Count = 0 _
+                    And FSO.GetFolder(CStr(varItem)).SubFolders.Count = 0 Then
+                    LogUnhandledErrors
+                    On Error Resume Next
+                    FSO.DeleteFolder CStr(varItem), True
+                    CatchAny eelWarning, "Unable to delete empty folder: " & CStr(varItem), ModuleName & ".ScanFolderForOrphans"
+                End If
+            End If
         End If
     Next varItem
 
@@ -149,6 +159,8 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
     Dim blnUnchanged As Boolean
     Dim cEntry As clsVCSIndexItem
 
+    ' A captured companion may have been deleted with its complete primary group.
+    If Not FSO.FileExists(strFilePath) Then Exit Sub
     ' Get base name and file extension to build primary source file name
     strFileName = FSO.GetFileName(strFilePath)
     strBaseName = FSO.GetBaseName(strFileName)
@@ -184,7 +196,13 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
                         Else
                             DeleteFile strFilePath, True
                         End If
-                        VCSIndex.Remove cType, strFileName
+                        If Operation.ErrorLevel < eelCritical Then
+                            VCSIndex.Remove cType, strFileName
+                            ' Do not classify captured companion paths as new orphans.
+                            If InteractionIsNonInteractive() And Not dBaseNames.Exists(strBaseName) Then
+                                dBaseNames.Add strBaseName, vbNullString
+                            End If
+                        End If
                     Else
                         ' File properties different from index. Add as a conflict to resolve.
                         ' (This can happen when the last export was during a different daylight savings time

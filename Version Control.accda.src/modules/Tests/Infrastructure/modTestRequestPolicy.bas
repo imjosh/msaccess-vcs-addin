@@ -363,3 +363,166 @@ Public Function ClaimRequestIdentityProbe(ByVal strOperationId As String) As Str
         ClaimRequestIdentityProbe = "{""success"":true}"
     End If
 End Function
+
+'---------------------------------------------------------------------------------------
+' Procedure : RequestPolicyF4Probe
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Exercise actual form preflight in a disposable user database. An owned
+'           : request supplies its policy and token; retired activation is never used.
+'---------------------------------------------------------------------------------------
+'
+Public Function RequestPolicyF4Probe(ByVal strCase As String, ByVal strCallbackInfo As String, _
+    Optional ByVal strPolicy As String = "block") As String
+
+    Dim d As New Dictionary
+    Dim cPrior As clsOperationRequest
+    Dim cRequest As clsOperationRequest
+    Dim cRoot As clsRootOperationLease
+    Dim cEmitter As clsMCP
+    Dim intPolicy As eDecisionPolicy
+    Dim strRefusal As String
+    Dim strToken As String
+    Dim strError As String
+    Dim lngError As Long
+    Dim blnHadForm As Boolean
+    Dim blnFormCaptured As Boolean
+    Dim intPriorPolicy As eDecisionPolicy
+    Dim blnPriorFullBuild As Boolean
+    Dim strPriorSource As String
+    Dim strPriorToken As String
+    Dim strPriorResult As String
+
+    Set cPrior = IncomingOperationRequest
+    InitializeRequestErrors "RequestPolicyF4Probe"
+    On Error GoTo Failed
+    If strCase = "inspect" Then
+        Set d = F4OwnerSnapshot()
+        GoTo CleanUp
+    End If
+    If Operation.IsActive Or TimerIsPending Then
+        RequestPolicyF4Probe = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+        Exit Function
+    End If
+    strRefusal = ParsePolicyOrRefuse(strPolicy, intPolicy)
+    If Len(strRefusal) > 0 Then Err.Raise vbObjectError + 2470, "RequestPolicyF4Probe", strRefusal
+    If strCase = "previous_journal" Then
+        Set cRequest = CreateOperationRequest(eosMCPTool, strCallbackInfo)
+        Set IncomingOperationRequest = cRequest
+        Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
+        If cRoot Is Nothing Then Err.Raise vbObjectError + 2471, "RequestPolicyF4Probe", Operation.AdmissionRefusal
+        Operation.RecordDecision NewDecision(DECISION_REQUIRED, "Previous F4 operation", _
+            "This prior operation owns a different decision.", DECISION_BLOCKED)
+        cRoot.Complete eorSuccess
+        Set d("completion") = Operation.LastCompletion
+        Set d("after") = F4OwnerSnapshot()
+        GoTo CleanUp
+    End If
+
+    blnHadForm = IsLoaded(acForm, "frmVCSMain", False)
+    If strCase = "active_form" Then
+        ' Configure the attempted form request before the competing owner starts.
+        DoCmd.OpenForm "frmVCSMain", , , , , acHidden
+    ElseIf strCase <> "full_build_confirmation" Then
+        Err.Raise vbObjectError + 2472, "RequestPolicyF4Probe", "Unknown F4 probe case"
+    End If
+
+    If strCase = "full_build_confirmation" Then
+        Set cRequest = CreateOperationRequest(eosUserInterface, strCallbackInfo)
+        Set IncomingOperationRequest = cRequest
+        Set cRoot = Operation.TryBeginRoot(eotBuild, intPolicy)
+        If cRoot Is Nothing Then Err.Raise vbObjectError + 2471, "RequestPolicyF4Probe", Operation.AdmissionRefusal
+        strToken = cRoot.DetachForContinuation()
+        ' Match the public Build wrapper's acquisition-before-Form_Load handoff.
+        DoCmd.OpenForm "frmVCSMain", , , , , acHidden
+    End If
+
+    With Form_frmVCSMain
+        intPriorPolicy = .intDecisionPolicy
+        blnPriorFullBuild = .chkFullBuild
+        strPriorSource = .strSourcePath
+        strPriorToken = .strRequestRootToken
+        strPriorResult = .strStartResult
+        blnFormCaptured = True
+        .chkFullBuild = True
+        .strSourcePath = vbNullString
+        .intDecisionPolicy = intPolicy
+        .strRequestRootToken = vbNullString
+        If strCase = "active_form" Then
+            Set cRequest = CreateOperationRequest(eosMCPTool, strCallbackInfo)
+            Set IncomingOperationRequest = cRequest
+            Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
+            If cRoot Is Nothing Then Err.Raise vbObjectError + 2471, "RequestPolicyF4Probe", Operation.AdmissionRefusal
+            Operation.RecordDecision NewDecision(DECISION_REQUIRED, "Active F4 owner", _
+                "The refused requests must not replace this owner's journal.", DECISION_BLOCKED)
+            Set cEmitter = MCP
+            Set d("before") = F4OwnerSnapshot()
+            Set IncomingOperationRequest = CreateOperationRequest(eosUserInterface)
+            d("public_refusal") = VCS.MergeBuild("decline")
+            d("ribbon_accepted") = HandleRibbonCommand("btnBuild", Options.GetExportFolder)
+            .cmdBuild_Click
+            Set d("after") = F4OwnerSnapshot()
+            d("attempts_before_completion") = cEmitter.GetDiagnosticData()("terminalPostAttempts")
+            cRoot.Complete eorSuccess
+            d("attempts_after_completion") = cEmitter.GetDiagnosticData()("terminalPostAttempts")
+        Else
+            .strRequestRootToken = strToken
+            d("source_before_form_entry") = Operation.SourceLabel
+            d("policy_before_form_entry") = Operation.PolicyName
+            d("valid_source_options") = FolderHasVcsOptionsFile(Options.GetExportFolder)
+            ' If a regression bypasses the confirmation, this control stops the real
+            ' timer handoff. A 2410 result fails qualification; it is not coverage.
+            FailNamedTimerForTest "Build"
+            .cmdBuild_Click
+            d("outcome") = .strStartResult
+            Set d("completion") = Operation.LastCompletion
+            Set d("after") = F4OwnerSnapshot()
+        End If
+    End With
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    FailNamedTimerForTest vbNullString
+    If blnFormCaptured And IsLoaded(acForm, "frmVCSMain", False) Then
+        With Form_frmVCSMain
+            .intDecisionPolicy = intPriorPolicy
+            .chkFullBuild = blnPriorFullBuild
+            .strSourcePath = strPriorSource
+            .strRequestRootToken = strPriorToken
+            .strStartResult = strPriorResult
+        End With
+        If Not blnHadForm Then DoCmd.Close acForm, "frmVCSMain", acSaveNo
+    End If
+    Set IncomingOperationRequest = cPrior
+    If lngError <> 0 Then
+        d("probe_error") = strError
+        d("probe_error_number") = lngError
+    End If
+    RequestPolicyF4Probe = ConvertToJson(d)
+    Exit Function
+Failed:
+    strError = Err.Description
+    lngError = Err.Number
+    Resume CleanUp
+End Function
+
+Private Function F4OwnerSnapshot() As Dictionary
+    Dim d As Dictionary
+    Set d = ParseJson(ModeOnlyScopeProbe("snapshot"))
+    d("active") = Operation.IsActive
+    d("pending") = TimerIsPending
+    d("host") = CurrentProject.FullName
+    Set d("timer") = RequestTimerSnapshot()
+    If IsLoaded(acForm, "frmVCSMain", False) Then
+        With Form_frmVCSMain
+            d("form_policy") = .intDecisionPolicy
+            d("form_full_build") = CBool(.chkFullBuild)
+            d("form_source_path") = .strSourcePath
+            d("form_request_token") = .strRequestRootToken
+            d("form_start_result") = .strStartResult
+            d("form_merge_enabled") = .chkFullBuild.Enabled
+        End With
+    End If
+    Set F4OwnerSnapshot = d
+End Function

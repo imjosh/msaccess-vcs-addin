@@ -745,6 +745,13 @@ End Function
 
 ' Propagate a completion-construction failure to the synchronous test caller.
 ' Preserve its primary decision/runner error and available test results.
+'---------------------------------------------------------------------------------------
+' Procedure : OverlayTestCompletionFailure
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Preserve test results while reporting completion-construction failure.
+'---------------------------------------------------------------------------------------
+'
 Public Function OverlayTestCompletionFailure(ByVal strJson As String, _
     ByVal dCompletion As Dictionary) As String
     Dim dResult As Object

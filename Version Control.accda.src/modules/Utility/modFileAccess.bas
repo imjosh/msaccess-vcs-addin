@@ -1413,6 +1413,13 @@ Public Function PathSep() As String
 End Function
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : WriteFileVerified
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Write a file and report errors raised by the underlying writer.
+'---------------------------------------------------------------------------------------
+'
 Public Function WriteFileVerified(strText As String, strPath As String, ByRef strError As String) As Boolean
 
     Dim strFolder As String

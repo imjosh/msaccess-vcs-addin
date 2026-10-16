@@ -8,6 +8,7 @@ driver preserves the persistent operation-ID ledger and owns only its new host.
 """
 import argparse
 import gc
+import hashlib
 import importlib.util
 import json
 import os
@@ -79,6 +80,34 @@ def run(evidence, label):
             require("probe_error" not in result, {case: result})
             return result
 
+        def f4_probe(case, policy="block"):
+            identity = "f4-policy-" + uuid.uuid4().hex
+            start = len(endpoint.callbacks)
+            result = decode(app.Run(library + ".RequestPolicyF4Probe", case, endpoint.info(identity), policy))
+            until = time.monotonic() + 0.2
+            while time.monotonic() < until:
+                pythoncom.PumpWaitingMessages()
+                time.sleep(0.01)
+            key = "f4_" + case + "_" + policy
+            record["cases"][key] = {
+                "operation_id": identity, "result": result,
+                "callbacks": endpoint.callbacks[start:],
+            }
+            save()
+            require("probe_error" not in result, {key: result})
+            return identity, result, record["cases"][key]["callbacks"]
+
+        def terminal_callbacks(callbacks):
+            return [c for c in callbacks if c["type"] in ("complete", "error", "cancelled")]
+
+        def host_files():
+            return {
+                "host_path": str(app.CurrentProject.FullName),
+                "host_exists": (folder / "fixture.accdb").is_file(),
+                "top_level": sorted(p.name for p in folder.iterdir() if p.suffix.lower() != ".laccdb"),
+                "backups": sorted(str(p.relative_to(folder)) for p in folder.rglob("*_VCSBackup*")),
+            }
+
         def api(method, *arguments):
             raw = app.Run(library + ".API", method, *arguments)
             raw = raw[0] if isinstance(raw, tuple) else raw
@@ -102,6 +131,105 @@ def run(evidence, label):
         require(json.loads(retired["mode"])["success"] is False, retired)
         require(json.loads(retired["mode"])["effective_mode"] == 0, retired)
         require(json.loads(retired["clear"])["success"] is True, retired)
+        # Full-build confirmation must be reached as a UI request. The test
+        # helper acquires a request-owned policy before entering the actual form.
+        f4_before = host_files()
+        for policy in ("block", "decline", "prefer_source", "prefer_database", "skip"):
+            identity, value, callbacks = f4_probe("full_build_confirmation", policy)
+            completion = value["completion"]
+            terminals = terminal_callbacks(callbacks)
+            require(value["source_before_form_entry"] == "user_interface", value)
+            require(value["policy_before_form_entry"] == policy and value["valid_source_options"] is True, value)
+            require(completion["operation_id"] == identity and completion["initiating_source"] == "user_interface", completion)
+            require(completion["decision_policy"] == policy and completion["success"] is False, completion)
+            require(completion.get("errorNumber") != -2147219094, completion)
+            decisions = completion.get("decisions", [])
+            require(len(decisions) == 1 and decisions[0]["title"].startswith("Build "), completion)
+            require(decisions[0].get("detail") != "file_dialog", completion)
+            if policy == "decline":
+                require(completion["type"] == "cancelled" and decisions[0]["resolution"] == "declined", completion)
+            else:
+                require(completion["error_pattern"] == "decision_required" and decisions[0]["resolution"] == "decision_required", completion)
+            require(value["after"]["active"] is False and value["after"]["pending"] is False, value)
+            require(value["after"]["mode"] == 0 and value["after"]["decisions"] == [], value)
+            require(len(terminals) == 1 and terminals[0]["operation_id"] == identity, terminals)
+            require(terminals[0]["decisions"] == decisions, terminals)
+            require(host_files() == f4_before, {"before": f4_before, "after": host_files()})
+        record["f4_full_build_files"] = {"before": f4_before, "after": host_files()}
+
+        identity, active_form, callbacks = f4_probe("active_form", "decline")
+        require(active_form["before"] == active_form["after"], active_form)
+        require(json.loads(active_form["public_refusal"])["error_pattern"] == "operation_already_running", active_form)
+        require(active_form["ribbon_accepted"] is False, active_form)
+        require(active_form["attempts_before_completion"] == 0 and active_form["attempts_after_completion"] == 1, active_form)
+        terminals = terminal_callbacks(callbacks)
+        require(len(terminals) == 1 and terminals[0]["operation_id"] == identity, terminals)
+        require(len(terminals[0]["decisions"]) == 1 and terminals[0]["decisions"][0]["title"] == "Active F4 owner", terminals)
+
+        # Preserve the real full-export index while making source-folder discovery
+        # fail. A merge-not-available refusal or a started real merge fails this check.
+        source = Path(api("GetExportFolder"))
+        options_path = source / "vcs-options.json"
+        held_options = source / "vcs-options.f4-held.json"
+        index_paths = sorted(source.glob("vcs-index.*"))
+        require(options_path.is_file() and not held_options.exists() and index_paths, str(source))
+        index_before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in index_paths}
+        prior_id, prior, prior_callbacks = f4_probe("previous_journal")
+        require(len(prior["completion"]["decisions"]) == 1 and prior["completion"]["decisions"][0]["title"] == "Previous F4 operation", prior)
+        require(prior["after"]["decisions"] == [] and prior["after"]["active"] is False, prior)
+        require(len(terminal_callbacks(prior_callbacks)) == 1, prior_callbacks)
+        missing_id = "f4-missing-folder-" + uuid.uuid4().hex
+        callback_start = len(endpoint.callbacks)
+        missing = {"operation_id": missing_id, "previous_operation_id": prior_id, "index_before": index_before}
+        record["f4_missing_folder"] = missing
+        missing_files = host_files()
+        options_path.replace(held_options)
+        missing["source_options_absent_before_dispatch"] = not options_path.exists()
+        try:
+            missing["admission"] = decode(app.Run(library + ".APIAsync", endpoint.info(missing_id), "MergeBuild", "block"))
+            require(missing["admission"].get("async") is True, missing)
+            deadline = time.monotonic() + 30
+            terminals = []
+            while time.monotonic() < deadline:
+                pythoncom.PumpWaitingMessages()
+                terminals = terminal_callbacks(endpoint.callbacks[callback_start:])
+                if terminals:
+                    break
+                time.sleep(0.02)
+            # Allow any incorrect duplicate terminal delivery to become observable.
+            until = time.monotonic() + 0.2
+            while time.monotonic() < until:
+                pythoncom.PumpWaitingMessages()
+                time.sleep(0.01)
+            terminals = terminal_callbacks(endpoint.callbacks[callback_start:])
+            missing["callbacks"] = endpoint.callbacks[callback_start:]
+            missing["terminals"] = terminals
+            save()
+            require(len(terminals) == 1, missing)
+            terminal = terminals[0]
+            require(terminal["operation_id"] == missing_id and terminal["initiating_source"] == "mcp", terminal)
+            require(terminal["success"] is False and terminal["error_pattern"] == "decision_required", terminal)
+            require(terminal["decision_policy"] == "block", terminal)
+            decisions = terminal.get("decisions", [])
+            require(len(decisions) == 1 and decisions[0]["detail"] == "file_dialog", terminal)
+            require(decisions[0]["kind"] == "decision_required" and decisions[0]["resolution"] == "blocked", terminal)
+            require(decisions[0]["title"] != "Previous F4 operation", terminal)
+            require(not options_path.exists(), "Missing-folder preflight unexpectedly recreated source options")
+            missing["index_after"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in index_paths}
+            require(missing["index_after"] == index_before, missing)
+        finally:
+            if options_path.exists():
+                options_path.replace(source / "vcs-options.f4-unexpected.json")
+            if held_options.exists():
+                held_options.replace(options_path)
+        _, missing["after"], _ = f4_probe("inspect")
+        require(missing["after"]["active"] is False and missing["after"]["pending"] is False, missing)
+        require(missing["after"]["mode"] == 0 and missing["after"]["decisions"] == [], missing)
+        require(missing["after"].get("form_merge_enabled") is True, missing)
+        require(host_files() == missing_files, {"before": missing_files, "after": host_files()})
+        record["checks"]["f4_preflight_ownership"] = True
+        save()
+
         for case in ("active_isolation", "cancel_target", "stale_continuation"):
             value = probe(case)
             require(value["before"] == value["after"], {case: value})

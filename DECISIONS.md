@@ -115,13 +115,19 @@ Table definitions and their data/macros form one conflict plan before transfer.
 
 **Performance assessment**: Matched 500-query fixtures retain cold and repeated
 export/import distributions, actual contents, and independently parsed index
-versions. Preliminary repeated-call medians were 148 ms export and 206 ms import,
-against 134 ms and 198 ms on the legacy baseline. The early cold comparison warmed
-the baseline through its setter outside the timed call, so it cannot attribute
-the cold difference to content checks. Qualification measures the complete policy
-request, including the historical setter and cleanup, and retains transfer-only
-timings separately. The April JSON-index estimates do not describe the current
-binary-index implementation. See the UP-004 qualification record for exact heads.
+versions. Complete-policy-request medians were 218 ms export and 296 ms import
+on repeated calls, against 148 ms and 202 ms on the legacy baseline. Cold-call
+medians were 430/510 ms against 368/444 ms. The baseline boundary includes its
+setter and cleanup; transfer-only timings are retained separately. Current
+omitted-policy diagnostic medians were 159/204 ms repeated and 362/400 ms cold.
+Thus explicit protection adds about 59/91 ms on repeated calls in this sample.
+Logs attribute about 20 ms to index loading, 20 ms to import index saving, and
+up to 10 ms to complete-content comparison. Other request/translation work and
+runtime variation remain in the untimed remainder; SHA call counts did not grow
+between the two candidate checkpoints. The earlier cold comparison warmed the
+baseline through an untimed setter and is retained as preliminary evidence.
+The April JSON-index estimates do not describe the current binary index. See
+the UP-004 qualification record for distributions, exact heads and limitations.
 
 **What this rules out**: Explicit policies cannot silently bypass unsupported
 comparisons, inherit an earlier request's policy, or automatically retry a blocked

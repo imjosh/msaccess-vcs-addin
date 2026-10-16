@@ -251,3 +251,74 @@ ErrHandler:
     strErr = Err.Description
     Resume CleanUp
 End Sub
+
+
+Public Sub TestUnchangedIndexedOrphanGroupsRemoveNestedArtifactsWithoutFalseSkips()
+    On Error GoTo ErrHandler
+    Dim cPriorIndex As clsVCSIndex
+    Dim cComponent As IDbComponent
+    Dim dCategories As Dictionary
+    Dim varType As Variant
+    Dim strFolder As String
+    Dim strPriorExport As String
+    Dim strPrimary As String
+    Dim strArtifact As String
+    Dim strNested As String
+    Dim lngScope As Long
+    Dim lngErr As Long
+    Dim strErr As String
+
+    Set cPriorIndex = VCSIndex
+    strPriorExport = Options.ExportFolder
+    strFolder = GetTempFolder("VCSF1OrphanScan")
+    Options.ExportFolder = strFolder
+    lngScope = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
+    For Each varType In Array(edbQuery, edbCommandBar, edbTheme)
+        Set VCSIndex = New clsVCSIndex
+        Set dCategories = New Dictionary
+        VCSIndex.Conflicts.Initialize dCategories, eatExport
+        Select Case CLng(varType)
+            Case edbQuery
+                Set cComponent = New clsDbQuery
+                strPrimary = cComponent.BaseFolder & "nested" & PathSep & "F1AbsentQuery.sql"
+                strArtifact = SwapExtension(strPrimary, "json")
+            Case edbCommandBar
+                Set cComponent = New clsDbCommandBar
+                strPrimary = cComponent.BaseFolder & "nested" & PathSep & "F1AbsentMenu.json"
+                strArtifact = vbNullString
+                strNested = FSO.GetParentFolderName(strPrimary) & PathSep & "F1AbsentMenu_Images"
+                WriteFile "unchanged picture", strNested & PathSep & "more" & PathSep & "Button.bmp"
+            Case edbTheme
+                Set cComponent = New clsDbTheme
+                strPrimary = cComponent.BaseFolder & "nested" & PathSep & "F1AbsentTheme.thmx"
+                strArtifact = vbNullString
+                strNested = FSO.GetParentFolderName(strPrimary) & PathSep & "F1AbsentTheme"
+                WriteFile "unchanged theme XML", strNested & PathSep & "theme" & PathSep & "nested" & PathSep & "theme1.xml"
+        End Select
+        WriteFile "unchanged primary fixture", strPrimary
+        If Len(strArtifact) > 0 Then WriteFile "unchanged companion fixture", strArtifact
+        VCSIndex.Item(cComponent, strPrimary).SourceFilesHash = VCSIndex.SingleObjectComparisonHash(cComponent, strPrimary)
+        ' Invoke the real snapshot scanner, not a standalone deletion helper.
+        ClearOrphanedSourceFiles cComponent
+        TestAssert Not FSO.FileExists(strPrimary), "unchanged indexed primary is removed"
+        If Len(strArtifact) > 0 Then TestAssert Not FSO.FileExists(strArtifact), "captured companion is removed with its group"
+        If CLng(varType) <> edbQuery Then TestAssert Not FSO.FolderExists(strNested), "captured nested artifact folder is removed"
+        TestAssert VCSIndex.Conflicts.Count = 0, "deleted snapshot entries are not reclassified as untracked conflicts"
+        TestAssert VCSIndex.Conflicts.SkippedTransferCount = 0, "unchanged group cleanup creates no false preserved transfer"
+        TestAssert Not VCSIndex.Exists(cComponent, strPrimary), "completed orphan cleanup removes its history"
+        TestAssert Operation.ErrorLevel < eelError, "deleted captured folders produce no path-not-found failure"
+    Next varType
+
+CleanUp:
+    On Error Resume Next
+    Set VCSIndex = cPriorIndex
+    Options.ExportFolder = strPriorExport
+    If lngScope <> 0 Then Operation.CloseInteractionScope lngScope
+    If Len(strFolder) > 0 Then If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    If lngErr <> 0 Then TestAssert False, "orphan snapshot scan " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
