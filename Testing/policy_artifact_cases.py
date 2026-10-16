@@ -43,6 +43,29 @@ def menu_fixture(cases, name):
     return menu, images
 
 
+def set_native_command_bar_picture(cases, name, picture, item):
+    helper = Path(__file__).with_name('Fixtures') / 'modules/vcs_policy_artifact_fixture.bas'
+    project = next(p for p in cases.app.VBE.VBProjects
+                   if Path(p.FileName).resolve() == cases.host.resolve())
+    module = project.VBComponents.Import(str(helper.resolve()))
+    require(module.Name == 'vcs_policy_artifact_fixture', 'Unexpected native picture fixture module')
+    cases.app.DoCmd.Save(win32com.client.constants.acModule, module.Name)
+    item['native_picture_helper'] = {'module': module.Name,
+                                     'fixture_sha256': hashlib.sha256(helper.read_bytes()).hexdigest(),
+                                     'host': str(cases.host)}
+    module = project = None
+    proof = cases.folder / (cases.host.stem + '-assigned-picture.bmp')
+    result = cases.app.Run('F1SetCommandBarPicture', str(cases.host), name, str(picture), str(proof))
+    result = result[0] if isinstance(result, tuple) else result
+    require(result is True, f'Native picture fixture failed: {result}')
+    expected = hashlib.sha256(picture.read_bytes()).hexdigest()
+    actual = hashlib.sha256(proof.read_bytes()).hexdigest()
+    item['native_picture_assignment'] = {'expected_sha256': expected, 'actual_sha256': actual,
+                                          'proof': str(proof)}
+    cases.save()
+    require(actual == expected, 'Access-local fixture did not assign the requested actual picture')
+
+
 def command_bars(cases, transports):
     for transport in transports:
         for direction in ['import', 'export']:
@@ -61,13 +84,9 @@ def command_bars(cases, transports):
                 db_picture.write_bytes(bitmap_variant(baseline, 0x40))
                 picture.write_bytes(bitmap_variant(baseline, 0x80))
                 source_before = digest_tree(menu.parent)
-                # WIA supplies a native IPictureDisp without touching the clipboard.
-                image = win32com.client.Dispatch('WIA.ImageFile')
-                image.LoadFile(str(db_picture))
-                button = cases.app.CommandBars(name).Controls(1)
-                button.Picture = image.FileData.Picture
-                button.BuiltInFace = False
-                button = image = None
+                # Load/assign IPictureDisp inside Access; out-of-process assignment
+                # cannot reliably marshal Office Picture properties.
+                set_native_command_bar_picture(cases, name, db_picture, item)
                 history_before = cases.history()
                 result = cases.call(transport, direction.title() + 'Object', 'command_bar', name, policy)
                 item.update(seed_import=imported, seed_export=seeded, result=result,

@@ -45,7 +45,8 @@ def run(args):
               'coverage': {'case_set': args.case_set, 'transports': args.transports,
                            'qualified_types_if_entire_run_passes':
                                (['query', 'db_property', 'table_data', 'table'] if args.case_set in ['all', 'core'] else []) +
-                               (['command_bar', 'theme', 'table_data_macro', 'table'] if args.case_set in ['all', 'artifacts'] and not args.legacy_control else []),
+                               (['command_bar', 'theme', 'table_data_macro', 'table'] if args.case_set in ['all', 'artifacts'] and not args.legacy_control else []) +
+                               (['query', 'table', 'table_data'] if args.case_set == 'deletions' else []),
                            'grouped_table_macro_transports': ['external'],
                            'other_types': 'Unqualified by this driver; report separately.'}}
     def save():
@@ -66,7 +67,8 @@ def run(args):
             cases.matrix(args.transports)
             if not args.legacy_control:
                 cases.cycles_and_migration()
-                cases.deletion_matrix()
+        if not args.legacy_control and args.case_set in ['all', 'core', 'deletions']:
+            cases.deletion_matrix()
         if not args.legacy_control and args.case_set in ['all', 'artifacts']:
             run_artifacts(cases, args.transports)
         record['verified'] = True
@@ -104,9 +106,10 @@ if __name__ == '__main__':
     parser.add_argument('--client-source', type=Path, required=True)
     parser.add_argument('--transports', nargs='+', choices=['external', 'async', 'mcp'], default=['external', 'async', 'mcp'])
     parser.add_argument('--legacy-control', action='store_true')
-    parser.add_argument('--case-set', choices=['all', 'core', 'artifacts'], default='all')
+    parser.add_argument('--case-set', choices=['all', 'core', 'artifacts', 'deletions'], default='all')
     args = parser.parse_args()
     require(Path(args.label).name == args.label, 'Label must be one path component')
+    require(not (args.legacy_control and args.case_set in ['deletions', 'artifacts']), 'Legacy control requires core or all cases')
     require(not args.evidence.resolve().is_relative_to(Path(__file__).resolve().parents[1]), 'Keep evidence outside checkout')
     sys.path.insert(0, str(args.client_source.resolve()))
     run(args)

@@ -158,6 +158,20 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
     Dim strHash As String
     Dim blnUnchanged As Boolean
     Dim cEntry As clsVCSIndexItem
+    Dim colFileExtensions As Collection
+    Dim strPrimaryExtension As String
+
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    If InteractionIsNonInteractive() Then
+        ' Dictionary items are empty membership values, not positional extensions.
+        ' The component collection defines which real file owns the complete group.
+        Set colFileExtensions = cType.FileExtensions
+        If colFileExtensions.Count = 0 Then Exit Sub
+        strPrimaryExtension = CStr(colFileExtensions(1))
+    Else
+        ' Keep the established interactive cleanup path outside this policy repair.
+        strPrimaryExtension = CStr(dExtensions(0))
+    End If
 
     ' A captured companion may have been deleted with its complete primary group.
     If Not FSO.FileExists(strFilePath) Then Exit Sub
@@ -173,7 +187,7 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
         If Not dBaseNames.Exists(strBaseName) Then
 
             ' See if this is the primary file extension for this component type
-            If StrComp(strExt, dExtensions(0), vbTextCompare) = 0 Then
+            If StrComp(strExt, strPrimaryExtension, vbTextCompare) = 0 Then
 
                 ' Object not found in database. Check the index
                 If VCSIndex.Exists(cType, strFileName) Then
@@ -223,9 +237,9 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
             Else
                 ' Not the primary extension for this component type.
                 ' If the primary source file exists, we will let that file handle evaluate any conflicts
-                If Not FSO.FileExists(SwapExtension(strFilePath, CStr(dExtensions(0)))) Then
+                If Not FSO.FileExists(SwapExtension(strFilePath, strPrimaryExtension)) Then
                     If InteractionIsNonInteractive() Then
-                        CompareOrphanedCompanion cType, strFilePath, CStr(dExtensions(0))
+                        CompareOrphanedCompanion cType, strFilePath, strPrimaryExtension
                         ' One logical orphan group may have several companion files.
                         ' Its complete-content decision owns the remaining members.
                         If Not dBaseNames.Exists(strBaseName) Then dBaseNames.Add strBaseName, vbNullString
@@ -239,6 +253,8 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
         End If
     End If
 
+    CatchAny eelCritical, T("Unable to classify the orphan source content safely."), _
+        ModuleName & ".CompareToIndex", True, True
 End Sub
 
 

@@ -279,9 +279,13 @@ Public Sub TestUnchangedIndexedOrphanGroupsRemoveNestedArtifactsWithoutFalseSkip
     Dim lngScope As Long
     Dim lngErr As Long
     Dim strErr As String
+    Dim blnIndexCaptured As Boolean
+    Dim blnOptionsCaptured As Boolean
 
     Set cPriorIndex = VCSIndex
+    blnIndexCaptured = True
     strPriorExport = Options.ExportFolder
+    blnOptionsCaptured = True
     strFolder = GetTempFolder("VCSF1OrphanScan")
     Options.ExportFolder = strFolder
     lngScope = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
@@ -323,11 +327,89 @@ Public Sub TestUnchangedIndexedOrphanGroupsRemoveNestedArtifactsWithoutFalseSkip
 
 CleanUp:
     On Error Resume Next
-    Set VCSIndex = cPriorIndex
-    Options.ExportFolder = strPriorExport
+    Err.Clear
+    If blnIndexCaptured Then Set VCSIndex = cPriorIndex
+    If Err.Number <> 0 Then TestAssert False, "orphan regression index cleanup: " & Err.Number & ": " & Err.Description
+    Err.Clear
+    If blnOptionsCaptured Then Options.ExportFolder = strPriorExport
+    If Err.Number <> 0 Then TestAssert False, "orphan regression option cleanup: " & Err.Number & ": " & Err.Description
+    Err.Clear
     If lngScope <> 0 Then Operation.CloseInteractionScope lngScope
+    If Err.Number <> 0 Then TestAssert False, "orphan regression scope cleanup: " & Err.Number & ": " & Err.Description
+    Err.Clear
     If Len(strFolder) > 0 Then If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    If Err.Number <> 0 Then TestAssert False, "orphan regression file cleanup: " & Err.Number & ": " & Err.Description
     If lngErr <> 0 Then TestAssert False, "orphan snapshot scan " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestTrackedChangedOrphanUsesComponentPrimaryExtension()
+    On Error GoTo ErrHandler
+    Dim cPriorIndex As clsVCSIndex
+    Dim cComponent As IDbComponent
+    Dim dCategories As Dictionary
+    Dim strFolder As String
+    Dim strPriorExport As String
+    Dim strPrimary As String
+    Dim strCompanion As String
+    Dim strBaseline As String
+    Dim lngScope As Long
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim blnIndexCaptured As Boolean
+    Dim blnOptionsCaptured As Boolean
+
+    Set cPriorIndex = VCSIndex
+    blnIndexCaptured = True
+    strPriorExport = Options.ExportFolder
+    blnOptionsCaptured = True
+    strFolder = GetTempFolder("VCSF1TrackedOrphan")
+    Options.ExportFolder = strFolder
+    lngScope = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
+    Set VCSIndex = New clsVCSIndex
+    Set dCategories = New Dictionary
+    VCSIndex.Conflicts.Initialize dCategories, eatExport
+    Set cComponent = New clsDbQuery
+    strPrimary = cComponent.BaseFolder & "F1TrackedAbsentQuery.sql"
+    strCompanion = SwapExtension(strPrimary, "json")
+    WriteFile "SELECT 1 AS FixtureValue;", strPrimary
+    WriteFile "unchanged metadata", strCompanion
+    strBaseline = VCSIndex.SingleObjectComparisonHash(cComponent, strPrimary)
+    VCSIndex.Item(cComponent, strPrimary).SourceFilesHash = strBaseline
+    WriteFile "SELECT 99 AS FixtureValue;", strPrimary
+    ClearOrphanedSourceFiles cComponent
+    TestAssert VCSIndex.Conflicts.Count = 1, "a complete changed tracked group creates exactly one conflict"
+    With VCSIndex.Conflicts.Item(strPrimary)
+        TestAssert .Tracked, "existing canonical SQL history is retained when metadata scans first"
+        TestAssert .Classification = "tracked_changed_orphan", "a tracked changed group never becomes untracked"
+        TestAssert .ActionType = ercDelete, "changed tracked source uses the deletion policy table"
+    End With
+    VCSIndex.Conflicts.ResolveOrPrompt
+    TestAssert Operation.DecisionBlocked, "block policy requires a decision for changed tracked orphan deletion"
+    TestAssert Not VCSIndex.Conflicts.ApproveResolutions, "no conflict resolution is approved"
+    TestAssert FSO.FileExists(strPrimary) And FSO.FileExists(strCompanion), "the complete changed group is preserved"
+    TestAssert VCSIndex.Item(cComponent, strPrimary).SourceFilesHash = strBaseline, "blocked group history is not advanced"
+
+CleanUp:
+    On Error Resume Next
+    Err.Clear
+    If blnIndexCaptured Then Set VCSIndex = cPriorIndex
+    If Err.Number <> 0 Then TestAssert False, "orphan regression index cleanup: " & Err.Number & ": " & Err.Description
+    Err.Clear
+    If blnOptionsCaptured Then Options.ExportFolder = strPriorExport
+    If Err.Number <> 0 Then TestAssert False, "orphan regression option cleanup: " & Err.Number & ": " & Err.Description
+    Err.Clear
+    If lngScope <> 0 Then Operation.CloseInteractionScope lngScope
+    If Err.Number <> 0 Then TestAssert False, "orphan regression scope cleanup: " & Err.Number & ": " & Err.Description
+    Err.Clear
+    If Len(strFolder) > 0 Then If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    If Err.Number <> 0 Then TestAssert False, "orphan regression file cleanup: " & Err.Number & ": " & Err.Description
+    If lngErr <> 0 Then TestAssert False, "tracked orphan primary extension " & lngErr & ": " & strErr
     Exit Sub
 ErrHandler:
     lngErr = Err.Number

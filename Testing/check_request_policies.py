@@ -409,26 +409,94 @@ def run(evidence, label):
         def cleanup_error(stage, error):
             cleanup_errors.append({"stage": stage, "error": repr(error)})
 
+        cleanup_start = time.monotonic()
+        record["cleanup_stages"] = []
+
+        def cleanup_checkpoint(stage):
+            record["cleanup_stages"].append({
+                "stage": stage,
+                "elapsed_ms": round((time.monotonic() - cleanup_start) * 1000),
+            })
+            try:
+                (evidence / (label + ".json")).write_text(
+                    json.dumps(record, indent=2, default=str), encoding="utf-8")
+            except Exception as exc:
+                cleanup_error("checkpoint_write", exc)
+
         quit_attempted = False
+        record["close_current_database_attempted"] = False
+        record["close_current_database_returned"] = False
+        cleanup_checkpoint("cleanup_started")
         if app is not None:
+            owned_identity = False
             try:
                 require(pid_from_access_app(app) == pid and process_create_time(pid) == stamp,
                         "Owned Access process identity changed")
-                quit_attempted = True
-                app.Quit(2)
+                owned_identity = True
+                cleanup_checkpoint("owned_identity_verified")
             except Exception as exc:
-                record["quit_error"] = repr(exc)
-                cleanup_error("quit", exc)
+                cleanup_error("owned_identity", exc)
+            if owned_identity:
+                # Record scalar names only; release the collection before closing
+                # the database so this diagnostic cannot retain a form proxy.
+                forms = None
+                cleanup_checkpoint("forms_inspection_started")
+                try:
+                    forms = app.Forms
+                    record["forms_before_close"] = [
+                        str(forms.Item(index).Name) for index in range(int(forms.Count))
+                    ]
+                except Exception as exc:
+                    record["forms_inspection_error"] = repr(exc)
+                    cleanup_error("forms_inspection", exc)
+                finally:
+                    forms = None
+                cleanup_checkpoint("forms_inspection_finished")
+                try:
+                    current_host = str(app.CurrentProject.FullName)
+                    expected_host = folder / "fixture.accdb"
+                    record["current_host_before_close"] = current_host
+                    record["expected_host_before_close"] = str(expected_host)
+                    require(Path(current_host).resolve() == expected_host.resolve(),
+                            {"current_host": current_host, "expected_host": str(expected_host)})
+                    record["close_current_database_attempted"] = True
+                    cleanup_checkpoint("database_close_started")
+                    app.CloseCurrentDatabase()
+                    record["close_current_database_returned"] = True
+                    cleanup_checkpoint("database_close_returned")
+                except Exception as exc:
+                    record["close_current_database_error"] = repr(exc)
+                    cleanup_error("database_close", exc)
+                # A close failure must not skip Quit on this identified process.
+                try:
+                    require(pid_from_access_app(app) == pid and process_create_time(pid) == stamp,
+                            "Owned Access process identity changed before Quit")
+                    quit_attempted = True
+                    cleanup_checkpoint("quit_started")
+                    app.Quit(2)
+                    cleanup_checkpoint("quit_returned")
+                except Exception as exc:
+                    record["quit_error"] = repr(exc)
+                    cleanup_error("quit", exc)
+        cleanup_checkpoint("application_release_started")
         app = None
-        gc.collect()
+        cleanup_checkpoint("application_released")
+        cleanup_checkpoint("gc_started")
+        try:
+            gc.collect()
+        except Exception as exc:
+            cleanup_error("gc", exc)
+        cleanup_checkpoint("gc_finished")
         exited = False
         wait_ms = EXIT_WAIT_MS if quit_attempted else 0
         record["exit_wait_ms"] = wait_ms
         if handle is not None:
             try:
+                cleanup_checkpoint("original_process_wait_started")
                 exit_result = win32event.WaitForSingleObject(handle, wait_ms)
                 exited = exit_result == win32event.WAIT_OBJECT_0
                 record["exit_timeout"] = exit_result == win32event.WAIT_TIMEOUT
+                cleanup_checkpoint("original_process_wait_returned")
             except Exception as exc:
                 cleanup_error("exit_wait", exc)
             try:
