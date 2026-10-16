@@ -776,6 +776,46 @@ Public Function Exists(cCategory As IDbComponent, strSourceFilePath As String) A
 End Function
 
 
+
+'---------------------------------------------------------------------------------------
+' Procedure : IndexedSourceGroupFile
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Find the actual canonical indexed member, including retained earlier formats.
+'---------------------------------------------------------------------------------------
+'
+Public Function IndexedSourceGroupFile(ByVal cType As IDbComponent, ByVal strFile As String) As String
+    Dim strKey As String
+    Dim strBase As String
+    Dim varKey As Variant
+    Dim varExtension As Variant
+    Dim dCategory As Dictionary
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strKey = FindIndexedFileName(cType, FSO.GetFileName(strFile))
+    strBase = FSO.GetBaseName(strFile)
+    ' Current-format siblings resolve by dictionary lookup, without walking a
+    ' large category for every metadata file. Retained formats use the fallback.
+    If Len(strKey) = 0 Then
+        For Each varExtension In cType.FileExtensions
+            strKey = FindIndexedFileName(cType, strBase & "." & CStr(varExtension))
+            If Len(strKey) > 0 Then Exit For
+        Next varExtension
+    End If
+    If Len(strKey) = 0 And m_dIndex("Components").Exists(cType.Category) Then
+        Set dCategory = m_dIndex("Components")(cType.Category)
+        For Each varKey In dCategory.Keys
+            If StrComp(FSO.GetBaseName(CStr(varKey)), strBase, vbTextCompare) = 0 Then
+                strKey = CStr(varKey)
+                Exit For
+            End If
+        Next varKey
+    End If
+    If Len(strKey) > 0 Then IndexedSourceGroupFile = FSO.GetParentFolderName(strFile) & PathSep & strKey
+    CatchAny eelCritical, T("Unable to identify the canonical tracked source group."), _
+        ModuleName(Me) & ".IndexedSourceGroupFile", True, True
+End Function
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : DefaultDevModeHash
 ' Author    : Adam Waller
@@ -2070,6 +2110,12 @@ Private Function SingleObjectComparisonFiles(ByVal cItem As IDbComponent, ByVal 
         strCandidate = strBase & "." & CStr(varExt)
         If FSO.FileExists(strCandidate) Then dFiles.Add LCase$(FSO.GetFileName(strCandidate)), strCandidate
     Next varExt
+    ' Retained indexed primaries may use an earlier source format. Include the
+    ' supplied canonical member even when today's extension list omits that format.
+    strCandidate = LCase$(FSO.GetFileName(strFile))
+    If Not dFiles.Exists(strCandidate) Then
+        If FSO.FileExists(strFile) Then dFiles.Add strCandidate, strFile
+    End If
     Select Case cItem.ComponentType
         Case edbCommandBar: strFolder = strBase & "_Images"
         Case edbTheme: strFolder = strBase

@@ -373,6 +373,49 @@ class Cases:
                 if blocked:
                     require(self.history() == before, 'Blocked orphan metadata advanced history')
                 self.save()
+        for changed in [False, True]:
+            for policy in POLICIES:
+                key = ('changed' if changed else 'unchanged') + '-tracked-class-module-orphan-' + policy
+                item = self.new(key)
+                fixture = Path(__file__).with_name('Fixtures') / 'modules/clsPolicyOrphanFixture.cls'
+                project = next(p for p in self.app.VBE.VBProjects if Path(p.FileName).resolve() == self.host.resolve())
+                module = project.VBComponents.Import(str(fixture.resolve()))
+                name = module.Name
+                require(name == 'clsPolicyOrphanFixture', 'Unexpected disposable class-module fixture')
+                self.app.DoCmd.Save(5, name)  # acModule; save only the owned fixture.
+                module = project = None
+                seed = self.call('external', 'ExportObject', 'module', name, 'prefer_database')
+                self.outcome(seed, transferred=True)
+                source = self.source / 'modules' / (name + '.cls')
+                require(source.exists(), 'Actual class module did not export to its canonical .cls file')
+                if changed:
+                    original = source.read_text(encoding='utf-8-sig')
+                    edited = original.replace('FixtureValue = 1', 'FixtureValue = 99')
+                    require(edited != original, 'Class-module fixture mutation failed')
+                    source.write_bytes(b'\xef\xbb\xbf' + edited.encode())
+                group_before = {p.name: p.read_bytes() for p in source.parent.glob(name + '.*')}
+                history_before = self.history()
+                self.app.DoCmd.DeleteObject(5, name)  # acModule; create an actual DB orphan.
+                result = self.api('ExportByType', 'module', True, policy)
+                item.update(seed=seed, result=result, class_primary=str(source),
+                            fixture_sha256=__import__('hashlib').sha256(fixture.read_bytes()).hexdigest(),
+                            history_before=history_before, history_after=self.history())
+                self.save()
+                blocked = changed and policy in ['block', 'prefer_database']
+                require(bool(result.get('decision_required')) == blocked, f'Class-module orphan decision mismatch: {result}')
+                if changed:
+                    require(source.exists(), 'Changed tracked class-module source was deleted')
+                    for filename, content in group_before.items():
+                        require((source.parent / filename).read_bytes() == content, 'Changed tracked class-module group was rewritten')
+                    decisions = result.get('decisions', [])
+                    require(any(d.get('tracked') is True and d.get('classification') == 'tracked_changed_orphan' for d in decisions), f'Class-module history was lost: {result}')
+                    require(result.get('skipped_count') == (0 if blocked else 1), f'Class-module preservation count mismatch: {result}')
+                    require(self.history() == history_before, 'Preserved class-module history advanced')
+                else:
+                    require(result.get('success') is True and result.get('skipped_count') == 0, f'Unchanged class-module cleanup created a false skip/refusal: {result}')
+                    require(not any((source.parent / filename).exists() for filename in group_before), 'Unchanged canonical class-module group was not cleaned')
+                    require(name + '.cls' not in self.history()['components'].get('Modules', {}), 'Unchanged class-module history remained after cleanup')
+                self.save()
         for direction in ['import', 'export']:
             item = self.new(direction + '-mixed-overwrite-and-blocked-deletion')
             item['seed'] = self.seed('query')

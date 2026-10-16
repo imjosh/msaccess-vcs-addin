@@ -416,3 +416,75 @@ ErrHandler:
     strErr = Err.Description
     Resume CleanUp
 End Sub
+
+
+Public Sub TestCanonicalOrphanIndexLookupFindsClassAndLegacyVariants()
+    On Error GoTo ErrHandler
+    Dim cIndex As clsVCSIndex
+    Dim cComponent As IDbComponent
+    Dim varCase As Variant
+    Dim strCanonical As String
+    Dim lngErr As Long
+    Dim strErr As String
+    For Each varCase In Array(Array(edbModule, "cls"), Array(edbQuery, "qdef"), _
+        Array(edbQuery, "bas"), Array(edbTableDef, "sql"), Array(edbTableDef, "json"), _
+        Array(edbForm, "bas"), Array(edbReport, "bas"), Array(edbMacro, "bas"))
+        Set cIndex = New clsVCSIndex
+        Set cComponent = GetComponentClass(CLng(varCase(0)))
+        strCanonical = "C:\VCSF1Lookup\Canonical." & CStr(varCase(1))
+        cIndex.Item(cComponent, strCanonical).SourceFilesHash = "retained baseline"
+        TestAssert cIndex.IndexedSourceGroupFile(cComponent, "C:\VCSF1Lookup\canonical.json") = strCanonical, _
+            "metadata resolves the actual case-insensitive indexed primary " & CStr(varCase(1))
+        TestAssert cIndex.IndexedSourceGroupFile(cComponent, "C:\VCSF1Lookup\canonical." & CStr(varCase(1))) = strCanonical, _
+            "actual class or earlier-format primary retains its canonical history key"
+        TestAssert cIndex.Item(cComponent, strCanonical).SourceFilesHash = "retained baseline", _
+            "canonical group inspection does not advance synchronization history"
+    Next varCase
+CleanUp:
+    On Error Resume Next
+    If lngErr <> 0 Then TestAssert False, "canonical orphan variants " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestCompleteComparisonIncludesEarlierFormatCanonicalPrimary()
+    On Error GoTo ErrHandler
+    Dim cIndex As New clsVCSIndex
+    Dim cComponent As IDbComponent
+    Dim colExtensions As Collection
+    Dim varExtension As Variant
+    Dim blnHasBas As Boolean
+    Dim strFolder As String
+    Dim strPrimary As String
+    Dim strBefore As String
+    Dim lngErr As Long
+    Dim strErr As String
+    Set cComponent = New clsDbForm
+    Set colExtensions = cComponent.FileExtensions
+    For Each varExtension In colExtensions
+        If CStr(varExtension) = "bas" Then blnHasBas = True
+    Next varExtension
+    strFolder = GetTempFolder("VCSF1LegacyPrimary")
+    strPrimary = strFolder & PathSep & "EarlierLayout." & IIf(blnHasBas, "form", "bas")
+    WriteFile "unchanged metadata", strFolder & PathSep & "EarlierLayout.json"
+    WriteFile "original layout", strPrimary
+    strBefore = cIndex.SingleObjectComparisonHash(cComponent, strPrimary)
+    WriteFile "independently edited layout", strPrimary
+    TestAssert cIndex.SingleObjectComparisonHash(cComponent, strPrimary) <> strBefore, _
+        "comparison includes the actual retained primary even when current extensions omit it"
+CleanUp:
+    On Error Resume Next
+    Err.Clear
+    If Len(strFolder) > 0 Then If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    If Err.Number <> 0 Then TestAssert False, "earlier primary cleanup " & Err.Number & ": " & Err.Description
+    If lngErr <> 0 Then TestAssert False, "earlier primary comparison " & lngErr & ": " & strErr
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Sub

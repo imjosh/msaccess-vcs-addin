@@ -19,6 +19,7 @@ Option Explicit
 Public Function F1SetCommandBarPicture(ByVal strExpectedHost As String, ByVal strMenuName As String, _
     ByVal strPictureFile As String, ByVal strProofFile As String) As Boolean
 
+    Dim objFSO As Object
     Dim objButton As Object
     Dim objPicture As Object
     Dim lngError As Long
@@ -34,14 +35,15 @@ Public Function F1SetCommandBarPicture(ByVal strExpectedHost As String, ByVal st
     If StrComp(CurrentProject.FullName, strExpectedHost, vbTextCompare) <> 0 Then
         Err.Raise vbObjectError + 2471, "F1SetCommandBarPicture", "The disposable fixture host does not match."
     End If
-    If Len(Dir$(strPictureFile)) = 0 Then
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    If Not objFSO.FileExists(strPictureFile) Then
         Err.Raise vbObjectError + 2472, "F1SetCommandBarPicture", "The picture fixture does not exist."
     End If
     If StrComp(Left$(strProofFile, Len(CurrentProject.Path) + 1), _
         CurrentProject.Path & "\", vbTextCompare) <> 0 Then
         Err.Raise vbObjectError + 2473, "F1SetCommandBarPicture", "The picture proof must stay beside the disposable host."
     End If
-    If Len(Dir$(strProofFile)) > 0 Then
+    If objFSO.FileExists(strProofFile) Then
         Err.Raise vbObjectError + 2474, "F1SetCommandBarPicture", "The picture proof file already exists."
     End If
     Set objPicture = stdole.LoadPicture(strPictureFile)

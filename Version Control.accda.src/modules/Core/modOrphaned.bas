@@ -160,28 +160,36 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
     Dim cEntry As clsVCSIndexItem
     Dim colFileExtensions As Collection
     Dim strPrimaryExtension As String
+    Dim strIndexedPrimary As String
+    Dim strIndexFile As String
 
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    ' A captured companion may have been deleted with its complete primary group.
+    If Not FSO.FileExists(strFilePath) Then Exit Sub
+    strFileName = FSO.GetFileName(strFilePath)
+    strBaseName = FSO.GetBaseName(strFileName)
+    strExt = Mid$(strFileName, Len(strBaseName) + 2)
+    If dBaseNames.Exists(strBaseName) Then Exit Sub
     If InteractionIsNonInteractive() Then
-        ' Dictionary items are empty membership values, not positional extensions.
-        ' The component collection defines which real file owns the complete group.
-        Set colFileExtensions = cType.FileExtensions
-        If colFileExtensions.Count = 0 Then Exit Sub
-        strPrimaryExtension = CStr(colFileExtensions(1))
+        ' Actual history owns group identity, including .cls modules and primaries
+        ' retained from an earlier query, layout, table or macro source format.
+        strIndexedPrimary = VCSIndex.IndexedSourceGroupFile(cType, strFilePath)
+        If Len(strIndexedPrimary) > 0 Then
+            strPrimaryExtension = FSO.GetExtensionName(strIndexedPrimary)
+        Else
+            Set colFileExtensions = cType.FileExtensions
+            If colFileExtensions.Count = 0 Then Exit Sub
+            strPrimaryExtension = CStr(colFileExtensions(1))
+        End If
     Else
         ' Keep the established interactive cleanup path outside this policy repair.
         strPrimaryExtension = CStr(dExtensions(0))
     End If
+    strIndexFile = Nz2(strIndexedPrimary, strFileName)
 
-    ' A captured companion may have been deleted with its complete primary group.
-    If Not FSO.FileExists(strFilePath) Then Exit Sub
-    ' Get base name and file extension to build primary source file name
-    strFileName = FSO.GetFileName(strFilePath)
-    strBaseName = FSO.GetBaseName(strFileName)
-    strExt = Mid$(strFileName, Len(strBaseName) + 2)
 
     ' See if extension exists in cached list
-    If dExtensions.Exists(strExt) Then
+    If dExtensions.Exists(strExt) Or Len(strIndexedPrimary) > 0 Then
 
         ' See if base file name exists in list of database objects
         If Not dBaseNames.Exists(strBaseName) Then
@@ -190,12 +198,12 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
             If StrComp(strExt, strPrimaryExtension, vbTextCompare) = 0 Then
 
                 ' Object not found in database. Check the index
-                If VCSIndex.Exists(cType, strFileName) Then
+                If VCSIndex.Exists(cType, strIndexFile) Then
 
                     ' If file is unchanged from the index, we can go ahead and delete it.
                     ' (The source file matches the last version imported or exported)
                     strHash = GetSourceFilesPropertyHash(cType, strFilePath)
-                    Set cEntry = VCSIndex.Item(cType, strFileName)
+                    Set cEntry = VCSIndex.Item(cType, strIndexFile)
                     blnUnchanged = (cEntry.FilePropertiesHash = strHash)
                     If InteractionIsNonInteractive() Then
                         blnUnchanged = (Len(cEntry.SourceFilesHash) > 0)
@@ -211,7 +219,7 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
                             DeleteFile strFilePath, True
                         End If
                         If Operation.ErrorLevel < eelCritical Then
-                            VCSIndex.Remove cType, strFileName
+                            VCSIndex.Remove cType, strIndexFile
                             ' Do not classify captured companion paths as new orphans.
                             If InteractionIsNonInteractive() And Not dBaseNames.Exists(strBaseName) Then
                                 dBaseNames.Add strBaseName, vbNullString
@@ -239,7 +247,7 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
                 ' If the primary source file exists, we will let that file handle evaluate any conflicts
                 If Not FSO.FileExists(SwapExtension(strFilePath, strPrimaryExtension)) Then
                     If InteractionIsNonInteractive() Then
-                        CompareOrphanedCompanion cType, strFilePath, strPrimaryExtension
+                        CompareOrphanedCompanion cType, strFilePath, strPrimaryExtension, strIndexedPrimary
                         ' One logical orphan group may have several companion files.
                         ' Its complete-content decision owns the remaining members.
                         If Not dBaseNames.Exists(strBaseName) Then dBaseNames.Add strBaseName, vbNullString
@@ -488,6 +496,7 @@ Private Sub DeleteUnchangedSourceGroup(ByVal cType As IDbComponent, ByVal strPri
         strFile = strBase & "." & CStr(varExt)
         If FSO.FileExists(strFile) Then DeleteFile strFile, True
     Next varExt
+    If FSO.FileExists(strPrimary) Then DeleteFile strPrimary, True
     Select Case cType.ComponentType
         Case edbCommandBar: strFolder = strBase & "_Images"
         Case edbTheme: strFolder = strBase
@@ -507,13 +516,13 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Private Sub CompareOrphanedCompanion(ByVal cType As IDbComponent, ByVal strCompanion As String, _
-    ByVal strPrimaryExtension As String)
+    ByVal strPrimaryExtension As String, Optional ByVal strIndexedPrimary As String)
 
     Dim strPrimary As String
     Dim cEntry As clsVCSIndexItem
     Dim blnUnchanged As Boolean
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
-    strPrimary = SwapExtension(strCompanion, strPrimaryExtension)
+    strPrimary = Nz2(strIndexedPrimary, SwapExtension(strCompanion, strPrimaryExtension))
     If VCSIndex.Exists(cType, strPrimary) Then
         Set cEntry = VCSIndex.Item(cType, strPrimary)
         blnUnchanged = (Len(cEntry.SourceFilesHash) > 0)
