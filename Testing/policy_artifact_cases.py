@@ -20,7 +20,6 @@ def digest_tree(folder):
             for p in folder.rglob('*') if p.is_file()}
 
 
-
 def bitmap_pixels(data):
     """Decode the fixture's uncompressed RGB pixels independently of BMP headers."""
     require(data[:2] == b'BM', 'Picture proof must be a BMP')
@@ -112,16 +111,21 @@ def set_native_command_bar_picture(cases, name, picture, source_picture, item):
     cases.save()
     require(item['native_picture_helper']['saved_vbcomponent_type'] == 1, 'Saving changed the native picture fixture identity')
     module = project = None
-    # Independently normalize both requested variants without writing to source.
-    # Exact assigned-proof equality remains mandatory after native assignment.
+    # Independently assign each raw variant to its own sacrificial copied button.
+    # Office transforms pixels during button assignment, beyond LoadPicture/SavePicture.
+    # The tested button is untouched until both independent proofs exist.
     canonical = {}
     for variant, raw in [('database', picture), ('source', source_picture)]:
         normalized = cases.folder / (cases.host.stem + '-canonical-' + variant + '.bmp')
-        result = cases.app.Run('F1CanonicalizePicture', str(cases.host), str(raw), str(normalized))
+        probe_name = name + ' independent ' + variant
+        result = cases.app.Run('F1CanonicalizeButtonPicture', str(cases.host), name,
+                               probe_name, str(raw), str(normalized))
         result = result[0] if isinstance(result, tuple) else result
         diagnostic = cases.app.Run('F1PictureFixtureLastError')
         diagnostic = diagnostic[0] if isinstance(diagnostic, tuple) else diagnostic
         details = {'fixture_result': result, 'fixture_error': diagnostic,
+                   'method': 'independent copied button Picture assignment then SavePicture',
+                   'temporary_probe_bar': probe_name, 'probe_deleted_before_success': result is True,
                    'raw': bitmap_evidence(raw), 'canonical_path': str(normalized)}
         item.setdefault('native_picture_canonicalization', {})[variant] = details
         cases.save()
@@ -129,9 +133,10 @@ def set_native_command_bar_picture(cases, name, picture, source_picture, item):
         details['canonical'] = bitmap_evidence(normalized, raw)
         canonical[variant] = normalized
         cases.save()
-    require(bitmap_pixels(canonical['database'].read_bytes()) !=
-            bitmap_pixels(canonical['source'].read_bytes()),
-            'Requested picture variants became pixel-identical during native normalization')
+    item['independent_picture_variants'] = bitmap_evidence(canonical['source'], canonical['database'])
+    cases.save()
+    require(item['independent_picture_variants']['changed_rgb_pixels'] > 0,
+            'Requested picture variants became pixel-identical during native button assignment')
     proof = cases.folder / (cases.host.stem + '-assigned-picture.bmp')
     result = cases.app.Run('F1SetCommandBarPicture', str(cases.host), name, str(picture), str(proof))
     result = result[0] if isinstance(result, tuple) else result
@@ -144,7 +149,7 @@ def set_native_command_bar_picture(cases, name, picture, source_picture, item):
     expected = hashlib.sha256(canonical['database'].read_bytes()).hexdigest()
     actual = hashlib.sha256(proof.read_bytes()).hexdigest()
     item['native_picture_assignment'].update(expected_sha256=expected, actual_sha256=actual,
-                                               actual=bitmap_evidence(proof, canonical['database']))
+                                           actual=bitmap_evidence(proof, canonical['database']))
     cases.save()
     require(actual == expected, 'Access-local fixture did not assign the normalized requested actual picture')
     require(digest_tree(source_picture.parent) == item['source_image_directory_before_fixture'],

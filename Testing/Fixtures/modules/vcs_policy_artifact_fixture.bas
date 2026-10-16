@@ -67,17 +67,20 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : F1CanonicalizePicture
+' Procedure : F1CanonicalizeButtonPicture
 ' Author    : Codex
 ' Date      : 10/16/2026
-' Purpose   : Normalize a requested picture to an owned proof without changing source.
+' Purpose   : Derive an independent native button picture proof on a disposable copy.
 '---------------------------------------------------------------------------------------
 '
-Public Function F1CanonicalizePicture(ByVal strExpectedHost As String, _
+Public Function F1CanonicalizeButtonPicture(ByVal strExpectedHost As String, _
+    ByVal strMenuName As String, ByVal strProbeName As String, _
     ByVal strPictureFile As String, ByVal strProofFile As String) As Boolean
 
     Dim objFSO As Object
     Dim objPicture As Object
+    Dim objProbeBar As Object
+    Dim objProbeButton As Object
 
     m_strLastError = vbNullString
     If Err.Number <> 0 Then
@@ -104,15 +107,31 @@ Public Function F1CanonicalizePicture(ByVal strExpectedHost As String, _
         m_strLastError = CStr(vbObjectError + 2474) & ": The picture proof file already exists."
         Exit Function
     End If
+    ' Copy the tested control to an owned temporary popup. Both variants get
+    ' their own copy; no proof reads back the subsequently tested assignment.
+    Set objProbeBar = Application.CommandBars.Add(strProbeName, 5, False, True)
+    Set objProbeButton = Application.CommandBars(strMenuName).Controls(1).Copy(objProbeBar)
     Set objPicture = stdole.LoadPicture(strPictureFile)
-    stdole.SavePicture objPicture, strProofFile
-    F1CanonicalizePicture = True
+    objProbeButton.Picture = objPicture
+    stdole.SavePicture objProbeButton.Picture, strProofFile
+    objProbeBar.Delete
+    Set objProbeButton = Nothing
+    Set objProbeBar = Nothing
+    F1CanonicalizeButtonPicture = True
     Exit Function
 
 Failed:
     m_strLastError = CStr(Err.Number) & ": " & Err.Description
     Err.Clear
-    F1CanonicalizePicture = False
+    ' This disposable fixture has no add-in error dependency. Cleanup failures
+    ' append to the observable diagnostic, and never escape through modal UI.
+    On Error Resume Next
+    If Not objProbeBar Is Nothing Then objProbeBar.Delete
+    If Err.Number <> 0 Then
+        m_strLastError = m_strLastError & "; probe cleanup " & CStr(Err.Number) & ": " & Err.Description
+        Err.Clear
+    End If
+    F1CanonicalizeButtonPicture = False
 End Function
 
 

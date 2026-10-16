@@ -23,17 +23,40 @@ from concurrent.futures import ThreadPoolExecutor
 
 EXIT_WAIT_MS = 60000
 INVENTORY_SETTLE_MS = 30000
-ACCESS_MODULE_OBJECT = 5  # Access acModule
 
 PROBE_BRIDGE_SOURCE = """Attribute VB_Name = "modRequestPolicyBridge"
+'---------------------------------------------------------------------------------------
+' Module    : modRequestPolicyBridge
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Compare installed probe invocation through a public disposable-host module.
+'---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
 
-' Disposable-host diagnostic bridge. Deliberately public to compare Automation
-' invocation with the same installed helper called from inside the Access host.
-' This thin wrapper propagates errors and returns the original result unchanged.
+
+'---------------------------------------------------------------------------------------
+' Procedure : RequestPolicyFixtureBridge
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Preserve supplied arguments and successful results, and return request-local
+'           : probe_error diagnostics when invocation fails. This standalone fixture has
+'           : no installed logger reference, so it reports inherited Err locally before
+'           : installing trapping rather than logging into another operation's owner.
+'---------------------------------------------------------------------------------------
+'
 Public Function RequestPolicyFixtureBridge(ByVal strTarget As String, _
     Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant) As Variant
+    Dim lngBridgeError As Long
+    Dim strBridgeError As String
+    Dim strBridgeSource As String
+    Dim varDetails As Variant
+    Dim lngPart As Long
+    Dim lngCharacter As Long
+
+    If Err.Number <> 0 Then Debug.Print "RequestPolicyFixtureBridge inherited error " & Err.Number & ": " & Err.Description
+    Err.Clear
+    On Error GoTo BridgeError
     If Not IsMissing(varArg3) Then
         RequestPolicyFixtureBridge = Application.Run(strTarget, varArg1, varArg2, varArg3)
     ElseIf Not IsMissing(varArg2) Then
@@ -43,6 +66,34 @@ Public Function RequestPolicyFixtureBridge(ByVal strTarget As String, _
     Else
         RequestPolicyFixtureBridge = Application.Run(strTarget)
     End If
+    Exit Function
+
+BridgeError:
+    lngBridgeError = Err.Number
+    strBridgeError = Err.Description
+    strBridgeSource = Err.Source
+    Resume ReportBridgeError
+
+ReportBridgeError:
+    On Error GoTo ReportError
+    varDetails = Array(strBridgeError, strBridgeSource, strTarget)
+    For lngPart = LBound(varDetails) To UBound(varDetails)
+        varDetails(lngPart) = Replace(varDetails(lngPart), Chr$(92), Chr$(92) & Chr$(92))
+        varDetails(lngPart) = Replace(varDetails(lngPart), Chr$(34), Chr$(92) & Chr$(34))
+        For lngCharacter = 0 To 31
+            varDetails(lngPart) = Replace(varDetails(lngPart), Chr$(lngCharacter), _
+                Chr$(92) & "u" & Right$("0000" & Hex$(lngCharacter), 4))
+        Next lngCharacter
+    Next lngPart
+    RequestPolicyFixtureBridge = "{""probe_error"":" & Chr$(34) & varDetails(0) & Chr$(34) & _
+        ",""probe_error_number"":" & CStr(lngBridgeError) & _
+        ",""probe_error_source"":" & Chr$(34) & varDetails(1) & Chr$(34) & _
+        ",""probe_error_target"":" & Chr$(34) & varDetails(2) & Chr$(34) & "}"
+    Exit Function
+
+ReportError:
+    Err.Clear
+    RequestPolicyFixtureBridge = "{""probe_error"":""The diagnostic probe bridge failed; error formatting was unavailable.""}"
 End Function
 """
 
@@ -104,7 +155,7 @@ def run(evidence, label, case_set="all", probe_bridge=False):
             bridge_file = folder / "modRequestPolicyBridge.bas"
             bridge_bytes = b"\xef\xbb\xbf" + PROBE_BRIDGE_SOURCE.replace("\n", "\r\n").encode("utf-8")
             bridge_file.write_bytes(bridge_bytes)
-            app.LoadFromText(ACCESS_MODULE_OBJECT, "modRequestPolicyBridge", str(bridge_file))
+            app.LoadFromText(win32com.client.constants.acModule, "modRequestPolicyBridge", str(bridge_file))
             bridge_ready = True
             record["probe_bridge"] = {"module": "modRequestPolicyBridge", "entrypoint": bridge_target,
                                       "source_file": str(bridge_file), "sha256": hashlib.sha256(bridge_bytes).hexdigest()}
