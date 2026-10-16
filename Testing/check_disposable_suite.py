@@ -265,9 +265,13 @@ def run(label,binary,pin,filters,fault=None,sync=False):
         def progress(value,total,message):
             if message:print(message,flush=True)
         if sync:
-            app.Run(str(INSTALLED.with_suffix(''))+'.SetInteractionMode',1)
-            api('SetOption','DefaultTestFilter',filters)
-            data['sync_raw_result']=api('RunFilteredTests')
+            option_result=api('SetOption','DefaultTestFilter',filters)
+            data['sync_filter_setup']=option_result
+            setup=json.loads(option_result) if isinstance(option_result,str) else option_result
+            if not isinstance(setup,dict) or setup.get('success') is not True:
+                raise RuntimeError('Synchronous filter setup failed: '+repr(option_result))
+            data['sync_policy']='block'
+            data['sync_raw_result']=api('RunFilteredTests','block')
             data['tests']=json.loads(data['sync_raw_result'])
             data['tests']['success']=data['tests'].get('allPassed',False)
         else:
