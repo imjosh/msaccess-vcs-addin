@@ -634,6 +634,43 @@ ErrHandler:
 End Sub
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : TestDormantRunnerReleasePreservesHostedRunFlag
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Releasing an idle runner in the tested project must preserve the hosted
+'           : flag acquired by the installed runner that is executing this test.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestDormantRunnerReleasePreservesHostedRunFlag()
+    On Error GoTo ErrHandler
+    Dim cIdleRunner As clsTestRunner
+    Dim blnHosted As Boolean
+    Dim blnFlagSaved As Boolean
+    Dim lngTestErr As Long
+    Dim strTestErr As String
+
+    blnHosted = modTestAssert.TestRunActive
+    blnFlagSaved = True
+    TestAssert blnHosted, "the installed runner has marked this project as hosted"
+    Set cIdleRunner = New clsTestRunner
+    Set cIdleRunner = Nothing
+    TestAssert modTestAssert.TestRunActive = blnHosted, "releasing a dormant runner preserves the active hosted run flag"
+
+CleanUp:
+    On Error Resume Next
+    Set cIdleRunner = Nothing
+    If blnFlagSaved Then modTestAssert.SetTestRunActive blnHosted
+    If Err.Number <> 0 Then TestAssert False, "TestDormantRunnerReleasePreservesHostedRunFlag cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestDormantRunnerReleasePreservesHostedRunFlag " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
 ' Parameterized public probe for an owned callback outside the test-runner root.
 ' The caller owns a disposable user database and a persistent callback listener.
 Public Function RefusalOwnershipProbe(ByVal strCallbackInfo As String) As String
