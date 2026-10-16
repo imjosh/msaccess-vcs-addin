@@ -266,8 +266,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Private Sub IDbComponent_Merge(strFile As String)
-    ' Import if file exists
-    If FSO.FileExists(strFile) Then
+    ' Import an existing archive or extracted theme folder.
+    If FSO.FileExists(strFile) Or FSO.FolderExists(strFile) Then
         ' The import will replace the existing theme with the same name.
         IDbComponent_Import strFile
     Else

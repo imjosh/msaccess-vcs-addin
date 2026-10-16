@@ -39,15 +39,22 @@ def run(args):
     from msaccess_vcs_mcp.access_com.process_qos import list_access_pids_or_none, pid_from_access_app
     require(list_access_pids_or_none() == set(), 'Serialize native work')
     driver = str(Path(os.environ['APPDATA']) / 'MSAccessVCS/Version Control')
+    artifact_types = args.artifact_types if args.artifact_types is not None else ['command_bar', 'theme', 'table_data_macro']
+    qualified_types = ['query', 'db_property', 'table_data', 'table'] if args.case_set in ['all', 'core'] else []
+    if args.case_set in ['all', 'artifacts'] and not args.legacy_control:
+        qualified_types += artifact_types
+        if 'table_data_macro' in artifact_types:
+            qualified_types.append('table')
+    if args.case_set == 'deletions':
+        qualified_types += ['query', 'table', 'table_data']
+    qualified_types = list(dict.fromkeys(qualified_types))
     record = {'cases': {}, 'legacy_control': args.legacy_control, 'environment': environment,
               'client_source': str(args.client_source.resolve()),
               'installed_sha256': hashlib.sha256(Path(driver + '.accda').read_bytes()).hexdigest(),
               'coverage': {'case_set': args.case_set, 'transports': args.transports,
-                           'qualified_types_if_entire_run_passes':
-                               (['query', 'db_property', 'table_data', 'table'] if args.case_set in ['all', 'core'] else []) +
-                               (['command_bar', 'theme', 'table_data_macro', 'table'] if args.case_set in ['all', 'artifacts'] and not args.legacy_control else []) +
-                               (['query', 'table', 'table_data'] if args.case_set == 'deletions' else []),
-                           'grouped_table_macro_transports': ['external'],
+                           'artifact_types': artifact_types if args.case_set in ['all', 'artifacts'] else [],
+                           'qualified_types_if_entire_run_passes': qualified_types,
+                           'grouped_table_macro_transports': ['external'] if 'table_data_macro' in artifact_types and args.case_set in ['all', 'artifacts'] else [],
                            'other_types': 'Unqualified by this driver; report separately.'}}
     def save():
         (out / (args.label + '.json')).write_text(json.dumps(record, indent=2, default=str), encoding='utf-8')
@@ -70,7 +77,7 @@ def run(args):
         if not args.legacy_control and args.case_set in ['all', 'core', 'deletions']:
             cases.deletion_matrix()
         if not args.legacy_control and args.case_set in ['all', 'artifacts']:
-            run_artifacts(cases, args.transports)
+            run_artifacts(cases, args.transports, artifact_types)
         record['verified'] = True
     except BaseException as error:
         record['error'] = repr(error)
@@ -106,9 +113,13 @@ if __name__ == '__main__':
     parser.add_argument('--client-source', type=Path, required=True)
     parser.add_argument('--transports', nargs='+', choices=['external', 'async', 'mcp'], default=['external', 'async', 'mcp'])
     parser.add_argument('--legacy-control', action='store_true')
+    parser.add_argument('--artifact-types', nargs='+', choices=['command_bar', 'theme', 'table_data_macro'],
+                        help='Restrict an artifacts-only run; omitted runs all artifact types')
     parser.add_argument('--case-set', choices=['all', 'core', 'artifacts', 'deletions'], default='all')
     args = parser.parse_args()
     require(Path(args.label).name == args.label, 'Label must be one path component')
+    require(args.artifact_types is None or args.case_set == 'artifacts',
+            '--artifact-types requires --case-set artifacts')
     require(not (args.legacy_control and args.case_set in ['deletions', 'artifacts']), 'Legacy control requires core or all cases')
     require(not args.evidence.resolve().is_relative_to(Path(__file__).resolve().parents[1]), 'Keep evidence outside checkout')
     sys.path.insert(0, str(args.client_source.resolve()))

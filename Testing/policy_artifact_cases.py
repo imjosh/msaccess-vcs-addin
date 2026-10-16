@@ -254,6 +254,36 @@ def read_theme_attachment(cases, name, path):
     attachment = rows = db = None
 
 
+
+def theme_resource_snapshot(cases, name):
+    """Retain read-only DAO identities even when a seed API reply reports failure."""
+    result = {'requested_name': name, 'rows': [], 'matching_name_extension_type_count': 0}
+    db = rows = None
+    try:
+        db = cases.app.CurrentDb()
+        rows = db.OpenRecordset('SELECT [Name], [Extension], [Type] FROM MSysResources')
+        while not rows.EOF:
+            row = {key: rows.Fields(key).Value for key in ['Name', 'Extension', 'Type']}
+            result['rows'].append(row)
+            if (str(row['Name']).lower() == name.lower() and
+                    str(row['Extension']).lower() == 'thmx' and str(row['Type']).lower() == 'thmx'):
+                result['matching_name_extension_type_count'] += 1
+            rows.MoveNext()
+        result['row_count'] = len(result['rows'])
+    except Exception as error:
+        # A diagnostic query cannot replace the original API failure. The caller
+        # persists this observed error and still requires a successful snapshot.
+        result['query_error'] = repr(error)
+    finally:
+        if rows is not None:
+            try:
+                rows.Close()
+            except Exception as error:
+                result['close_error'] = repr(error)
+        rows = db = None
+    return result
+
+
 def themes(cases, transports):
     for transport in transports:
         for direction in ['import', 'export']:
@@ -274,9 +304,41 @@ def themes(cases, transports):
                 options_file.write_bytes(b'\xef\xbb\xbf' + json.dumps(options).encode())
                 configured = cases.api('SetOption', 'ExtractThemeFiles', True)
                 require(configured.get('success') is True, 'Theme extraction setup failed')
+                item['seed_source_before'] = digest_tree(folder)
                 imported = cases.call('external', 'ImportObject', 'theme', name, 'block')
+                item['seed_import'] = imported
+                cases.save()
+                item['resources_after_seed_import'] = theme_resource_snapshot(cases, name)
+                cases.save()
                 cases.outcome(imported, transferred=True)
+                resource_snapshot = item['resources_after_seed_import']
+                require(not resource_snapshot.get('query_error') and not resource_snapshot.get('close_error'),
+                        f'Theme resource identity query failed: {resource_snapshot}')
+                require(resource_snapshot['matching_name_extension_type_count'] == 1,
+                        f'First extracted-theme import did not create exactly one matching resource: {resource_snapshot}')
+                item['seed_source_after'] = digest_tree(folder)
+                item['seed_import_history'] = cases.history()
+                seed_attachment = cases.folder / (key + '-seed-observed.thmx')
+                read_theme_attachment(cases, name, seed_attachment)
+                with zipfile.ZipFile(seed_attachment) as archive:
+                    item['seed_attachment_files'] = {
+                        member.filename.replace('\\', '/').lower(): hashlib.sha256(archive.read(member)).hexdigest()
+                        for member in archive.infolist() if not member.is_dir()}
+                cases.save()
+                require(item['seed_source_after'] == item['seed_source_before'],
+                        'First extracted-theme import changed canonical source files')
+                require(not folder.with_suffix('.thmx').exists(),
+                        'First extracted-theme import wrote a canonical upload archive')
+                expected_attachment = {key.replace('\\', '/'): value for key, value in item['seed_source_before'].items()}
+                require(item['seed_attachment_files'] == expected_attachment,
+                        'First extracted-theme import did not preserve the full actual attachment content')
+                entries = [entry for key, entry in item['seed_import_history'].get('components', {}).get('Themes', {}).items()
+                           if key.lower() == (folder.name + '.thmx').lower()]
+                require(len(entries) == 1 and entries[0].get('SourceFilesHash') and entries[0].get('DatabaseFilesHash'),
+                        'First extracted-theme import did not persist both complete-content baselines')
                 seeded = cases.call('external', 'ExportObject', 'theme', name, 'block')
+                item['seed_export'] = seeded
+                cases.save()
                 cases.outcome(seeded, transferred=True)
                 xml = next(p for p in folder.rglob('*.xml') if 'clrScheme' in p.read_text(encoding='utf-8-sig'))
                 original = xml.read_bytes()
@@ -371,7 +433,11 @@ def grouped_table_macros(cases):
             cases.save()
 
 
-def run_artifacts(cases, transports):
-    command_bars(cases, transports)
-    themes(cases, transports)
-    grouped_table_macros(cases)
+def run_artifacts(cases, transports, artifact_types=None):
+    selected = artifact_types if artifact_types is not None else ['command_bar', 'theme', 'table_data_macro']
+    if 'command_bar' in selected:
+        command_bars(cases, transports)
+    if 'theme' in selected:
+        themes(cases, transports)
+    if 'table_data_macro' in selected:
+        grouped_table_macros(cases)
