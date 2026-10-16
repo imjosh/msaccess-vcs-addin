@@ -286,9 +286,12 @@ Public Sub TestUnchangedIndexedOrphanGroupsRemoveNestedArtifactsWithoutFalseSkip
     blnIndexCaptured = True
     strPriorExport = Options.ExportFolder
     blnOptionsCaptured = True
+    lngScope = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
+    ' OpenScope saves the outer error level; initialize only this fixture's baseline.
+    ' Clear once before setup so any scan or setup error remains visible.
+    Operation.ErrorLevel = eelNoError
     strFolder = GetTempFolder("VCSF1OrphanScan")
     Options.ExportFolder = strFolder
-    lngScope = Operation.PushInteractionScope(eimNonInteractive, edpBlock, False)
     For Each varType In Array(edbQuery, edbCommandBar, edbTheme)
         Set VCSIndex = New clsVCSIndex
         Set dCategories = New Dictionary

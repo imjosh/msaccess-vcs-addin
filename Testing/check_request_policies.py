@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import struct
 import sys
 import time
 import uuid
@@ -105,6 +106,15 @@ def require(condition, message):
 
 def decode(value):
     return json.loads(value[0] if isinstance(value, tuple) else value)
+
+
+def index_build_dates(path):
+    """Read the actual index header without changing its stored history."""
+    data = path.read_bytes()
+    require(len(data) >= 38 and data[:4] == b"VCSI", "The fixture index header is invalid")
+    require(int.from_bytes(data[4:6], "little") in (3, 4, 5), "The fixture index version is unsupported")
+    return dict(zip(("MergeBuildDate", "FullBuildDate", "ExportDate", "FullExportDate"),
+                    struct.unpack_from("<dddd", data, 6)))
 
 
 def run(evidence, label, case_set="all", probe_bridge=False):
@@ -276,7 +286,9 @@ def run(evidence, label, case_set="all", probe_bridge=False):
         fixture_source = folder / "fixture.accdb.src"
         fixture_source.mkdir(exist_ok=True)
         options_path = fixture_source / "vcs-options.json"
-        fixture_options = {"Info": {}, "Options": {"ExportFolder": "", "ExportFormatVersion": "5.1.0"}}
+        fixture_options = {"Info": {}, "Options": {"ExportFolder": "", "ExportFormatVersion": "5.1.0",
+                           "RunBeforeBuild": "", "RunAfterBuild": "", "RunBeforeMerge": "", "RunAfterMerge": "",
+                           "ValidateAfterBuild": ""}}
         options_path.write_bytes(b"\xef\xbb\xbf" + (json.dumps(fixture_options, indent=2) + "\r\n").encode("utf-8"))
         record["fixture_options_seed"] = {"path": str(options_path),
                                           "sha256": hashlib.sha256(options_path.read_bytes()).hexdigest()}
@@ -285,14 +297,64 @@ def run(evidence, label, case_set="all", probe_bridge=False):
         database = app.CurrentDb()
         database.CreateQueryDef("qryF3RequestFixture", "SELECT 1 AS FixtureValue;")
         database = None
-        # Seed real query content and its index without the inherited whole-export
-        # form lifecycle. The request controls below retain their actual entry paths.
+        # Prepare real sources for this owned database. The headless full build
+        # establishes legitimate FullBuildDate history without RunExport's form path.
+        metadata_types = ["project", "vbe_project"]
+        if probe_bridge:
+            metadata_types.append("modules")
+        record["fixture_metadata_exports"] = {}
+        for category in metadata_types:
+            exported = api("ExportByType", category, True, "block")
+            record["fixture_metadata_exports"][category] = exported
+            save()
+            require(exported.get("success") is True, {"fixture_metadata_export": category, "result": exported})
+        query_seed = api("ExportByType", "queries", True, "block")
+        record["fixture_query_source_export"] = query_seed
+        save()
+        require(query_seed.get("success") is True, query_seed)
+        index_path = fixture_source / "vcs-index.idx"
+        dates_before_build = index_build_dates(index_path)
+        record["fixture_index_before_build"] = dates_before_build
+        if probe_bridge:
+            bridge_ready = False
+        built = api("BuildHeadless", str(fixture_source))
+        record["fixture_headless_full_build"] = built
+        save()
+        require(built.get("success") is True, built)
+        require(Path(app.CurrentProject.FullName).resolve() == (folder / "fixture.accdb").resolve(),
+                "The headless setup build changed the owned fixture path")
+        rows = database = None
+        try:
+            database = app.CurrentDb()
+            rows = database.OpenRecordset("SELECT FixtureValue FROM qryF3RequestFixture")
+            query_value = rows.Fields(0).Value
+            require(query_value == 1, {"rebuilt_fixture_query_value": query_value})
+            record["fixture_query_value_after_build"] = query_value
+        finally:
+            try:
+                if rows is not None:
+                    rows.Close()
+            finally:
+                rows = database = None
+        dates_after_build = index_build_dates(index_path)
+        record["fixture_index_after_build"] = dates_after_build
+        require(dates_after_build["FullBuildDate"] > dates_before_build["FullBuildDate"],
+                {"before": dates_before_build, "after": dates_after_build})
+        if probe_bridge:
+            verify_bridge("after_build")
+            bridge_ready = True
+            verify_bridge_invocation("after_build")
         baseline = api("ExportByType", "queries", True, "block")
         record["fixture_export"] = baseline
         require(baseline.get("success"), baseline)
+        prepared_dates = index_build_dates(index_path)
+        require(prepared_dates["FullBuildDate"] == dates_after_build["FullBuildDate"] > 0, prepared_dates)
+        record["fixture_prepared_full_build_dates"] = prepared_dates
         fixture_baselines = {"options": options_path,
+                             "project": fixture_source / "project.json",
+                             "vbe_project": fixture_source / "vbe-project.json",
                              "query": fixture_source / "queries/qryF3RequestFixture.sql",
-                             "index": fixture_source / "vcs-index.idx"}
+                             "index": index_path}
         for key, path in fixture_baselines.items():
             require(path.is_file(), {"missing_fixture_baseline": key, "path": str(path)})
         baseline_hashes = {key: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -357,8 +419,8 @@ def run(evidence, label, case_set="all", probe_bridge=False):
             require(len(terminals) == 1 and terminals[0]["operation_id"] == identity, terminals)
             require(len(terminals[0]["decisions"]) == 1 and terminals[0]["decisions"][0]["title"] == "Active F4 owner", terminals)
 
-            # Preserve the real full-export index while making source-folder discovery
-            # fail. A merge-not-available refusal or a started real merge fails this check.
+            # Preserve the prepared real full-build index while making source-folder
+            # discovery fail. A merge-not-available refusal or a started real merge fails.
             source = Path(api("GetExportFolder"))
             options_path = source / "vcs-options.json"
             held_options = source / "vcs-options.f4-held.json"
