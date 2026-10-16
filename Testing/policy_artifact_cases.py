@@ -118,13 +118,22 @@ def set_native_command_bar_picture(cases, name, picture, source_picture, item):
     for variant, raw in [('database', picture), ('source', source_picture)]:
         normalized = cases.folder / (cases.host.stem + '-canonical-' + variant + '.bmp')
         probe_name = name + ' independent ' + variant
+        # Import assigns the source Picture and then its transparency Mask.
+        # Database mutation assigns Picture only and keeps the existing mask.
+        mask = source_picture.with_name(source_picture.name.replace('_Picture.bmp', '_Mask.bmp'))
+        require(mask.is_file(), 'Source picture fixture must include its import-defining mask')
+        mask_argument = str(mask) if variant == 'source' else ''
         result = cases.app.Run('F1CanonicalizeButtonPicture', str(cases.host), name,
-                               probe_name, str(raw), str(normalized))
+                               probe_name, str(raw), str(normalized), mask_argument)
         result = result[0] if isinstance(result, tuple) else result
         diagnostic = cases.app.Run('F1PictureFixtureLastError')
         diagnostic = diagnostic[0] if isinstance(diagnostic, tuple) else diagnostic
         details = {'fixture_result': result, 'fixture_error': diagnostic,
-                   'method': 'independent copied button Picture assignment then SavePicture',
+                   'method': ('independent copied button Picture then source Mask then SavePicture'
+                              if variant == 'source' else
+                              'independent copied button Picture assignment then SavePicture'),
+                   'mask_input': mask_argument,
+                   'mask_sha256': hashlib.sha256(mask.read_bytes()).hexdigest(),
                    'temporary_probe_bar': probe_name, 'probe_deleted_before_success': result is True,
                    'raw': bitmap_evidence(raw), 'canonical_path': str(normalized)}
         item.setdefault('native_picture_canonicalization', {})[variant] = details

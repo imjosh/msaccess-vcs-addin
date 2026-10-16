@@ -127,14 +127,70 @@ def run(evidence, label, case_set="all", probe_bridge=False):
     app = endpoint = handle = None
     pid = stamp = None
     library = str(Path(os.environ["APPDATA"]) / "MSAccessVCS" / "Version Control")
-    bridge_target = str((folder / "fixture.accdb").with_suffix("")) + ".RequestPolicyFixtureBridge"
+    # Access resolves this unique public function in the verified current
+    # fixture. Its file path is not a library qualifier for the current project.
+    bridge_target = "RequestPolicyFixtureBridge"
     bridge_ready = False
 
     def call_probe(method, *arguments):
         if probe_bridge:
             require(bridge_ready, "The disposable probe bridge was not installed")
+            require(Path(app.CurrentProject.FullName).resolve() == (folder / "fixture.accdb").resolve(),
+                    "The disposable bridge invocation host changed")
             return app.Run(bridge_target, library + "." + method, *arguments)
         return app.Run(library + "." + method, *arguments)
+
+    def verify_bridge(stage, *, save_module=False):
+        details = {"host": str(app.CurrentProject.FullName), "saved": False}
+        record["probe_bridge"].setdefault("verification", {})[stage] = details
+        require(Path(details["host"]).resolve() == (folder / "fixture.accdb").resolve(),
+                "The disposable bridge inspection host changed")
+        vbe = projects = project = component = code_module = None
+        try:
+            vbe = win32com.client.gencache.EnsureDispatch(app.VBE)
+            projects = vbe.VBProjects
+            for index in range(1, int(projects.Count) + 1):
+                project = projects.Item(index)
+                if Path(str(project.FileName)).resolve() == (folder / "fixture.accdb").resolve():
+                    break
+                project = None
+            require(project is not None, "The owned fixture VBA project was not found")
+            details["project_file"] = str(project.FileName)
+            component = project.VBComponents.Item("modRequestPolicyBridge")
+            details["component_name"] = str(component.Name)
+            details["component_type"] = int(component.Type)
+            require(details["component_name"] == "modRequestPolicyBridge"
+                    and details["component_type"] == win32com.client.constants.vbext_ct_StdModule, details)
+            if save_module:
+                app.DoCmd.Save(win32com.client.constants.acModule, "modRequestPolicyBridge")
+                vbe.ActiveVBProject = project
+                if not bool(app.IsCompiled):
+                    app.DoCmd.RunCommand(win32com.client.constants.acCmdCompileAndSaveAllModules)
+                details["saved"] = True
+                details["compiled"] = bool(app.IsCompiled)
+                require(details["compiled"], "The owned fixture bridge did not compile")
+            code_module = component.CodeModule
+            start = int(code_module.ProcStartLine("RequestPolicyFixtureBridge", win32com.client.constants.vbext_pk_Proc))
+            count = int(code_module.ProcCountLines("RequestPolicyFixtureBridge", win32com.client.constants.vbext_pk_Proc))
+            body = str(code_module.Lines(start, count))
+            details.update(procedure="RequestPolicyFixtureBridge", start_line=start, line_count=count,
+                           source_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest())
+            require(start > 0 and count > 0 and "Public Function RequestPolicyFixtureBridge(" in body, details)
+            declarations = str(code_module.Lines(1, int(code_module.CountOfDeclarationLines)))
+            require("Option Private Module" not in declarations, "The fixture bridge must remain public")
+            details["readable"] = True
+        except Exception as exc:
+            details["error"] = repr(exc)
+            raise
+        finally:
+            code_module = component = project = projects = vbe = None
+
+    def verify_bridge_invocation(stage):
+        value = call_probe("GetVCSVersion")
+        value = value[0] if isinstance(value, tuple) else value
+        record["probe_bridge"]["verification"][stage]["invocation_result"] = value
+        require(isinstance(value, str) and value and not value.startswith("{"),
+                "The public fixture bridge did not return the installed version")
 
     pythoncom.CoInitialize()
     try:
@@ -156,10 +212,13 @@ def run(evidence, label, case_set="all", probe_bridge=False):
             bridge_bytes = b"\xef\xbb\xbf" + PROBE_BRIDGE_SOURCE.replace("\n", "\r\n").encode("utf-8")
             bridge_file.write_bytes(bridge_bytes)
             app.LoadFromText(win32com.client.constants.acModule, "modRequestPolicyBridge", str(bridge_file))
-            bridge_ready = True
             record["probe_bridge"] = {"module": "modRequestPolicyBridge", "entrypoint": bridge_target,
                                       "source_file": str(bridge_file), "sha256": hashlib.sha256(bridge_bytes).hexdigest()}
+            verify_bridge("after_load", save_module=True)
+            bridge_ready = True
         app.Run(library + ".Preload")
+        if probe_bridge:
+            verify_bridge_invocation("after_load")
 
         def save():
             (evidence / (label + ".json")).write_text(
@@ -224,9 +283,15 @@ def run(evidence, label, case_set="all", probe_bridge=False):
         require(baseline.get("success"), baseline)
         # A newly created database remains exclusive until its first close. The
         # in-place merge acceptance cases require an actually shared fixture.
+        if probe_bridge:
+            bridge_ready = False
         app.CloseCurrentDatabase()
         app.OpenCurrentDatabase(str(folder / "fixture.accdb"), False)
         app.Run(library + ".Preload")
+        if probe_bridge:
+            verify_bridge("after_reopen")
+            bridge_ready = True
+            verify_bridge_invocation("after_reopen")
         retired = probe("retired")
         require(json.loads(retired["setter"])["error_pattern"] == "policy_activation_retired", retired)
         require(json.loads(retired["mode"])["success"] is False, retired)

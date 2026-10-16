@@ -75,7 +75,8 @@ End Function
 '
 Public Function F1CanonicalizeButtonPicture(ByVal strExpectedHost As String, _
     ByVal strMenuName As String, ByVal strProbeName As String, _
-    ByVal strPictureFile As String, ByVal strProofFile As String) As Boolean
+    ByVal strPictureFile As String, ByVal strProofFile As String, _
+    Optional ByVal strMaskFile As String) As Boolean
 
     Dim objFSO As Object
     Dim objPicture As Object
@@ -107,12 +108,24 @@ Public Function F1CanonicalizeButtonPicture(ByVal strExpectedHost As String, _
         m_strLastError = CStr(vbObjectError + 2474) & ": The picture proof file already exists."
         Exit Function
     End If
+    If Len(strMaskFile) > 0 Then
+        If Not objFSO.FileExists(strMaskFile) Then
+            m_strLastError = CStr(vbObjectError + 2475) & ": The source picture mask does not exist."
+            Exit Function
+        End If
+    End If
     ' Copy the tested control to an owned temporary popup. Both variants get
     ' their own copy; no proof reads back the subsequently tested assignment.
     Set objProbeBar = Application.CommandBars.Add(strProbeName, 5, False, True)
     Set objProbeButton = Application.CommandBars(strMenuName).Controls(1).Copy(objProbeBar)
     Set objPicture = stdole.LoadPicture(strPictureFile)
     objProbeButton.Picture = objPicture
+    ' Match the production importer order for a requested source image.
+    ' The database-mutation proof deliberately retains the copied existing mask.
+    If Len(strMaskFile) > 0 Then
+        Set objPicture = stdole.LoadPicture(strMaskFile)
+        objProbeButton.Mask = objPicture
+    End If
     stdole.SavePicture objProbeButton.Picture, strProofFile
     objProbeBar.Delete
     Set objProbeButton = Nothing
