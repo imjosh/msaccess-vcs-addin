@@ -19,6 +19,9 @@ import uuid
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+EXIT_WAIT_MS = 60000
+INVENTORY_SETTLE_MS = 30000
+
 
 def require(condition, message):
     if not condition:
@@ -34,7 +37,7 @@ def run(evidence, label):
     import win32api
     import win32com.client
     import win32event
-    from msaccess_vcs_mcp.access_com.process_qos import pid_from_access_app
+    from msaccess_vcs_mcp.access_com.process_qos import list_access_pids_or_none, pid_from_access_app
     from msaccess_vcs_mcp.access_com.instance_registry import process_create_time
 
     spec = importlib.util.spec_from_file_location(
@@ -144,7 +147,7 @@ def run(evidence, label):
             require(completion["decision_policy"] == policy and completion["success"] is False, completion)
             require(completion.get("errorNumber") != -2147219094, completion)
             decisions = completion.get("decisions", [])
-            require(len(decisions) == 1 and decisions[0]["title"].startswith("Build "), completion)
+            require(len(decisions) == 1 and decisions[0]["message"].startswith("Build fixture (fixture.accdb) from source?"), completion)
             require(decisions[0].get("detail") != "file_dialog", completion)
             if policy == "decline":
                 require(completion["type"] == "cancelled" and decisions[0]["resolution"] == "declined", completion)
@@ -376,7 +379,7 @@ def run(evidence, label):
                         details["quit_error"] = repr(exc)
                 peer = None
                 gc.collect()
-                details["original_handle_exit"] = peer_handle is not None and win32event.WaitForSingleObject(peer_handle, 5000) == win32event.WAIT_OBJECT_0
+                details["original_handle_exit"] = peer_handle is not None and win32event.WaitForSingleObject(peer_handle, EXIT_WAIT_MS) == win32event.WAIT_OBJECT_0
                 if peer_handle is not None:
                     peer_handle.Close()
                 pythoncom.CoUninitialize()
@@ -394,26 +397,95 @@ def run(evidence, label):
         record["verified"] = True
         save()
     finally:
+        # Keep a failed acceptance assertion primary even when shutdown also fails.
+        # Each cleanup stage still records its independent evidence and error.
+        primary_error = sys.exc_info()[1]
+        if primary_error is not None:
+            record["primary_error"] = {
+                "type": type(primary_error).__name__, "message": str(primary_error),
+            }
+        cleanup_errors = []
+
+        def cleanup_error(stage, error):
+            cleanup_errors.append({"stage": stage, "error": repr(error)})
+
+        quit_attempted = False
         if app is not None:
             try:
                 require(pid_from_access_app(app) == pid and process_create_time(pid) == stamp,
                         "Owned Access process identity changed")
+                quit_attempted = True
                 app.Quit(2)
             except Exception as exc:
                 record["quit_error"] = repr(exc)
+                cleanup_error("quit", exc)
         app = None
         gc.collect()
-        exited = handle is not None and win32event.WaitForSingleObject(handle, 5000) == win32event.WAIT_OBJECT_0
-        record["original_process_exited"] = exited
+        exited = False
+        wait_ms = EXIT_WAIT_MS if quit_attempted else 0
+        record["exit_wait_ms"] = wait_ms
         if handle is not None:
-            handle.Close()
+            try:
+                exit_result = win32event.WaitForSingleObject(handle, wait_ms)
+                exited = exit_result == win32event.WAIT_OBJECT_0
+                record["exit_timeout"] = exit_result == win32event.WAIT_TIMEOUT
+            except Exception as exc:
+                cleanup_error("exit_wait", exc)
+            try:
+                handle.Close()
+            except Exception as exc:
+                cleanup_error("handle_close", exc)
+        record["original_process_exited"] = exited
+
+        # Original-handle exit remains mandatory. Observe transient helpers for a
+        # bounded interval and require two consecutive known empty inventories.
+        samples = []
+        settle_start = time.monotonic()
+        settle_deadline = settle_start + (INVENTORY_SETTLE_MS / 1000 if exited else 0)
+        empty_samples = 0
+        inventory_unknown = False
+        while True:
+            try:
+                pids = list_access_pids_or_none()
+            except Exception as exc:
+                cleanup_error("process_inventory", exc)
+                pids = None
+            samples.append({"elapsed_ms": round((time.monotonic() - settle_start) * 1000),
+                            "pids": sorted(pids) if pids is not None else None})
+            if pids is None:
+                inventory_unknown = True
+                break
+            empty_samples = empty_samples + 1 if pids == set() else 0
+            if empty_samples >= 2 or time.monotonic() >= settle_deadline:
+                break
+            time.sleep(0.25)
+        record["inventory_settle_ms"] = INVENTORY_SETTLE_MS if exited else 0
+        record["inventory_samples"] = samples
+        record["pids_after_exit"] = sorted(pids) if pids is not None else None
+        closure_confirmed = bool(exited and not inventory_unknown and empty_samples >= 2)
+        record["closure_confirmed"] = closure_confirmed
+        if pid is not None and not closure_confirmed:
+            cleanup_error("closure", AssertionError("Owned Access closure was not confirmed; host artifacts were retained"))
         if endpoint is not None:
-            endpoint.close()
-        pythoncom.CoUninitialize()
-        (evidence / (label + ".json")).write_text(
-            json.dumps(record, indent=2, default=str), encoding="utf-8")
-        if pid is not None:
-            require(exited, "Owned Access process did not exit; host artifacts were retained")
+            try:
+                endpoint.close()
+            except Exception as exc:
+                cleanup_error("callback_endpoint", exc)
+        try:
+            pythoncom.CoUninitialize()
+        except Exception as exc:
+            cleanup_error("com_uninitialize", exc)
+        record["cleanup_errors"] = cleanup_errors
+        record["checks_completed"] = bool(record.get("verified"))
+        record["verified"] = bool(record.get("verified") and closure_confirmed and not cleanup_errors)
+        try:
+            (evidence / (label + ".json")).write_text(
+                json.dumps(record, indent=2, default=str), encoding="utf-8")
+        except Exception as exc:
+            cleanup_error("evidence_write", exc)
+        if primary_error is None:
+            require(not cleanup_errors, {"cleanup_errors": cleanup_errors, "evidence": str(evidence / (label + ".json"))})
+
 
 
 if __name__ == "__main__":
