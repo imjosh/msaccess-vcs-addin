@@ -379,16 +379,40 @@ class Cases:
                 key = ('changed' if changed else 'unchanged') + '-tracked-class-module-orphan-' + policy
                 item = self.new(key)
                 fixture = Path(__file__).with_name('Fixtures') / 'modules/clsPolicyOrphanFixture.cls'
+                import_folder = self.folder / (key + '-fixture-import')
+                import_folder.mkdir(exist_ok=False)
+                import_copy = import_folder / fixture.name
+                # VBE.Import reads system-encoded, BOM-free text. The canonical
+                # tracked fixture stays UTF-8; match product import conversion.
+                import_copy.write_bytes(fixture.read_bytes().decode('utf-8-sig').encode('mbcs'))
                 project = next(p for p in self.app.VBE.VBProjects if Path(p.FileName).resolve() == self.host.resolve())
-                module = project.VBComponents.Import(str(fixture.resolve()))
+                module = project.VBComponents.Import(str(import_copy.resolve()))
                 name = module.Name
+                item['class_fixture_import'] = {
+                    'name': name, 'vbcomponent_type': int(module.Type),
+                    'project': str(project.FileName), 'expected_type': 2,
+                    'canonical_fixture': str(fixture.resolve()),
+                    'canonical_sha256': __import__('hashlib').sha256(fixture.read_bytes()).hexdigest(),
+                    'transport_copy': str(import_copy), 'transport_encoding': 'system mbcs without BOM',
+                    'transport_sha256': __import__('hashlib').sha256(import_copy.read_bytes()).hexdigest()}
+                self.save()
                 require(name == 'clsPolicyOrphanFixture', 'Unexpected disposable class-module fixture')
+                require(int(module.Type) == 2, f'Fixture must be a real vbext_ct_ClassModule: {item["class_fixture_import"]}')
+                self.app.VBE.ActiveVBProject = project
                 self.app.DoCmd.Save(win32com.client.constants.acModule, name)  # Save only the owned fixture.
+                item['class_fixture_import']['saved_vbcomponent_type'] = int(project.VBComponents(name).Type)
+                self.save()
+                require(item['class_fixture_import']['saved_vbcomponent_type'] == 2, 'Saving changed the class fixture identity')
                 module = project = None
                 seed = self.call('external', 'ExportObject', 'module', name, 'prefer_database')
-                self.outcome(seed, transferred=True)
                 source = self.source / 'modules' / (name + '.cls')
-                require(source.exists(), 'Actual class module did not export to its canonical .cls file')
+                item.update(seed=seed, expected_class_primary=str(source),
+                            history_after_seed=self.history(),
+                            exported_files_after_seed={str(path.relative_to(self.source)): __import__('hashlib').sha256(path.read_bytes()).hexdigest()
+                                                       for path in self.source.rglob(name + '.*') if path.is_file()})
+                self.save()
+                self.outcome(seed, transferred=True)
+                require(source.exists(), f'Actual type-2 class module did not export to its canonical .cls file: {item}')
                 if changed:
                     original = source.read_text(encoding='utf-8-sig')
                     edited = original.replace('FixtureValue = 1', 'FixtureValue = 99')

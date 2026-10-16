@@ -45,14 +45,33 @@ def menu_fixture(cases, name):
 
 def set_native_command_bar_picture(cases, name, picture, item):
     helper = Path(__file__).with_name('Fixtures') / 'modules/vcs_policy_artifact_fixture.bas'
+    import_folder = cases.folder / (cases.host.stem + '-picture-fixture-import')
+    import_folder.mkdir(exist_ok=False)
+    import_copy = import_folder / helper.name
+    # VBE.Import expects BOM-free system text, as the product module importer does.
+    # Keep tracked UTF-8 fixture bytes and CRLF intact; convert only the owned copy.
+    import_copy.write_bytes(helper.read_bytes().decode('utf-8-sig').encode('mbcs'))
+    item['native_picture_helper'] = {
+        'expected_module': 'vcs_policy_artifact_fixture', 'expected_type': 1,
+        'canonical_fixture': str(helper.resolve()),
+        'fixture_sha256': hashlib.sha256(helper.read_bytes()).hexdigest(),
+        'transport_copy': str(import_copy), 'transport_encoding': 'system mbcs without BOM',
+        'transport_sha256': hashlib.sha256(import_copy.read_bytes()).hexdigest(),
+        'host': str(cases.host)}
+    cases.save()
     project = next(p for p in cases.app.VBE.VBProjects
                    if Path(p.FileName).resolve() == cases.host.resolve())
-    module = project.VBComponents.Import(str(helper.resolve()))
-    require(module.Name == 'vcs_policy_artifact_fixture', 'Unexpected native picture fixture module')
+    module = project.VBComponents.Import(str(import_copy.resolve()))
+    item['native_picture_helper'].update(module=module.Name, vbcomponent_type=int(module.Type),
+                                         project=str(project.FileName))
+    cases.save()
+    require(module.Name == 'vcs_policy_artifact_fixture', f'Unexpected native picture fixture module: {item["native_picture_helper"]}')
+    require(int(module.Type) == 1, 'Native picture fixture must be a real standard module')
+    cases.app.VBE.ActiveVBProject = project
     cases.app.DoCmd.Save(win32com.client.constants.acModule, module.Name)
-    item['native_picture_helper'] = {'module': module.Name,
-                                     'fixture_sha256': hashlib.sha256(helper.read_bytes()).hexdigest(),
-                                     'host': str(cases.host)}
+    item['native_picture_helper']['saved_vbcomponent_type'] = int(project.VBComponents(module.Name).Type)
+    cases.save()
+    require(item['native_picture_helper']['saved_vbcomponent_type'] == 1, 'Saving changed the native picture fixture identity')
     module = project = None
     proof = cases.folder / (cases.host.stem + '-assigned-picture.bmp')
     result = cases.app.Run('F1SetCommandBarPicture', str(cases.host), name, str(picture), str(proof))
@@ -75,8 +94,12 @@ def command_bars(cases, transports):
                 name = 'F1 Menu ' + uuid.uuid4().hex[:8]
                 menu, images = menu_fixture(cases, name)
                 imported = cases.call('external', 'ImportObject', 'command_bar', name, 'block')
+                item['seed_import'] = imported
+                cases.save()
                 cases.outcome(imported, transferred=True)
                 seeded = cases.call('external', 'ExportObject', 'command_bar', name, 'block')
+                item['seed_export'] = seeded
+                cases.save()
                 cases.outcome(seeded, transferred=True)
                 picture = next(images.glob('*_Picture.bmp'))
                 baseline = picture.read_bytes()
