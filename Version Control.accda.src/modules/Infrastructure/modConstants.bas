@@ -347,6 +347,7 @@ End Function
 '           :   Reports = 2      9/16/2026  Preserve legacy-only conditional formatting (issue #779)
 '           :   Reports = 3      10/7/2026  Regenerate missing SVGs after aborted migrations (A37)
 '           :   Tables = 1       8/21/2026  Fixed DECIMAL(p,s) in optional .sql sidecar (issue #756)
+'           :   Forms/Reports 4/3 also cover the BOM-free UTF-8 writer repair (10/15/2026).
 '---------------------------------------------------------------------------------------
 '
 Public Function GetExporterRevisions() As Dictionary

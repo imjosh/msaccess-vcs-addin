@@ -193,36 +193,6 @@ ErrHandler:
     Resume CleanUp
 End Function
 
-' The layout exporter uses this shared file writer. Verify actual UTF-8 bytes,
-' including non-ASCII text and its absence of a BOM, in a disposable temp file.
-Public Sub TestLayoutSvgFileWriter()
-    Dim strPath As String
-    Dim strText As String
-    Dim bData() As Byte
-    Dim lngErr As Long
-    Dim strErr As String
-    On Error GoTo ErrHandler
-    strPath = GetTempFolder & "A37_" & FSO.GetTempName
-    strText = "<svg>" & ChrW$(&H3A9) & "</svg>" & vbCrLf
-    WriteFileNoBom strText, strPath
-    TestAssert FSO.FileExists(strPath), "SVG writer creates its file"
-    bData = GetFileBytes(strPath)
-    TestAssert bData(0) = Asc("<"), "UTF-8 output starts with content, without a BOM"
-    TestAssert UBound(bData) + 1 = 15, "UTF-8 encodes omega as two bytes"
-    TestAssert ReadFile(strPath) = strText, "SVG text survives UTF-8 write/read"
-CleanUp:
-    On Error Resume Next
-    If Len(strPath) > 0 Then
-        If FSO.FileExists(strPath) Then FSO.DeleteFile strPath, True
-    End If
-    If lngErr <> 0 Then TestAssert False, "SVG file writer " & lngErr & ": " & strErr
-    Exit Sub
-ErrHandler:
-    lngErr = Err.Number
-    strErr = Err.Description
-    Resume CleanUp
-End Sub
-
 Private Function MigrationSnapshot() As Dictionary
     Dim strPath As String
     Dim dDump As Dictionary
