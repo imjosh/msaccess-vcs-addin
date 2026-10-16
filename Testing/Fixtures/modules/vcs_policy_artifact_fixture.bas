@@ -8,6 +8,8 @@
 Option Compare Database
 Option Explicit
 
+Private m_strLastError As String
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : F1SetCommandBarPicture
@@ -22,40 +24,55 @@ Public Function F1SetCommandBarPicture(ByVal strExpectedHost As String, ByVal st
     Dim objFSO As Object
     Dim objButton As Object
     Dim objPicture As Object
-    Dim lngError As Long
-    Dim strError As String
 
-    ' This fixture has no add-in logging dependency. Preserve inherited diagnostics
-    ' before installing its own handler; all failures propagate to the Python driver.
+    ' This fixture has no add-in logging dependency. Failures remain observable
+    ' through its Boolean result and retained diagnostic, without a modal rethrow.
+    m_strLastError = vbNullString
     If Err.Number <> 0 Then
-        Debug.Print "F1SetCommandBarPicture inherited error " & CStr(Err.Number) & ": " & Err.Description
+        m_strLastError = "Inherited error " & CStr(Err.Number) & ": " & Err.Description
         Err.Clear
+        Exit Function
     End If
     On Error GoTo Failed
     If StrComp(CurrentProject.FullName, strExpectedHost, vbTextCompare) <> 0 Then
-        Err.Raise vbObjectError + 2471, "F1SetCommandBarPicture", "The disposable fixture host does not match."
+        m_strLastError = CStr(vbObjectError + 2471) & ": The disposable fixture host does not match."
+        Exit Function
     End If
     Set objFSO = CreateObject("Scripting.FileSystemObject")
     If Not objFSO.FileExists(strPictureFile) Then
-        Err.Raise vbObjectError + 2472, "F1SetCommandBarPicture", "The picture fixture does not exist."
+        m_strLastError = CStr(vbObjectError + 2472) & ": The picture fixture does not exist."
+        Exit Function
     End If
     If StrComp(Left$(strProofFile, Len(CurrentProject.Path) + 1), _
         CurrentProject.Path & "\", vbTextCompare) <> 0 Then
-        Err.Raise vbObjectError + 2473, "F1SetCommandBarPicture", "The picture proof must stay beside the disposable host."
+        m_strLastError = CStr(vbObjectError + 2473) & ": The picture proof must stay beside the disposable host."
+        Exit Function
     End If
     If objFSO.FileExists(strProofFile) Then
-        Err.Raise vbObjectError + 2474, "F1SetCommandBarPicture", "The picture proof file already exists."
+        m_strLastError = CStr(vbObjectError + 2474) & ": The picture proof file already exists."
+        Exit Function
     End If
     Set objPicture = stdole.LoadPicture(strPictureFile)
     Set objButton = Application.CommandBars(strMenuName).Controls(1)
     objButton.Picture = objPicture
-    objButton.BuiltInFace = False
     stdole.SavePicture objButton.Picture, strProofFile
     F1SetCommandBarPicture = True
     Exit Function
 
 Failed:
-    lngError = Err.Number
-    strError = Err.Description
-    Err.Raise lngError, "vcs_policy_artifact_fixture.F1SetCommandBarPicture", strError
+    m_strLastError = CStr(Err.Number) & ": " & Err.Description
+    Err.Clear
+    F1SetCommandBarPicture = False
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : F1PictureFixtureLastError
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Return the native fixture failure to its Python caller without modal UI.
+'---------------------------------------------------------------------------------------
+'
+Public Function F1PictureFixtureLastError() As String
+    F1PictureFixtureLastError = m_strLastError
 End Function

@@ -76,11 +76,15 @@ def set_native_command_bar_picture(cases, name, picture, item):
     proof = cases.folder / (cases.host.stem + '-assigned-picture.bmp')
     result = cases.app.Run('F1SetCommandBarPicture', str(cases.host), name, str(picture), str(proof))
     result = result[0] if isinstance(result, tuple) else result
-    require(result is True, f'Native picture fixture failed: {result}')
+    diagnostic = cases.app.Run('F1PictureFixtureLastError')
+    diagnostic = diagnostic[0] if isinstance(diagnostic, tuple) else diagnostic
+    item['native_picture_assignment'] = {'fixture_result': result, 'fixture_error': diagnostic,
+                                          'proof': str(proof)}
+    cases.save()
+    require(result is True and not diagnostic, f'Native picture fixture failed: {item["native_picture_assignment"]}')
     expected = hashlib.sha256(picture.read_bytes()).hexdigest()
     actual = hashlib.sha256(proof.read_bytes()).hexdigest()
-    item['native_picture_assignment'] = {'expected_sha256': expected, 'actual_sha256': actual,
-                                          'proof': str(proof)}
+    item['native_picture_assignment'].update(expected_sha256=expected, actual_sha256=actual)
     cases.save()
     require(actual == expected, 'Access-local fixture did not assign the requested actual picture')
 
