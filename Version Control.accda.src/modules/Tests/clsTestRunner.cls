@@ -83,6 +83,11 @@ Private Type udtTestRunner
 End Type
 Private this As udtTestRunner
 
+' Only a runner that successfully marked a hosted project may clear that flag.
+' Keep its exact file-qualified command across current-database changes and retries.
+Private m_blnOwnsHostedRunFlag As Boolean
+Private m_strHostedRunFlagTarget As String
+
 ' Instance-owned, one-shot seams for orchestration regressions. Arm in setup;
 ' no loaded-project mutation or invalid VBA is needed to reach the compile gate.
 Private m_blnCompileFailureForTest As Boolean
@@ -362,7 +367,11 @@ Public Sub RunSelected(colTestKeys As Collection)
 
     modTestRunnerDiag.Diag "run.begin", "tests=" & colTestKeys.Count & " known=" & this.Tests.Count
     this.State = etrsRunning
-    SetHostedTestRunFlag True
+    If Not SetHostedTestRunFlag(True) Then
+        this.RunError = T("Unable to mark the test project as running.")
+        this.State = etrsFailed
+        Exit Sub
+    End If
     this.CancelRequested = False
     Set this.LastRunKeys = New Collection
     Dim lngKeyIdx As Long
@@ -624,23 +633,53 @@ End Sub
 '           : user project has no operation API at all. modTestAssert is the one module
 '           : present in every project that runs tests, so it carries the signal.
 '           : A project whose copy of modTestAssert predates SetTestRunActive simply does
-'           : not get the notification.
+'           : not get the notification. Only this instance's successful True call owns
+'           : a later False call. Failed releases retain that ownership for retry.
 '---------------------------------------------------------------------------------------
 '
-Private Sub SetHostedTestRunFlag(blnActive As Boolean)
+Private Function SetHostedTestRunFlag(blnActive As Boolean) As Boolean
 
-    LogUnhandledErrors
-    On Error Resume Next
-
-    ' BuildRunCmd qualifies by file path, which matters here more than anywhere else:
-    ' when the add-in tests its own source both projects are named MSAccessVCS and both
-    ' contain a modTestAssert, so an unqualified call would set the flag on the wrong one.
-    If GlobalProcExists("SetTestRunActive") Then
-        Application.Run BuildRunCmd("SetTestRunActive"), blnActive
+    ' Dormant runners own no hosted state, including when their destructor runs
+    ' inside another runner's active test. Do not even inspect the shared error here.
+    If Not blnActive And Not m_blnOwnsHostedRunFlag Then
+        SetHostedTestRunFlag = True
+        Exit Function
     End If
-    Err.Clear
+    If blnActive And m_blnOwnsHostedRunFlag Then
+        If Not SetHostedTestRunFlag(False) Then Exit Function
+    End If
 
-End Sub
+    Dim strTarget As String
+    InitializeRequestErrors "clsTestRunner.SetHostedTestRunFlag"
+    On Error GoTo Failed
+
+    If blnActive Then
+        ' Preserve compatibility with older hosted projects that have no flag hook.
+        If Not GlobalProcExists("SetTestRunActive") Then
+            SetHostedTestRunFlag = True
+            Exit Function
+        End If
+        strTarget = BuildRunCmd("SetTestRunActive", True)
+    Else
+        strTarget = m_strHostedRunFlagTarget
+    End If
+    Application.Run strTarget, blnActive
+
+    ' Claim or release only after the actual hosted callback returned successfully.
+    m_blnOwnsHostedRunFlag = blnActive
+    If blnActive Then
+        m_strHostedRunFlagTarget = strTarget
+    Else
+        m_strHostedRunFlagTarget = vbNullString
+    End If
+    SetHostedTestRunFlag = True
+    Exit Function
+
+Failed:
+    ' Retain a failed release so normal cleanup's destructor can retry the same
+    ' target. Request-local handling cannot Stop or mutate a different runner's log.
+    Err.Clear
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -1953,12 +1992,13 @@ End Function
 ' Date      : 5/7/2026
 ' Purpose   : Build a project-qualified Application.Run command for a procedure in
 '           : CurrentVBProject. Follows the RunSubInCurrentProject pattern from
-'           : modDatabase.bas.
+'           : modDatabase.bas. A stored ownership callback can request the full file
+'           : qualifier even when the target project has a different project name.
 '---------------------------------------------------------------------------------------
 '
-Private Function BuildRunCmd(strProcName As String) As String
+Private Function BuildRunCmd(strProcName As String, Optional ByVal blnFileQualified As Boolean = False) As String
 
-    If CurrentVBProject.Name = PROJECT_NAME Then
+    If blnFileQualified Or CurrentVBProject.Name = PROJECT_NAME Then
         With CurrentProject
             BuildRunCmd = .Path & PathSep & FSO.GetBaseName(.Name) & "." & strProcName
         End With
@@ -2841,7 +2881,8 @@ End Sub
 ' Purpose   : Clear the hosted-project run flag when the runner singleton is released.
 '           : ReleaseObjects runs at root completion, so this fires on every path the
 '           : root clears on, including abandonment when a lease is dropped without
-'           : Complete.
+'           : Complete. An idle instance has acquired no flag and leaves other runners
+'           : alone; a failed normal release retries its captured owned target.
 '---------------------------------------------------------------------------------------
 '
 Private Sub Class_Terminate()

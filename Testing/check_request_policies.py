@@ -273,14 +273,32 @@ def run(evidence, label, case_set="all", probe_bridge=False):
             raw = raw[0] if isinstance(raw, tuple) else raw
             return json.loads(raw) if isinstance(raw, str) and raw.startswith("{") else raw
 
+        fixture_source = folder / "fixture.accdb.src"
+        fixture_source.mkdir(exist_ok=True)
+        options_path = fixture_source / "vcs-options.json"
+        fixture_options = {"Info": {}, "Options": {"ExportFolder": "", "ExportFormatVersion": "5.1.0"}}
+        options_path.write_bytes(b"\xef\xbb\xbf" + (json.dumps(fixture_options, indent=2) + "\r\n").encode("utf-8"))
+        record["fixture_options_seed"] = {"path": str(options_path),
+                                          "sha256": hashlib.sha256(options_path.read_bytes()).hexdigest()}
         session = api("RegisterSession", "f3-driver-" + uuid.uuid4().hex)
         require(session.get("success"), session)
         database = app.CurrentDb()
         database.CreateQueryDef("qryF3RequestFixture", "SELECT 1 AS FixtureValue;")
         database = None
-        baseline = api("FullExport", "block")
+        # Seed real query content and its index without the inherited whole-export
+        # form lifecycle. The request controls below retain their actual entry paths.
+        baseline = api("ExportByType", "queries", True, "block")
         record["fixture_export"] = baseline
         require(baseline.get("success"), baseline)
+        fixture_baselines = {"options": options_path,
+                             "query": fixture_source / "queries/qryF3RequestFixture.sql",
+                             "index": fixture_source / "vcs-index.idx"}
+        for key, path in fixture_baselines.items():
+            require(path.is_file(), {"missing_fixture_baseline": key, "path": str(path)})
+        baseline_hashes = {key: hashlib.sha256(path.read_bytes()).hexdigest()
+                           for key, path in fixture_baselines.items()}
+        record["fixture_baselines"] = {key: {"path": str(path), "sha256": baseline_hashes[key]}
+                                       for key, path in fixture_baselines.items()}
         # A newly created database remains exclusive until its first close. The
         # in-place merge acceptance cases require an actually shared fixture.
         if probe_bridge:
@@ -288,6 +306,12 @@ def run(evidence, label, case_set="all", probe_bridge=False):
         app.CloseCurrentDatabase()
         app.OpenCurrentDatabase(str(folder / "fixture.accdb"), False)
         app.Run(library + ".Preload")
+        require(Path(app.CurrentProject.FullName).resolve() == (folder / "fixture.accdb").resolve(),
+                "The reopened request fixture host changed")
+        for key, path in fixture_baselines.items():
+            require(hashlib.sha256(path.read_bytes()).hexdigest() == baseline_hashes[key],
+                    {"fixture_baseline_changed_on_reopen": key, "path": str(path)})
+        record["fixture_baselines_survived_reopen"] = True
         if probe_bridge:
             verify_bridge("after_reopen")
             bridge_ready = True
