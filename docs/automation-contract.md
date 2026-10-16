@@ -8,25 +8,39 @@ without reading the implementation.
 The tests that guard this surface are in
 `Version Control.accda.src/modules/Tests/Core/modTestHeadlessBuild.bas`.
 
-## Two tiers of entry point
+## Entry points and request policies
 
-The `VCS` object has grown two kinds of build entry point, and the difference
-matters more than the names suggest.
+| Entry point | Policy support | Result |
+| --- | --- | --- |
+| `Export`, `FullExport`, `ExportVBA` | Optional policy | Final JSON |
+| `ImportObject`, `ExportObject` | Optional third argument | Final JSON with transfer or skip outcome |
+| `ImportByType`, `ExportByType` | Optional trailing policy | Final JSON with transfer and skip counts |
+| `Build`, `MergeBuild` | Optional policy | Timer admission or preflight refusal JSON |
+| `RunFilteredTests` | Optional policy | Final test JSON |
+| `RunTests`, `RunTestsHeadless`, `OpenTestRunner`, `RunRoundtripTests` | Legacy behavior | Existing test or UI result |
+| `BuildHeadless`, `MergeHeadless` | Fixed unattended workflow, nonempty policy refused | Final build JSON |
+| `RebuildAddIn` | Fixed helper workflow, nonempty policy refused | Launch or refusal JSON |
+| `BuildAs`, `LoadSelected`, `MergeAllSource`, `ExportSelected` | Legacy behavior | Existing statement or UI behavior |
+| Options, repair, split, localization, hook, and casing commands | Legacy behavior | Existing statement or UI behavior |
 
-| | `Build` / `MergeBuild` | `BuildHeadless` / `MergeHeadless` |
-|---|---|---|
-| Shape | `Sub` | `Function` returning JSON |
-| Progress form | opens `frmVCSMain` | none |
-| Returns | when the build is *scheduled* | when the build is *finished* |
-| Failure signal | none | `success: false` plus a reason |
+Legacy entry points remain callable through `API` when idle. Manual commands
+refuse before changing shared state while automated work is active. Inspection
+and targeted cancellation remain available. A request's arguments, source, and
+callback stay separate from the active operation until ownership is acquired.
 
-`Build` opens the form, then hands the work to `SetTimer "Build"` and returns
-immediately. Nothing about the outcome is available to the caller — which is
-why external builders written against it resort to polling log files or
-counting objects. Use the headless pair for anything unattended.
+An explicit policy belongs to one request. An omitted policy retains legacy
+behavior and never inherits an earlier request's choice. See
+[noninteractive operations](noninteractive-dialogs.md) for the conflict matrix,
+deletion limits, synchronization history, and result fields. `SetOperationPolicy`
+is retired and refuses without changing state. `ClearOperationPolicy` succeeds
+harmlessly. Standalone mode 2 is refused with mode diagnostics. Silent mode
+retains its existing default-answer behavior.
 
-`RunTestsHeadless` is the same idea for the test suite, and predates these; see
-[testing-strategy.md](testing-strategy.md).
+`Export`, `FullExport`, `ExportVBA`, and `Build` are JSON-returning functions.
+VBA statement calls can still ignore their results. `Build` and `MergeBuild`
+return `started:true` only after the continuation is admitted. They return before
+the build finishes, so the terminal callback or operation log establishes its
+outcome. `BuildHeadless` and `MergeHeadless` return after completion.
 
 ## VBE Error Trapping
 
@@ -67,8 +81,9 @@ escaped, rather than the build deciding it had failed):
 }
 ```
 
-A request refused before the build started carries only `success` and `error` —
-there is no log to point at. Refusals: building the add-in from inside itself,
+A request refused before the build started carries `success:false`, `error`,
+and an applicable `error_pattern`. It has no admitted operation log. Refusals
+include building the add-in from inside itself,
 merging with no database open, a source folder holding no `vcs-options.json`,
 and another operation already running.
 
@@ -170,10 +185,11 @@ file is how a pipeline detects that it was not met.
 
 ## Operation ownership and interaction
 
-Root work is owned by a **root lease** (`Operation.TryBeginRoot` →
-`clsRootOperationLease.Complete`) or by the synchronous pair **`Operation.Begin` /
-`Operation.Finish`**. Both create the same root; the difference is what the caller
-holds and what guarantees apply.
+Root work uses a root lease through `Operation.TryBeginRoot` and
+`clsRootOperationLease.Complete`, or the synchronous pair `Operation.Begin` and
+`Operation.Finish`. Both create the same root. Acquisition captures the request's
+initiating source, policy, stable public ID, and emitter before prompt-capable
+source-folder or test-helper preparation.
 
 | Use a **lease** when | Use **Begin / Finish** when |
 |---|---|
@@ -206,16 +222,12 @@ takes a **pause** (`Operation.TryPause` → `clsOperationPause.ResumePause`). A 
 suspends the root on the same stack that started it and issues no continuation
 token; pauses nest, and only the outermost resume restores the root.
 
-**Effective interaction mode** belongs to the root and only ratchets tighter
-(`eimSilent` wins over `eimNormal`, and `eimNonInteractive`, opened by a decision
-policy, wins over both; see [noninteractive-dialogs.md](noninteractive-dialogs.md)).
-While a root is active a looser mode is ignored, so nothing deeper in an operation can revoke silence a caller asked for;
-between roots the value is only the default for the next root, so relaxing it is
-allowed. Completing a root resets it, which is why headless callers
-no longer restore it by hand. **`Attended`** is a root capability (`Not
-(AutomationSource Or ForceUnattended)`) captured once at root creation and immutable
-for the life of the operation, so automation and headless entry points must set
-`Operation.ForceUnattended = True` *before* `TryBeginRoot`.
+Effective interaction mode belongs to the root. An explicit decision policy opens
+its noninteractive scope. Unrelated requests cannot change that scope or the
+root's captured source, policy, journal, result, callback, or timer state.
+`AutomationSource` and `SourceName` read the captured source while the root is
+active. Completion captures final diagnostics before restoring temporary
+interaction state. `Attended` remains fixed at root acquisition.
 
 `PromptWouldDisplay` is the single rule deciding whether a prompt blocks or is
 logged, and `MsgBox2` is its only caller. It honors `blnUserGesturePrompt` only when
@@ -249,9 +261,43 @@ handler, with no lease token carried across:
 `Finish` ends whatever root is active; these are safe only because `Begin` refuses
 when another operation is running and each form is the expected owner.
 
-The in-place merge timer chain detaches via `Operation.CurrentRootToken` at
-`modBuild.bas` because `Build` deliberately holds no lease object. The token is still
-validated on resume through `ResumeRoot`.
+### Queues, identity, and cancellation
+
+New requests carry no existing root token. Continuations explicitly carry their
+expected internal token and restore only matching work. Timer installation checks
+both operation and timer availability before changing queue fields. A failed
+Build, MergeReset, or MergeResume handoff completes only its matching owner
+unsuccessfully. MergeResume must be queued successfully before a project reset.
+
+`APIAsync` preserves typed method arguments and returns a synchronous refusal when
+admission fails. A queued request rechecks admission when it executes. A refusal
+at that point makes one terminal delivery attempt through that request's own
+emitter without registering it on another operation's callback.
+
+Public operation IDs differ from internal tokens. MCP work retains its supplied
+ID. Manual and direct-API roots receive generated IDs. Admitted IDs cannot be
+reused, including after completion or project-state recreation. Final results,
+callbacks, logs, and inspection identify the same public ID, effective policy,
+and initiating source even after callback registration is released.
+Synchronous MCP work uses `APIMCP(operation_id, method, arg1, arg2, arg3)`.
+The method arguments are optional. `API` keeps external-API attribution. IDs are
+case-sensitive and contain 1 to 128 UTF-16 code units without null characters.
+
+Inspection leaves unexpired work unchanged and applies ordinary-operation
+heartbeat expiry already due. Automated cancellation requires the explicit public ID. Missing or
+mismatched IDs refuse without changing cancellation state. Manual controls bind
+to the operation they display. A matching ID identifies a target and does not
+grant permission to cancel it.
+
+Rebuild reserves operation ownership and timer capacity before helper launch and
+retains that reservation through handoff waits. It arms QuitForRebuild only after
+confirmed handoff. A post-launch timer failure reports `helper_launched:true`.
+The result cannot establish that the helper stopped. An unresolved launched
+helper keeps its owned reservation across heartbeat expiry and same-project VBA
+state recreation. The outer rebuild job and the child Build use distinct public
+IDs; `build_operation_id` identifies the child's progress stream. The status file
+remains authoritative for the outer rebuild outcome. Separate rebuild recovery,
+native close cancellation, and confirmed cancellation polling remain later work.
 
 ## Related
 

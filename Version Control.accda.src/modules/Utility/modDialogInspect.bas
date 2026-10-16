@@ -43,7 +43,7 @@ Public Function ListAddinDialogs() As String
     Set colItems = New Collection
 
     ' Some properties are unavailable on a form that is closing.
-    LogUnhandledErrors
+    InitializeRequestErrors "ListAddinDialogs"
     On Error Resume Next
     For Each frm In Forms
         If IsAddinFormName(frm.Name) Then
@@ -57,13 +57,15 @@ Public Function ListAddinDialogs() As String
             colItems.Add dItem
         End If
     Next frm
-    CatchAny eelNoError, vbNullString, "modDialogInspect.ListAddinDialogs"
+    Err.Clear
     On Error GoTo 0
 
     dRoot.Add "success", True
     dRoot.Add "dialogs", colItems
     dRoot.Add "operation_status", Operation.StatusName()
     dRoot.Add "interaction", IIf(InteractionIsNonInteractive(), "noninteractive", "interactive")
+    AddOperationIdentity dRoot, Operation
+    dRoot("error_level") = Operation.ErrorLevel
     ListAddinDialogs = ConvertToJson(dRoot)
 
 End Function
@@ -78,7 +80,8 @@ End Function
 '           : not call Finish; the running operation stops at its next check.
 '---------------------------------------------------------------------------------------
 '
-Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = ACTION_CLOSE) As String
+Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = ACTION_CLOSE, _
+    Optional ByVal strOperationId As String) As String
 
     Dim strAct As String
     Dim blnRunning As Boolean
@@ -112,7 +115,16 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
         Exit Function
     End If
 
-    If strAct = ACTION_CANCEL And blnRunning Then
+    If strAct = ACTION_CANCEL Then
+        If Len(strOperationId) = 0 Then
+            DismissAddinDialog = DismissRefusal(dRoot, "operation_id_required", T("Cancellation requires the public operation ID."))
+            Exit Function
+        End If
+        If Not blnRunning Or StrComp(strOperationId, Operation.PublicId, vbBinaryCompare) <> 0 Then
+            DismissAddinDialog = DismissRefusal(dRoot, "operation_id_mismatch", T("The cancellation ID does not match the active operation."))
+            Exit Function
+        End If
+        dRoot("operation_id") = Operation.PublicId
         RequestCancel
         dRoot.Add "success", True
         dRoot.Add "interrupted", True
@@ -206,7 +218,7 @@ Private Function AddinFormIsLoaded(ByVal strName As String) As Boolean
 
     Dim frm As Form
 
-    LogUnhandledErrors
+    InitializeRequestErrors "AddinFormIsLoaded"
     On Error Resume Next
     For Each frm In Forms
         If StrComp(frm.Name, strName, vbTextCompare) = 0 Then

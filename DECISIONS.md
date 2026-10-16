@@ -83,6 +83,58 @@ contradictory guidance.
 
 ---
 
+## 2026-10-16 - Request-owned policies protect explicit single-object transfers
+
+**Trigger**: A successful policy setter did not protect a single-object transfer.
+An explicit import could discard an independently edited database definition.
+Session-wide policy state could also affect a later request or another callback.
+
+**Options explored**:
+
+- Retain the April 15 single-object index bypass. Rejected for explicit policies
+  because naming an object does not authorize overwriting independent changes.
+- Retain setter/cleanup activation. Rejected because disconnects, queued work,
+  resets, and competing callers cannot establish which request owns that state.
+- Compare only timestamps or the primary source file. Rejected because edits can
+  preserve dates and a component can include metadata, images, or extracted files.
+- Capture policy with each admitted request and compare complete content against
+  persisted synchronization baselines. Chosen; legacy omitted-policy calls retain
+  the historical behavior.
+
+**Decision**: Each admitted request owns its source, public ID, policy, emitter,
+journal, and internal continuation token. Synchronous MCP supplies its ID through
+`APIMCP`; queued continuations carry an explicit internal token. Admitted public
+IDs cannot be reused. Retired activation calls cannot change operation state.
+
+Explicit single-object and category policies use direction-aware conflict rules.
+No policy authorizes a conflicting deletion. Preservation reports a skip rather
+than a transfer. Index format 5 stores separate complete source and database
+baselines, because import can normalize source formatting. Successful transfers
+update affected history; skipped or blocked transfers leave that history intact.
+Table definitions and their data/macros form one conflict plan before transfer.
+
+**Performance assessment**: Matched 500-query fixtures retain cold and repeated
+export/import distributions, actual contents, and independently parsed index
+versions. Preliminary repeated-call medians were 148 ms export and 206 ms import,
+against 134 ms and 198 ms on the legacy baseline. The early cold comparison warmed
+the baseline through its setter outside the timed call, so it cannot attribute
+the cold difference to content checks. Qualification measures the complete policy
+request, including the historical setter and cleanup, and retains transfer-only
+timings separately. The April JSON-index estimates do not describe the current
+binary-index implementation. See the UP-004 qualification record for exact heads.
+
+**What this rules out**: Explicit policies cannot silently bypass unsupported
+comparisons, inherit an earlier request's policy, or automatically retry a blocked
+conflict with overwrite authority. Later session integration must preserve request
+ownership. Rebuild reservations remain held while a launched helper is unresolved;
+separate worker authorization and recovery remain outside this decision.
+
+**Relevant files**: `modOperationRequest`, `clsOperationRequest`, `clsOperation`,
+`modAPI`, `modTimer`, `clsVCSIndex`, `clsConflicts`, `modBuild`, `modExport`,
+`docs/noninteractive-dialogs.md`, and `docs/automation-contract.md`.
+
+---
+
 ## 2026-10-02 — Decision precedence preserves compile diagnostics through teardown
 
 **Trigger**: A blocked setup confirmation followed by compile failure added `error_pattern` twice. Completion stopped before releasing the root; the timer fallback concealed that failure without repairing ownership.
@@ -6626,6 +6678,11 @@ What would trigger revisiting: if a future composer rewrite collapses multiple s
 
 ## 2026-04-15 — Skip VCS index for MCP/API single-object imports (agent-as-user)
 
+> Partially superseded (2026-10-16): Explicit request policies now protect
+> conflicts and persist synchronization history. Omitted-policy calls retain
+> this historical behavior. See "Request-owned policies protect explicit
+> single-object transfers" above.
+
 **Trigger**: Importing one query via `ImportObject` (MCP) in a large database with thousands of objects takes 7+ seconds, of which only 0.33s is the actual `LoadFromText`. The rest is JSON overhead: 5.19s parsing three JSON files (dominated by the 3.7 MB `vcs-index.json` with 21,747 ISO date entries), plus ~3-5s of hidden time re-serializing and saving the full index after `Perf.EndTiming`. The index exists for conflict detection — comparing source file state against database state across sessions — but for an MCP agent that just wrote the source file and is deliberately importing it, this check is meaningless.
 
 **Options explored**:
@@ -6645,6 +6702,11 @@ What would trigger revisiting: if a future composer rewrite collapses multiple s
 ---
 
 ## 2026-04-15 — Auto-resolve conflicts for agent/API operations
+
+> Partially superseded (2026-10-16): Explicit request policies now protect
+> conflicts and persist synchronization history. Omitted-policy calls retain
+> this historical behavior. See "Request-owned policies protect explicit
+> single-object transfers" above.
 
 **Trigger**: When an MCP or API caller triggers a merge build or export that encounters conflicts (source file and database object both changed since last sync), the add-in opens the modal `frmVCSConflict` dialog and blocks indefinitely. Agents have no programmatic way to dismiss or respond to this dialog, causing the operation to hang.
 

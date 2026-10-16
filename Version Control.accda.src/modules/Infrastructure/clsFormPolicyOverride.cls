@@ -59,7 +59,15 @@ Public Sub Restore()
 End Sub
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : Class_Terminate
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Restore the guarded form policy when its owning scope unwinds.
+'---------------------------------------------------------------------------------------
+'
 Private Sub Class_Terminate()
+    InitializeRequestErrors "clsFormPolicyOverride.Class_Terminate"
     On Error Resume Next
     Restore
 End Sub

@@ -24,6 +24,7 @@ Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 ' Instance-owned test seams for scoped calls; see the Friend properties below.
 Private m_lngFaultAfterBegin As Long
 Private m_blnCancelAfterBegin As Boolean
+Private m_RebuildLauncherForTest As Object
 
 
 '---------------------------------------------------------------------------------------
@@ -34,6 +35,7 @@ Private m_blnCancelAfterBegin As Boolean
 '---------------------------------------------------------------------------------------
 '
 Public Sub Show()
+    If ManualCommandRefused Then Exit Sub
     ShowMainForm
 End Sub
 
@@ -65,9 +67,9 @@ End Sub
 ' Purpose   : Export the source code for the current database
 '---------------------------------------------------------------------------------------
 '
-Public Sub Export()
-    RunExport ecfAllObjects
-End Sub
+Public Function Export(Optional ByVal strDecisionPolicy As String) As String
+    Export = RunExport(ecfAllObjects, , False, strDecisionPolicy)
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -77,9 +79,9 @@ End Sub
 ' Purpose   : Force a full export of all objects (ignoring Fast Save)
 '---------------------------------------------------------------------------------------
 '
-Public Sub FullExport()
-    RunExport ecfAllObjects, , True
-End Sub
+Public Function FullExport(Optional ByVal strDecisionPolicy As String) As String
+    FullExport = RunExport(ecfAllObjects, , True, strDecisionPolicy)
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -89,9 +91,9 @@ End Sub
 ' Purpose   : Export just the VBA related components
 '---------------------------------------------------------------------------------------
 '
-Public Sub ExportVBA()
-    RunExport ecfVBAItems
-End Sub
+Public Function ExportVBA(Optional ByVal strDecisionPolicy As String) As String
+    ExportVBA = RunExport(ecfVBAItems, , False, strDecisionPolicy)
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -102,6 +104,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub ExportSelected()
+    If ManualCommandRefused Then Exit Sub
 
     Dim objSelected As AccessObject
 
@@ -125,21 +128,54 @@ End Sub
 ' Purpose   : Handle different kinds of exports based on filter
 '---------------------------------------------------------------------------------------
 '
-Private Sub RunExport(Optional intFilter As eContainerFilter = ecfAllObjects, Optional objItem As AccessObject, Optional blnFullExport As Boolean = False)
+Private Function RunExport(Optional intFilter As eContainerFilter = ecfAllObjects, Optional objItem As AccessObject, _
+    Optional blnFullExport As Boolean = False, Optional ByVal strDecisionPolicy As String) As String
+    Dim intPolicy As eDecisionPolicy
+    Dim cPolicyOverride As clsFormPolicyOverride
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim strToken As String
+    Dim strError As String
+    Dim lngError As Long
+    RunExport = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(RunExport) > 0 Then Exit Function
+    RunExport = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(RunExport) > 0 Then Exit Function
+    Set cOp = Operation
+    Set cRoot = cOp.TryBeginRoot(eotExport, intPolicy)
+    If cRoot Is Nothing Then
+        RunExport = cOp.AdmissionRefusal
+        Exit Function
+    End If
+    On Error GoTo Failed
+    strToken = cRoot.DetachForContinuation()
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
         If objItem Is Nothing Then
             .intContainerFilter = intFilter
+            Set .objSingleObject = Nothing
         Else
             Set .objSingleObject = objItem
         End If
-        ' Set full export checkbox if requested
-        If blnFullExport Then .chkFullExport = True
-        SetMainFormVisible Form_frmVCSMain
+        .chkFullExport = blnFullExport
+        .strRequestRootToken = strToken
+        Set cPolicyOverride = New clsFormPolicyOverride
+        cPolicyOverride.Init Form_frmVCSMain, intPolicy
         .cmdExport_Click
-        If Operation.ErrorLevel < eelError Then .AutoClose
+        cPolicyOverride.Restore
+        RunExport = CompletedOperationJson(cOp)
+        If Not cOp.LastCompletion Is Nothing Then
+            If CLng(cOp.LastCompletion("error_level")) < eelError Then .AutoClose
+        End If
     End With
-End Sub
+    Exit Function
+Failed:
+    strError = Err.Description
+    lngError = Err.Number
+    cOp.RecordRootRuntimeError strToken, strError, lngError
+    cOp.CompleteRootLease strToken, eorFailed
+    RunExport = CompletedOperationJson(cOp)
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -149,15 +185,45 @@ End Sub
 ' Purpose   : Initiate a full build from source
 '---------------------------------------------------------------------------------------
 '
-Public Sub Build(Optional ByVal strSourceFolder As String)
+Public Function Build(Optional ByVal strSourceFolder As String, Optional ByVal strDecisionPolicy As String) As String
+    Dim intPolicy As eDecisionPolicy
+    Dim cPolicyOverride As clsFormPolicyOverride
+    Dim cRoot As clsRootOperationLease
+    Dim cOp As clsOperation
+    Dim strToken As String
+    Dim strError As String
+    Dim lngError As Long
+    Build = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(Build) > 0 Then Exit Function
+    Build = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(Build) > 0 Then Exit Function
+    Set cOp = Operation
+    Set cRoot = cOp.TryBeginRoot(eotBuild, intPolicy)
+    If cRoot Is Nothing Then
+        Build = cOp.AdmissionRefusal
+        Exit Function
+    End If
+    On Error GoTo Failed
+    strToken = cRoot.DetachForContinuation()
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
-        ' Make sure we are doing a full build.
-        If Not .chkFullBuild Then .chkFullBuild = True
+        .chkFullBuild = True
         .strSourcePath = strSourceFolder
+        .strRequestRootToken = strToken
+        Set cPolicyOverride = New clsFormPolicyOverride
+        cPolicyOverride.Init Form_frmVCSMain, intPolicy
         .cmdBuild_Click
+        cPolicyOverride.Restore
+        Build = .strStartResult
     End With
-End Sub
+    Exit Function
+Failed:
+    strError = Err.Description
+    lngError = Err.Number
+    cOp.RecordRootRuntimeError strToken, strError, lngError
+    cOp.CompleteRootLease strToken, eorFailed
+    Build = CompletedOperationJson(cOp)
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -171,66 +237,52 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function MergeBuild(Optional ByVal strDecisionPolicy As String) As String
-
     Dim intPolicy As eDecisionPolicy
-    Dim intStatusBefore As eOperationState
-    Dim strNotAvailable As String
     Dim cPolicyOverride As clsFormPolicyOverride
-
-    ' An explicit policy makes this merge noninteractive. The policy scope opens only
-    ' once the root is granted (TryBeginRoot inside cmdBuild_Click), and Finish closes it.
-    ' An unknown policy, or a policy request while another operation is running, is
-    ' refused before anything opens or changes. An empty policy keeps the interactive
-    ' (or previously configured) behavior.
-    If Len(strDecisionPolicy) > 0 Then
-        MergeBuild = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
-        If Len(MergeBuild) > 0 Then Exit Function
-    End If
-    If Operation.IsActive Then
-        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+    Dim cRoot As clsRootOperationLease
+    Dim cOp As clsOperation
+    Dim strToken As String
+    Dim strError As String
+    Dim lngError As Long
+    Dim dResult As Dictionary
+    MergeBuild = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(MergeBuild) > 0 Then Exit Function
+    MergeBuild = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(MergeBuild) > 0 Then Exit Function
+    Set cOp = Operation
+    Set cRoot = cOp.TryBeginRoot(eotMerge, intPolicy)
+    If cRoot Is Nothing Then
+        MergeBuild = cOp.AdmissionRefusal
         Exit Function
     End If
-
-    intStatusBefore = Operation.Status
-    If intStatusBefore = eosReady Then Operation.Result = eorUnknown
-
+    On Error GoTo Failed
+    strToken = cRoot.DetachForContinuation()
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     With Form_frmVCSMain
-        ' See if merge build is available
-        If .chkFullBuild.Enabled Then
-            ' Initiate the merge build
-            .chkFullBuild = False
-            ' The override puts the form's policy back even if cmdBuild_Click raises.
-            Set cPolicyOverride = New clsFormPolicyOverride
-            cPolicyOverride.Init Form_frmVCSMain, intPolicy
-            .cmdBuild_Click
-            cPolicyOverride.Restore
-        Else
-            strNotAvailable = T("A full build or full export must be performed before you can merge from source.")
-            If intPolicy = edpAsk Then
-                MsgBox2 T("Merge Build Not Available"), strNotAvailable, _
-                    T("Please perform a full build or full export of this database first."), vbInformation
-            End If
-            MergeBuild = RefusalJson(ERR_MERGE_NOT_AVAILABLE, strNotAvailable)
+        If Not .chkFullBuild.Enabled Then
+            MergeBuild = RefusalJson(ERR_MERGE_NOT_AVAILABLE, T("A full build or full export must be performed before you can merge from source."), False)
+            Set dResult = ParseJson(MergeBuild)
+            cOp.SetTransferOutcome dResult
+            cOp.CompleteRootLease strToken, eorFailed
+            MergeBuild = OverlayOperationIdentity(MergeBuild, cOp)
             Exit Function
         End If
+        .chkFullBuild = False
+        .strSourcePath = vbNullString
+        .strRequestRootToken = strToken
+        Set cPolicyOverride = New clsFormPolicyOverride
+        cPolicyOverride.Init Form_frmVCSMain, intPolicy
+        .cmdBuild_Click
+        cPolicyOverride.Restore
+        MergeBuild = .strStartResult
     End With
-
-    ' The merge continues on a timer once it has begun (staged).
-    If intStatusBefore <> eosReady Then
-        ' Begin showed its own dialog. Post the refusal for an async caller.
-        MergeBuild = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
-    ElseIf Operation.Status = eosStaged Then
-        MergeBuild = StartedJson()
-    ElseIf Operation.Result = eorDecisionRequired Then
-        ' Stopped on a prompt before the timer started. Finish already posted the
-        ' callback, so return the decisions without posting again.
-        MergeBuild = DecisionRequiredJson(Operation.LastDecisions)
-    Else
-        ' Declined in the UI (or a guard in cmdBuild_Click). Nothing was started.
-        MergeBuild = RefusalJson(vbNullString, T("The merge did not start."), False)
-    End If
-
+    Exit Function
+Failed:
+    strError = Err.Description
+    lngError = Err.Number
+    cOp.RecordRootRuntimeError strToken, strError, lngError
+    cOp.CompleteRootLease strToken, eorFailed
+    MergeBuild = CompletedOperationJson(cOp)
 End Function
 
 
@@ -249,7 +301,11 @@ End Function
 '           :   "warningCount":0, "durationMs":0, "databasePath":"...", "error":"..."}
 '---------------------------------------------------------------------------------------
 '
-Public Function BuildHeadless(Optional ByVal strSourceFolder As String) As String
+Public Function BuildHeadless(Optional ByVal strSourceFolder As String, Optional ByVal strDecisionPolicy As String) As String
+    If Len(strDecisionPolicy) > 0 Then
+        BuildHeadless = RefusalJson("unsupported_decision_policy", T("This fixed unattended workflow does not accept a decision policy."), False)
+        Exit Function
+    End If
     BuildHeadless = RunHeadlessBuild(strSourceFolder, True)
 End Function
 
@@ -263,7 +319,11 @@ End Function
 '           : BuildHeadless. Requires an open database.
 '---------------------------------------------------------------------------------------
 '
-Public Function MergeHeadless(Optional ByVal strSourceFolder As String) As String
+Public Function MergeHeadless(Optional ByVal strSourceFolder As String, Optional ByVal strDecisionPolicy As String) As String
+    If Len(strDecisionPolicy) > 0 Then
+        MergeHeadless = RefusalJson("unsupported_decision_policy", T("This fixed unattended workflow does not accept a decision policy."), False)
+        Exit Function
+    End If
     MergeHeadless = RunHeadlessBuild(strSourceFolder, False)
 End Function
 
@@ -292,9 +352,20 @@ Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
     Dim varKey As Variant
     Dim intOperationType As eOperationType
     Dim cTrapping As clsVbeErrorTrappingScope
+    Dim cRoot As clsRootOperationLease
+    Dim cOp As clsOperation
 
+    RunHeadlessBuild = RequestAdmissionRefusal(blnQuiet:=True)
+    If Len(RunHeadlessBuild) > 0 Then Exit Function
     LogUnhandledErrors
     On Error GoTo ErrHandler
+    Set cOp = Operation
+    intOperationType = IIf(blnFullBuild, eotBuild, eotMerge)
+    Set cRoot = cOp.TryBeginRoot(intOperationType, edpAsk, True, eimSilent)
+    If cRoot Is Nothing Then
+        RunHeadlessBuild = cOp.AdmissionRefusal
+        Exit Function
+    End If
 
     ' Cover preflight and the operation itself. Operation.Begin will save the
     ' already-raised mode and restore it on Finish; this scope then puts the
@@ -312,7 +383,7 @@ Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
     If Not DatabaseFileOpen Then
         If Not blnFullBuild Then
             SetPreflightError dResult, "No database is currently open. A merge requires an open database."
-            RunHeadlessBuild = ConvertToJson(dResult)
+            RunHeadlessBuild = FinishApiPreflight(dResult, True)
             Exit Function
         End If
 
@@ -320,7 +391,7 @@ Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
     ' (RebuildAddIn exists for that, and drives a separate Access instance.)
     ElseIf StrComp(CodeProject.FullName, CurrentProject.FullName, vbTextCompare) = 0 Then
         SetPreflightError dResult, "Cannot build the add-in from within itself. Use RebuildAddIn instead."
-        RunHeadlessBuild = ConvertToJson(dResult)
+        RunHeadlessBuild = FinishApiPreflight(dResult, True)
         Exit Function
     End If
 
@@ -331,28 +402,12 @@ Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
     If Len(strSourceFolder) = 0 Then
         SetPreflightError dResult, "No source folder specified, and none could be determined " & _
             "from the current database."
-        RunHeadlessBuild = ConvertToJson(dResult)
+        RunHeadlessBuild = FinishApiPreflight(dResult, True)
         Exit Function
     End If
     If Not FolderHasVcsOptionsFile(strSourceFolder) Then
         SetPreflightError dResult, "Source files not found in folder: " & strSourceFolder
-        RunHeadlessBuild = ConvertToJson(dResult)
-        Exit Function
-    End If
-
-    ' Silent mode routes MsgBox2 prompts to the log and returns their default answer,
-    ' and suppresses the progress form. Set before Begin, which raises its own modal
-    ' dialog when it refuses -- exactly the prompt an unattended session cannot answer.
-    ' Restored on every path out, so a session that called this once is not left silent.
-    Operation.ForceUnattended = True
-    Operation.InteractionMode = eimSilent
-
-    intOperationType = IIf(blnFullBuild, eotBuild, eotMerge)
-    If Not Operation.Begin(intOperationType) Then
-        Operation.ForceUnattended = False
-        Operation.InteractionMode = intPriorMode
-        SetPreflightError dResult, "Could not begin operation (another operation may be running)"
-        RunHeadlessBuild = ConvertToJson(dResult)
+        RunHeadlessBuild = FinishApiPreflight(dResult, True)
         Exit Function
     End If
 
@@ -362,7 +417,7 @@ Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
     dOutcome.Add "success", False
 
     modBuild.Build strSourceFolder, blnFullBuild, ecfAllObjects, , , dOutcome
-    CompleteBuildOperation CBool(dOutcome("success"))
+    cRoot.Complete IIf(CBool(dOutcome("success")), eorSuccess, eorFailed)
 
     For Each varKey In dOutcome.Keys
         dResult.Add CStr(varKey), dOutcome(varKey)
@@ -372,20 +427,20 @@ Private Function RunHeadlessBuild(ByVal strSourceFolder As String, _
             " did not complete successfully. Check the log for details."
     End If
 
+    AddOperationIdentity dResult, cOp
     RunHeadlessBuild = ConvertToJson(dResult)
     Exit Function
 
 ErrHandler:
-    CompleteBuildOperation False
-    If Operation.Status <> eosReady Then
-        Operation.ForceUnattended = False
-        Operation.InteractionMode = intPriorMode
+    Dim strRuntimeError As String
+    Dim lngRuntimeError As Long
+    strRuntimeError = Err.Description
+    lngRuntimeError = Err.Number
+    If Not cRoot Is Nothing Then
+        cRoot.RecordRuntimeError strRuntimeError, lngRuntimeError
+        cRoot.Complete eorFailed
     End If
-    Set dResult = New Dictionary
-    dResult.Add "success", False
-    dResult.Add "error", Err.Description
-    dResult.Add "errorNumber", CLng(Err.Number)
-    RunHeadlessBuild = ConvertToJson(dResult)
+    RunHeadlessBuild = RuntimeErrorJson(strRuntimeError, lngRuntimeError)
 
 End Function
 
@@ -414,6 +469,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub BuildAs()
+    If ManualCommandRefused Then Exit Sub
 
     Dim strNewDbPath As String
     Dim strSourceFolder As String
@@ -484,15 +540,6 @@ Public Sub BuildAs()
 End Sub
 
 
-
-
-
-' A supplied destination must name its drive root or its UNC server and share.
-' Check the caller's path before resolving it: absolute conversion would hide
-' drive-relative and root-relative inputs. Keep existing file/folder validation.
-
-
-
 '---------------------------------------------------------------------------------------
 ' Procedure : MergeAllSource
 ' Author    : Adam Waller
@@ -502,6 +549,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub MergeAllSource()
+    If ManualCommandRefused Then Exit Sub
     If Operation.Begin(eotMerge) Then
         modBuild.MergeAllSource
         If Operation.ErrorLevel = eelCritical Then
@@ -521,6 +569,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub LoadSelected()
+    If ManualCommandRefused Then Exit Sub
 
     Dim objSelected As AccessObject
     Dim cComponentClass As IDbComponent
@@ -585,6 +634,7 @@ End Property
 '---------------------------------------------------------------------------------------
 '
 Public Sub OpenRepository()
+    If ManualCommandRefused Then Exit Sub
 
     Dim strFolder As String
     Dim strPath As String
@@ -636,6 +686,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub OpenSourceFolder()
+    If ManualCommandRefused Then Exit Sub
     Shell "explorer """ & Options.GetExportFolder & """", vbNormalFocus
 End Sub
 
@@ -648,6 +699,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub OpenExportLog()
+    If ManualCommandRefused Then Exit Sub
     OpenLog "Export"
 End Sub
 
@@ -660,6 +712,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub OpenBuildLog()
+    If ManualCommandRefused Then Exit Sub
     OpenLog "Build"
 End Sub
 
@@ -711,6 +764,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub ReloadRibbon()
+    If ManualCommandRefused Then Exit Sub
     modCOMAddIn.ReloadRibbon
 End Sub
 
@@ -731,7 +785,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
-    Optional ByVal strCallbackInfo As String) As String
+    Optional ByVal strCallbackInfo As String, Optional ByVal strDecisionPolicy As String) As String
 
     Dim strPath As String
     Dim strDetail As String
@@ -746,12 +800,40 @@ Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
     Dim dResult As Dictionary
     Dim colOthers As Collection
     Dim varLine As Variant
+    Dim cRoot As clsRootOperationLease
+    Dim cOp As clsOperation
+    Dim cWorkerEmitter As New clsMCP
+    Dim strRootToken As String
+    Dim strTimerResult As String
+    Dim blnHelperLaunched As Boolean
 
-    blnUnattended = (Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI)
-    eimPrior = Operation.InteractionMode
-    If blnUnattended Then Operation.InteractionMode = eimSilent
-
+    If Len(strDecisionPolicy) > 0 Then
+        RebuildAddIn = RefusalJson("unsupported_decision_policy", T("RebuildAddIn uses a fixed helper-process workflow and does not accept a decision policy."), False)
+        Exit Function
+    End If
+    RebuildAddIn = RequestAdmissionRefusal()
+    If Len(RebuildAddIn) > 0 Then Exit Function
+    Set cOp = Operation
+    blnUnattended = cOp.AutomationSource
+    eimPrior = cOp.InteractionMode
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpAsk, blnUnattended, IIf(blnUnattended, eimSilent, eimPrior))
+    If cRoot Is Nothing Then
+        RebuildAddIn = cOp.AdmissionRefusal
+        Exit Function
+    End If
+    strRootToken = cRoot.DetachForContinuation()
+    strTimerResult = SetTimer("QuitForRebuild", strOpToken:=strRootToken, blnReserveOnly:=True)
+    If Not TimerRequestSucceeded(strTimerResult) Then
+        Set dResult = ParseJson(strTimerResult)
+        dResult("helper_launched") = False
+        AddOperationIdentity dResult, cOp
+        cOp.SetTransferOutcome dResult
+        cOp.CompleteRootLease strRootToken, eorFailed
+        RebuildAddIn = ConvertToJson(dResult)
+        Exit Function
+    End If
     Set dResult = New Dictionary
+    On Error GoTo LaunchError
 
     ' Of everything the helper script does, this is the one job with no in-process
     ' equivalent: the add-in cannot rebuild and reinstall itself while it is loaded, which
@@ -896,7 +978,20 @@ Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
     ' The launching Access instance exits after the worker handoff, but the MCP callback
     ' server stays alive. Extract its address and operation id here so they can travel as
     ' shell-safe worker arguments and be reconstructed by the builder Access instance.
-    If Len(strCallbackInfo) > 0 Then MCP.RegisterCallback strCallbackInfo
+    If Len(strCallbackInfo) = 0 Then
+        If Not IncomingOperationRequest Is Nothing Then strCallbackInfo = IncomingOperationRequest.CallbackInfo
+    End If
+    cWorkerEmitter.RegisterCallback strCallbackInfo
+    If cWorkerEmitter.IsActive Then
+        If StrComp(cWorkerEmitter.OperationId, cOp.PublicId, vbBinaryCompare) = 0 Then
+            dResult("success") = False
+            dResult("status") = "refused"
+            dResult("error_pattern") = "rebuild_child_identity_required"
+            dResult("error") = T("The child build callback requires a fresh operation ID distinct from the rebuild launcher.")
+            GoTo Finish
+        End If
+        dResult("build_operation_id") = cWorkerEmitter.OperationId
+    End If
 
     ' Inherit the phaseStarted stamped when this attempt claimed the status file above.
     ' It marks when the attempt began rather than when it reached this line, and holding
@@ -904,8 +999,21 @@ Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
     WriteRebuildStatusFile strStatusFile, "launched"
 
     ' Launch the worker to handle the build and install disconnected
-    Worker.Run_BuildAndInstall strPath, blnUnattended, strStatusFile, _
-        strPhaseStarted, MCP.CallbackUrl, MCP.OperationId
+    If m_RebuildLauncherForTest Is Nothing Then
+        blnHelperLaunched = Worker.Run_BuildAndInstall(strPath, blnUnattended, strStatusFile, _
+            strPhaseStarted, cWorkerEmitter.CallbackUrl, cWorkerEmitter.OperationId)
+    Else
+        blnHelperLaunched = CBool(CallByName(m_RebuildLauncherForTest, "Launch", VbMethod, strStatusFile))
+    End If
+    If Not blnHelperLaunched Then
+        dResult("success") = False
+        dResult("status") = "launch-failed"
+        dResult("error_pattern") = "helper_not_launched"
+        dResult("error") = T("The rebuild helper process was not launched.")
+        GoTo Finish
+    End If
+
+    cOp.RetainRebuildHandoff strRootToken
 
     ' Shell() reports that a process was created, not that the script lived long enough
     ' to do anything, and a worker that dies on startup leaves the status file reading
@@ -913,9 +1021,7 @@ Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
     ' worker writes "building" as its first act, so waiting for the status to move is
     ' the only confirmation available that the handoff took.
     If Not WaitForRebuildHandoff(strStatusFile, REBUILD_HANDOFF_SECONDS) Then
-        strDetail = T("The rebuild worker did not start within {0} seconds. Nothing was " & _
-            "rebuilt, and this instance of Microsoft Access was left open.", _
-            var0:=REBUILD_HANDOFF_SECONDS)
+        strDetail = T("The helper process launched, but its handoff was not confirmed within {0} seconds. This Access instance remains open. The helper may still proceed; recovery is required before starting another operation.", var0:=REBUILD_HANDOFF_SECONDS)
         WriteRebuildStatusFile strStatusFile, "launch-failed", strDetail
         dResult.Add "success", False
         dResult.Add "status", "launch-failed"
@@ -935,7 +1041,14 @@ Public Function RebuildAddIn(Optional ByVal strSourceFolder As String, _
     ' worker cannot attach to us and cannot quit us. Armed only after the handoff is
     ' confirmed, so a launch that failed never closes the caller's Access. The delay
     ' leaves room for the result below to reach an MCP client over COM.
-    SetTimer "QuitForRebuild", sngSeconds:=QUIT_FOR_REBUILD_SECONDS
+    strTimerResult = ActivateReservedTimer(strRootToken, QUIT_FOR_REBUILD_SECONDS, True)
+    If Not TimerRequestSucceeded(strTimerResult) Then
+        dResult("success") = False
+        dResult("status") = "quit-timer-failed"
+        dResult("error_pattern") = "timer_install_failed_after_launch"
+        dResult("error") = T("The helper process has launched, but the launcher could not schedule its exit. The helper has not been confirmed stopped. Recovery is required before another operation.")
+        GoTo Finish
+    End If
 
     dResult.Add "success", True
     dResult.Add "status", "launched"
@@ -958,8 +1071,23 @@ Finish:
         dResult.Add "phaseStarted", strPhaseStarted
     End If
 
+    dResult("helper_launched") = blnHelperLaunched
+    AddOperationIdentity dResult, cOp
+    If Not blnHelperLaunched Then
+        ReleaseTimerReservation strRootToken
+        cOp.CompleteRootLease strRootToken, eorFailed
+    Else
+        ' A timeout does not prove the helper can no longer act. Retain ownership.
+        cOp.RestoreRootInteraction strRootToken, eimPrior
+    End If
     RebuildAddIn = ConvertToJson(dResult, JSON_WHITESPACE)
-    If blnUnattended Then Operation.InteractionMode = eimPrior
+    Exit Function
+LaunchError:
+    dResult("success") = False
+    dResult("status") = "launch-error"
+    dResult("error") = Err.Description
+    dResult("error_pattern") = "rebuild_launch_error"
+    Resume Finish
 
 End Function
 
@@ -972,6 +1100,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Sub RepairColors()
+    If ManualCommandRefused Then Exit Sub
     If Operation.Begin(eotOther) Then
         RepairColorDefinitionBlocks
         Operation.Finish
@@ -987,6 +1116,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub SplitFiles()
+    If ManualCommandRefused Then Exit Sub
     If Operation.Begin(eotOther) Then DoCmd.OpenForm "frmVCSSplitFiles"
 End Sub
 
@@ -1000,6 +1130,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub LocalizeLibraryReferences()
+    If ManualCommandRefused Then Exit Sub
     If Operation.Begin(eotOther) Then
         modLibReference.LocalizeLibraryReferences True
         Operation.Finish
@@ -1015,6 +1146,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub ActivateHook()
+    If ManualCommandRefused Then Exit Sub
     If Operation.Begin(eotOther) Then
         If modExportOnSaveHook.ActivateHook = False Then
             MsgBox2 T("Error activating the hook"), , , vbCritical, T("Unable to activate hook")
@@ -1034,6 +1166,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub StandardizeLetterCasing()
+    If ManualCommandRefused Then Exit Sub
 
     Dim colResult As Collection
     Dim colIssues As New Collection
@@ -1160,7 +1293,8 @@ End Sub
 '           : Public method for external API access (e.g., via MCP tools).
 '---------------------------------------------------------------------------------------
 '
-Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strObjectName As String) As String
+Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strObjectName As String, _
+    Optional ByVal strDecisionPolicy As String) As String
 
     Dim intComponentType As eDatabaseComponentType
     Dim objItem As AccessObject
@@ -1171,8 +1305,14 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim blnFound As Boolean
     Dim blnBegun As Boolean
     Dim dResult As Dictionary
+    Dim intPolicy As eDecisionPolicy
 
-    LogUnhandledErrors
+    ExportObject = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(ExportObject) > 0 Then Exit Function
+    ExportObject = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(ExportObject) > 0 Then Exit Function
+
+    ' Pre-admission validation cannot report an error through a modal logger.
     On Error GoTo ErrHandler
 
     Set dResult = New Dictionary
@@ -1217,24 +1357,20 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
             End If
 
             ' Begin operation and delegate to ExportSingleObject
-            If Not Operation.Begin(eotExport) Then
-                dResult.Add "success", False
-                dResult.Add "error", "Could not begin export operation (another operation may be running)"
-                ExportObject = ConvertToJson(dResult)
+            If Not Operation.Begin(eotExport, intPolicy) Then
+                ExportObject = Operation.AdmissionRefusal
                 Exit Function
             End If
             blnBegun = True
 
             modExport.ExportSingleObject objItem, , _
-                blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)
+                blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), dTransferResult:=dResult
             Set objItem = Nothing
 
         Case Else
             ' --- Non-core component type path ---
-            If Not Operation.Begin(eotExport) Then
-                dResult.Add "success", False
-                dResult.Add "error", "Could not begin export operation (another operation may be running)"
-                ExportObject = ConvertToJson(dResult)
+            If Not Operation.Begin(eotExport, intPolicy) Then
+                ExportObject = Operation.AdmissionRefusal
                 Exit Function
             End If
             blnBegun = True
@@ -1244,7 +1380,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
 
             Dim blnNoIndex As Boolean
             Dim cDisabledIndex As clsVCSIndex
-            blnNoIndex = (Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)
+            blnNoIndex = ((Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI)) And Not InteractionIsNonInteractive()
 
             If blnNoIndex Then
                 ' Skip index persistence for direct agent/API exports, but still
@@ -1275,6 +1411,7 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 .Add T("Full Path: {0}", var0:=CurrentProject.FullName), False
                 .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
                 If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
                 .Add Now
                 .Spacer
             End With
@@ -1289,11 +1426,16 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
             If cComponent.SingleFile Then
                 ' Single-file type: export all items (name is irrelevant)
                 Log.Add T("Exporting {0}...", var0:=cComponent.Category)
-                Set dItems = cComponent.GetAllFromDB()
-                For Each varKey In dItems.Keys
-                    Set cItem = dItems(varKey)
-                    cItem.Export
-                Next varKey
+                If InteractionIsNonInteractive() Then
+                    ' The component owns the aggregate file, including an empty category.
+                    Set dResult = modExport.ExportPolicyComponent(cComponent)
+                Else
+                    Set dItems = cComponent.GetAllFromDB()
+                    For Each varKey In dItems.Keys
+                        Set cItem = dItems(varKey)
+                        cItem.Export
+                    Next varKey
+                End If
             Else
                 ' Multi-file type: find the named item
                 If Len(strObjectName) = 0 Then
@@ -1308,7 +1450,11 @@ Public Function ExportObject(ByVal strObjectType As String, Optional ByVal strOb
                 For Each varKey In dItems.Keys
                     Set cItem = dItems(varKey)
                     If StrComp(FSO.GetBaseName(CStr(varKey)), strObjectName, vbTextCompare) = 0 Then
-                        cItem.Export
+                        If InteractionIsNonInteractive() Then
+                            Set dResult = modExport.ExportPolicyComponent(cItem)
+                        Else
+                            cItem.Export
+                        End If
                         blnFound = True
                         Exit For
                     End If
@@ -1337,9 +1483,14 @@ ExportCleanUp:
             End With
             If blnNoIndex Then
                 Set VCSIndex = Nothing
-            Else
-                VCSIndex.Save
+            ElseIf Not Operation.DecisionBlocked Then
+                If Not dResult.Exists("transferred") Then
+                    VCSIndex.Save
+                ElseIf CBool(dResult("transferred")) Then
+                    VCSIndex.Save
+                End If
             End If
+            VCSIndex.ClearTempExportFolder
 
     End Select
 
@@ -1366,7 +1517,8 @@ End Function
 '           : Public method for external API access (e.g., via MCP tools).
 '---------------------------------------------------------------------------------------
 '
-Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strObjectName As String) As String
+Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strObjectName As String, _
+    Optional ByVal strDecisionPolicy As String) As String
 
     Dim intComponentType As eDatabaseComponentType
     Dim cComponent As IDbComponent
@@ -1378,8 +1530,15 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim blnFound As Boolean
     Dim blnBegun As Boolean
     Dim dResult As Dictionary
+    Dim intPolicy As eDecisionPolicy
 
-    LogUnhandledErrors
+    ImportObject = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(ImportObject) > 0 Then Exit Function
+    ImportObject = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(ImportObject) > 0 Then Exit Function
+
+    ' Pre-admission validation cannot report an error through a modal logger.
+    DebugMode True
     On Error GoTo ErrHandler
 
     Set dResult = New Dictionary
@@ -1390,16 +1549,24 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
         dResult.Add "success", False
         dResult.Add "error", "Unknown object type: " & strObjectType & _
             ". See ResolveComponentType in modContainers for accepted values."
-        ImportObject = ConvertToJson(dResult)
+        ImportObject = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
+
+    ' Begin operation and delegate to LoadSingleObject
+    If Not Operation.Begin(eotMerge, intPolicy) Then
+        ImportObject = Operation.AdmissionRefusal
+        Exit Function
+    End If
+    blnBegun = True
+
 
     ' Create the component class
     Set cComponent = GetComponentClass(intComponentType)
     If cComponent Is Nothing Then
         dResult.Add "success", False
         dResult.Add "error", "Could not create component class for type: " & strObjectType
-        ImportObject = ConvertToJson(dResult)
+        ImportObject = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
 
@@ -1407,11 +1574,11 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     If cComponent.SingleFile Then
         ' Single-file type: use the component's fixed source file path
         strSourceFile = cComponent.SourceFile
-        If Len(strSourceFile) = 0 Or Not FSO.FileExists(strSourceFile) Then
+        If Not ImportSourceExists(cComponent, strSourceFile) Then
             dResult.Add "success", False
             dResult.Add "error", "Source file not found for " & strObjectType
             If Len(strSourceFile) > 0 Then dResult.Add "expectedPath", strSourceFile
-            ImportObject = ConvertToJson(dResult)
+            ImportObject = FinishApiPreflight(dResult, blnBegun)
             Exit Function
         End If
         ' Use the category as the display name for single-file types
@@ -1421,7 +1588,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
         If Len(strObjectName) = 0 Then
             dResult.Add "success", False
             dResult.Add "error", "Object name is required for type: " & strObjectType
-            ImportObject = ConvertToJson(dResult)
+            ImportObject = FinishApiPreflight(dResult, blnBegun)
             Exit Function
         End If
 
@@ -1464,30 +1631,21 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
             strSourceFile = FindSourceFile(cComponent, strObjectName)
         End If
 
-        If Len(strSourceFile) = 0 Or Not FSO.FileExists(strSourceFile) Then
+        If Not ImportSourceExists(cComponent, strSourceFile) Then
             dResult.Add "success", False
             dResult.Add "error", "Source file not found for " & strObjectType & " '" & strObjectName & "'"
             If Len(strSourceFile) > 0 Then dResult.Add "expectedPath", strSourceFile
-            ImportObject = ConvertToJson(dResult)
+            ImportObject = FinishApiPreflight(dResult, blnBegun)
             Exit Function
         End If
     End If
-
-    ' Begin operation and delegate to LoadSingleObject
-    If Not Operation.Begin(eotMerge) Then
-        dResult.Add "success", False
-        dResult.Add "error", "Could not begin import operation (another operation may be running)"
-        ImportObject = ConvertToJson(dResult)
-        Exit Function
-    End If
-    blnBegun = True
 
     ' Completing the operation releases the Log singleton, so the log path has to come
     ' back through the out-param, and the error journal has to be read before it.
     LoadSingleObject cComponent, strObjectName, strSourceFile, _
         blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
-        strSavedLogPath:=strLogPath
-    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0))
+        strSavedLogPath:=strLogPath, dTransferResult:=dResult
+    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0), dResult)
     Exit Function
 
 ErrHandler:
@@ -1518,6 +1676,7 @@ Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Bool
     ' second error, or the operation would stay open after all.
     lngNumber = Err.Number
     strDescription = Err.Description
+    DebugMode True
     On Error Resume Next
 
     If blnBegun Then
@@ -1559,14 +1718,21 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ExportByType(ByVal varTypes As Variant, _
-    Optional ByVal blnFullExport As Boolean = False) As String
+    Optional ByVal blnFullExport As Boolean = False, Optional ByVal strDecisionPolicy As String) As String
 
     Dim dResult As Dictionary
+    Dim intPolicy As eDecisionPolicy
     Dim colContainers As Collection
     Dim strError As String
     Dim blnBegun As Boolean
 
-    LogUnhandledErrors
+    ExportByType = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(ExportByType) > 0 Then Exit Function
+    ExportByType = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(ExportByType) > 0 Then Exit Function
+
+    ' Pre-admission validation cannot report an error through a modal logger.
+    DebugMode True
     On Error GoTo ErrHandler
 
     Set dResult = New Dictionary
@@ -1574,7 +1740,7 @@ Public Function ExportByType(ByVal varTypes As Variant, _
     If Not DatabaseFileOpen Then
         dResult.Add "success", False
         dResult.Add "error", "No database is currently open."
-        ExportByType = ConvertToJson(dResult)
+        ExportByType = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
 
@@ -1582,24 +1748,23 @@ Public Function ExportByType(ByVal varTypes As Variant, _
     If Len(strError) > 0 Then
         dResult.Add "success", False
         dResult.Add "error", strError
-        ExportByType = ConvertToJson(dResult)
+        ExportByType = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
+
+    If Not Operation.Begin(eotExport, intPolicy) Then
+        ExportByType = Operation.AdmissionRefusal
+        Exit Function
+    End If
+    blnBegun = True
 
     If Not ScopedExportPreflight(strError) Then
         dResult.Add "success", False
         dResult.Add "error", strError
-        ExportByType = ConvertToJson(dResult)
+        ExportByType = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
 
-    If Not Operation.Begin(eotExport) Then
-        dResult.Add "success", False
-        dResult.Add "error", "Could not begin export operation (another operation may be running)"
-        ExportByType = ConvertToJson(dResult)
-        Exit Function
-    End If
-    blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Export")
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
@@ -1640,14 +1805,21 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ImportByType(ByVal varTypes As Variant, _
-    Optional ByVal blnFullImport As Boolean = False) As String
+    Optional ByVal blnFullImport As Boolean = False, Optional ByVal strDecisionPolicy As String) As String
 
     Dim dResult As Dictionary
+    Dim intPolicy As eDecisionPolicy
     Dim colContainers As Collection
     Dim strError As String
     Dim blnBegun As Boolean
 
-    LogUnhandledErrors
+    ImportByType = ParsePolicyOrRefuse(strDecisionPolicy, intPolicy)
+    If Len(ImportByType) > 0 Then Exit Function
+    ImportByType = RequestAdmissionRefusal(blnQuiet:=(intPolicy <> edpAsk))
+    If Len(ImportByType) > 0 Then Exit Function
+
+    ' Pre-admission validation cannot report an error through a modal logger.
+    DebugMode True
     On Error GoTo ErrHandler
 
     Set dResult = New Dictionary
@@ -1655,7 +1827,7 @@ Public Function ImportByType(ByVal varTypes As Variant, _
     If Not DatabaseFileOpen Then
         dResult.Add "success", False
         dResult.Add "error", "No database is currently open."
-        ImportByType = ConvertToJson(dResult)
+        ImportByType = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
 
@@ -1663,24 +1835,23 @@ Public Function ImportByType(ByVal varTypes As Variant, _
     If Len(strError) > 0 Then
         dResult.Add "success", False
         dResult.Add "error", strError
-        ImportByType = ConvertToJson(dResult)
+        ImportByType = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
+
+    If Not Operation.Begin(eotMerge, intPolicy) Then
+        ImportByType = Operation.AdmissionRefusal
+        Exit Function
+    End If
+    blnBegun = True
 
     If Not ScopedImportPreflight(strError) Then
         dResult.Add "success", False
         dResult.Add "error", strError
-        ImportByType = ConvertToJson(dResult)
+        ImportByType = FinishApiPreflight(dResult, blnBegun)
         Exit Function
     End If
 
-    If Not Operation.Begin(eotMerge) Then
-        dResult.Add "success", False
-        dResult.Add "error", "Could not begin import operation (another operation may be running)"
-        ImportByType = ConvertToJson(dResult)
-        Exit Function
-    End If
-    blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Import")
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
@@ -1716,12 +1887,17 @@ End Property
 
 ' Test seam: simulate the conflict dialog's Cancel before any scoped work writes
 ' objects. Instance-owned and unavailable through COM or CallByName.
+
+'---------------------------------------------------------------------------------------
+' Procedure : CancelAfterBegin
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Finish an admitted preflight cancellation and retain its identity.
+'---------------------------------------------------------------------------------------
+'
 Friend Property Let CancelAfterBegin(ByVal blnCancel As Boolean)
     m_blnCancelAfterBegin = blnCancel
 End Property
-
-
-
 
 
 '---------------------------------------------------------------------------------------
@@ -1754,6 +1930,7 @@ Private Sub BeginScopedSyncLog(strHeading As String)
         .Add T("Full Path: {0}", var0:=CurrentProject.FullName), False
         .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
     End With
@@ -1775,6 +1952,8 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Dim intResult As eOperationResult
     Dim strColor As String
     Dim strLogPath As String
+
+    Operation.SetTransferOutcome VCSIndex.TransferOutcome
 
     ' The conflict dialog records a confirmed user cancellation.
     blnUserCanceled = VCSIndex.Conflicts.UserCanceled
@@ -1853,6 +2032,19 @@ Private Function FindSourceFile(cComponent As IDbComponent, strObjectName As Str
 
     ' Get the base folder for this component type
     strFolder = cComponent.BaseFolder
+    If TypeName(cComponent) = "clsDbTheme" Then
+        Dim dThemes As Dictionary
+        Dim varTheme As Variant
+        Set dThemes = cComponent.GetFileList()
+        For Each varTheme In dThemes.Keys
+            strFile = CStr(varTheme)
+            If StrComp(FSO.GetBaseName(strFile), strObjectName, vbTextCompare) = 0 _
+                Or StrComp(FSO.GetFileName(strFile), strObjectName, vbTextCompare) = 0 Then
+                FindSourceFile = strFile
+                Exit Function
+            End If
+        Next varTheme
+    End If
 
     ' Try common extensions used for this type of component
     Dim varExt As Variant
@@ -1898,6 +2090,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ResetVbaProjectState() As String
+    ResetVbaProjectState = RequestAdmissionRefusal()
+    If Len(ResetVbaProjectState) > 0 Then Exit Function
 
     Dim dResult As Dictionary
 
@@ -1965,6 +2159,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function RunVBA(ByVal strCode As String) As String
+    RunVBA = RequestAdmissionRefusal()
+    If Len(RunVBA) > 0 Then Exit Function
 
     Dim dResult As Dictionary
     Dim cmp As VBIDE.VBComponent
@@ -2403,6 +2599,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ExecuteSQL(ByVal strSql As String, Optional ByVal lngMaxRows As Long = 100) As String
+    ExecuteSQL = RequestAdmissionRefusal()
+    If Len(ExecuteSQL) > 0 Then Exit Function
 
     Dim dResult As Dictionary
     Dim dRows As Collection
@@ -2486,8 +2684,12 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function GetOption(ByVal strName As String) As Variant
+    If Operation.IsActive And Not OptionsLoaded Then
+        GetOption = RefusalJson("inspection_unavailable", T("Project options have not been loaded for this operation."), False)
+        Exit Function
+    End If
 
-    LogUnhandledErrors
+    InitializeRequestErrors "GetOption"
     On Error GoTo ErrHandler
 
     GetOption = CallByName(Options, strName, VbGet)
@@ -2515,6 +2717,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function SetOption(ByVal strName As String, ByVal varValue As Variant) As String
+    SetOption = RequestAdmissionRefusal()
+    If Len(SetOption) > 0 Then Exit Function
 
     Dim dResult As Dictionary
 
@@ -2626,6 +2830,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function RegisterSession(ByVal strSessionId As String) As String
+    RegisterSession = RequestAdmissionRefusal()
+    If Len(RegisterSession) > 0 Then Exit Function
 
     Dim dResult As Dictionary
 
@@ -2659,6 +2865,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function EndSession(Optional ByVal strSessionId As String) As String
+    EndSession = RequestAdmissionRefusal()
+    If Len(EndSession) > 0 Then Exit Function
 
     Dim dResult As Dictionary
     Dim strFile As String
@@ -2708,6 +2916,10 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function GetLogContent(Optional ByVal strBaseName As String = "Export") As String
+    If Operation.IsActive And Not OptionsLoaded Then
+        GetLogContent = RefusalJson("inspection_unavailable", T("Project options have not been loaded for this operation."), False)
+        Exit Function
+    End If
 
     Dim strFolder As String
     Dim strPath As String
@@ -2716,7 +2928,7 @@ Public Function GetLogContent(Optional ByVal strBaseName As String = "Export") A
     Dim strNewest As String
     Dim dResult As Dictionary
 
-    LogUnhandledErrors
+    InitializeRequestErrors "GetLogContent"
     On Error GoTo ErrHandler
 
     Set dResult = New Dictionary
@@ -2779,9 +2991,6 @@ Public Function GetVCSVersion() As String
 End Function
 
 
-
-
-
 '---------------------------------------------------------------------------------------
 ' Procedure : GetExportFolder
 ' Author    : Adam Waller
@@ -2791,6 +3000,10 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function GetExportFolder() As String
+    If Operation.IsActive And Not OptionsLoaded Then
+        GetExportFolder = RefusalJson("inspection_unavailable", T("Project options have not been loaded for this operation."), False)
+        Exit Function
+    End If
     GetExportFolder = Options.GetExportFolder
 End Function
 
@@ -2854,6 +3067,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function CompileVBA(Optional ByVal blnSuppressWarnings As Boolean = False) As Boolean
+    If ManualCommandRefused Then Exit Function
     LogUnhandledErrors
     On Error GoTo ErrHandler
 
@@ -2946,6 +3160,8 @@ End Function
 '
 Public Function RunRoundtripTests(Optional ByVal strFixtureFolder As String = vbNullString, _
     Optional ByVal blnRebaseline As Boolean = False) As String
+    RunRoundtripTests = RequestAdmissionRefusal()
+    If Len(RunRoundtripTests) > 0 Then Exit Function
     RunRoundtripTests = modTestRoundtrip.RunObjectRoundtripTests(strFixtureFolder, blnRebaseline)
 End Function
 
@@ -2962,6 +3178,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ValidateQuerySqlBuilder(ParamArray varQueryNames() As Variant) As String
+    ValidateQuerySqlBuilder = RequestAdmissionRefusal()
+    If Len(ValidateQuerySqlBuilder) > 0 Then Exit Function
     ValidateQuerySqlBuilder = modTestQuerySqlBuilder.RunQuerySqlBuilderValidation(varQueryNames)
 End Function
 
@@ -2977,6 +3195,8 @@ End Function
 '
 Public Function InspectQuerySqlStorage(ByVal strSql As String, _
     Optional ByVal blnForceDesignView As Boolean = False) As String
+    InspectQuerySqlStorage = RequestAdmissionRefusal()
+    If Len(InspectQuerySqlStorage) > 0 Then Exit Function
     InspectQuerySqlStorage = modTestQuerySqlBuilder.InspectQuerySqlStorage(strSql, blnForceDesignView)
 End Function
 
@@ -2991,6 +3211,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function CompareSqlBuilderArtifacts(ByVal strArtifactRoot As String) As String
+    CompareSqlBuilderArtifacts = RequestAdmissionRefusal()
+    If Len(CompareSqlBuilderArtifacts) > 0 Then Exit Function
     CompareSqlBuilderArtifacts = modTestQuerySqlBuilder.CompareSqlBuilderArtifacts(strArtifactRoot)
 End Function
 
@@ -3120,6 +3342,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function TestRunnerDiag(ByVal blnEnabled As Boolean) As String
+    TestRunnerDiag = RequestAdmissionRefusal()
+    If Len(TestRunnerDiag) > 0 Then Exit Function
 
     modTestRunnerDiag.DiagEnabled = blnEnabled
     If blnEnabled Then
@@ -3143,6 +3367,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Sub ExportTestResultsJUnit(Optional ByVal strPath As String = vbNullString)
+    If ManualCommandRefused Then Exit Sub
 
     Dim strResult As String
 
@@ -3165,6 +3390,7 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub ExportTestResultsHtml(Optional ByVal strPath As String = vbNullString)
+    If ManualCommandRefused Then Exit Sub
 
     Dim strResult As String
 
@@ -3220,7 +3446,6 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     Dim strError As String
     Dim lngError As Long
 
-    LogUnhandledErrors
     On Error GoTo ErrHandler
 
     If Len(strDecisionPolicy) > 0 Then
@@ -3228,17 +3453,15 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         If Len(ExecuteTests) > 0 Then Exit Function
     End If
 
-    If Operation.IsActive Then
-        ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
-        Exit Function
-    End If
+    ExecuteTests = RequestAdmissionRefusal(blnQuiet:=(blnHeadless Or intPolicy <> edpAsk))
+    If Len(ExecuteTests) > 0 Then Exit Function
 
     ' An automation session has no one to click Run in the web runner and no
     ' console to watch, so any API/MCP-initiated run is headless regardless of
     ' which entry point was called. Operation.Source is the established signal
     ' for suppressing UI on behalf of these callers.
     If Operation.AutomationSource Then blnHeadless = True
-    If blnHeadless Then Set cTrapping = BeginVbeErrorTrappingScope(eetBreakOnUnhandledErrors)
+
 
     ' Every exit past this point reaches CleanUp, which restores logging and finishes
     ' the operation (if one began) with this result. Finish reports decision_required
@@ -3249,14 +3472,15 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' refused request changes nothing, and the preflight prompts below are answered by
     ' the policy. ForceUnattended must be set before the root begins: Attended is
     ' captured once, at root creation, and is immutable for the life of the operation.
-    If intPolicy <> edpAsk Or Operation.InteractionMode = eimNonInteractive Then
-        If blnHeadless Then Operation.ForceUnattended = True
-        Set cRoot = Operation.TryBeginRoot(eotTestRun, intPolicy)
+    If True Then
+        Set cRoot = Operation.TryBeginRoot(eotTestRun, intPolicy, blnHeadless)
         If cRoot Is Nothing Then
-            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            ExecuteTests = Operation.AdmissionRefusal
             GoTo CleanUp
         End If
     End If
+
+    If blnHeadless Then Set cTrapping = BeginVbeErrorTrappingScope(eetBreakOnUnhandledErrors)
 
     ' Loading the options can log an error (a conflicted options file, for one). Under a
     ' policy the root above is already held, so its scope answers that error's message
@@ -3277,6 +3501,8 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
     ' callbacks own the operation lifecycle when the user clicks Run. Beginning here
     ' left eosRunning stuck after hide/reopen and blocked the next Run Tests click.
     If blnUseWebRunner Then
+        cRoot.Complete eorSuccess
+        Set cRoot = Nothing
         If blnFiltered Then
             For lngIdx = LBound(varFilters) To UBound(varFilters)
                 If Len(strFilter) > 0 Then strFilter = strFilter & ", "
@@ -3297,7 +3523,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         If blnHeadless Then Operation.ForceUnattended = True
         Set cRoot = Operation.TryBeginRoot(eotTestRun)
         If cRoot Is Nothing Then
-            ExecuteTests = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            ExecuteTests = Operation.AdmissionRefusal
             GoTo CleanUp
         End If
     End If
@@ -3338,6 +3564,7 @@ Private Function ExecuteTests(varFilters As Variant, blnFiltered As Boolean, _
         .Add T("VCS Version {0}", var0:=GetVCSVersion)
         .Add T("Full Path: {0}", var0:=CurrentProject.FullName), False
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
     End With
@@ -3453,6 +3680,7 @@ CleanUp:
     If Not cRoot Is Nothing Then
         cRoot.Complete intResult
         ExecuteTests = OverlayTestCompletionFailure(ExecuteTests, Operation.LastCompletion)
+        ExecuteTests = OverlayOperationIdentity(ExecuteTests, Operation)
     End If
     Exit Function
 
@@ -3478,6 +3706,8 @@ End Function
 Private Function ParsePolicyOrRefuse(ByVal strDecisionPolicy As String, _
     ByRef intPolicy As eDecisionPolicy) As String
 
+    intPolicy = edpAsk
+    If Len(strDecisionPolicy) = 0 Then Exit Function
     If Not ParseDecisionPolicy(strDecisionPolicy, intPolicy) Then
         ParsePolicyOrRefuse = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage())
     End If
@@ -3535,7 +3765,7 @@ Private Function TestRunPreflight(ByVal blnHeadless As Boolean, ByRef strRefusal
                 , vbInformation
         End If
         If Not Operation.DecisionBlocked Then
-            strRefusal = "{""success"":false,""error"":""No database is open.""}"
+            strRefusal = RefusalJson(vbNullString, T("No database is open."), False)
         End If
         Exit Function
     End If
@@ -3566,12 +3796,12 @@ Private Function TestRunPreflight(ByVal blnHeadless As Boolean, ByRef strRefusal
     ' approves a generic confirmation).
     If Not TestAssertModuleExists Then
         If blnHeadless Then
-            InstallTestAssertModule
+            InstallTestAssertModuleCore
         ElseIf vbYes = MsgBox2(T("Test Helper Not Found"), _
             T("The modTestAssert module was not found in the current project."), _
             T("Would you like to install it now?"), _
             vbYesNo + vbQuestion) Then
-            InstallTestAssertModule
+            InstallTestAssertModuleCore
         Else
             If Not Operation.DecisionBlocked Then
                 strRefusal = RefusalJson(vbNullString, T("modTestAssert is not installed."), False)
@@ -3583,13 +3813,13 @@ Private Function TestRunPreflight(ByVal blnHeadless As Boolean, ByRef strRefusal
 
     ' Offer to migrate if no module (other than modTestAssert) uses TestAssert yet
     ' (skipped in headless mode)
-    If Not TestAssertInUse And Not blnHeadless Then
+    If Not TestAssertInUse And Not blnHeadless And Not InteractionIsNonInteractive() Then
         If vbYes = MsgBox2(T("TestAssert Not In Use"), _
             T("No test modules are using TestAssert yet. Would you like to migrate " & _
               "Debug.Assert calls to TestAssert in your test modules?"), _
             T("You can always do this manually later."), _
             vbYesNo + vbQuestion) Then
-            MigrateDebugAssert
+            MigrateDebugAssertCore
         End If
     End If
 
@@ -3675,6 +3905,19 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub InstallTestAssertModule()
+    If ManualCommandRefused Then Exit Sub
+    InstallTestAssertModuleCore
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : InstallTestAssertModuleCore
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Install required assertion support within the caller-owned operation.
+'---------------------------------------------------------------------------------------
+'
+Private Sub InstallTestAssertModuleCore()
 
     Dim cmp As VBIDE.VBComponent
     Dim cCode As New clsConcat
@@ -3791,6 +4034,19 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub MigrateDebugAssert()
+    If ManualCommandRefused Then Exit Sub
+    MigrateDebugAssertCore
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : MigrateDebugAssertCore
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Migrate assertions only inside the admitted owning workflow.
+'---------------------------------------------------------------------------------------
+'
+Private Sub MigrateDebugAssertCore()
 
     Dim proj As VBIDE.VBProject
     Dim cmp As VBIDE.VBComponent
@@ -4004,19 +4260,24 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Sub GoToLinkAdvancedTools()
+    If ManualCommandRefused Then Exit Sub
     ' TODO: Create page describing advanced tools.
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin/wiki"
 End Sub
 Public Sub GoToLinkHome()
+    If ManualCommandRefused Then Exit Sub
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin"
 End Sub
 Public Sub GoToLinkDocumentation()
+    If ManualCommandRefused Then Exit Sub
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin/wiki"
 End Sub
 Public Sub GoToLinkSupport()
+    If ManualCommandRefused Then Exit Sub
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin/issues"
 End Sub
 Public Sub GoToLinkDownload()
+    If ManualCommandRefused Then Exit Sub
     FollowHyperlink "https://github.com/joyfullservice/msaccess-vcs-addin/releases"
 End Sub
 
@@ -4039,9 +4300,7 @@ End Function
 ' Procedure : SetOperationPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Set a noninteractive decision policy for this session. It stays in force
-'           : across operations until ClearOperationPolicy, or another call to this,
-'           : replaces it. Finish does not close it.
+' Purpose   : Refuse retired persistent activation. Supply policy on each request.
 '---------------------------------------------------------------------------------------
 '
 Public Function SetOperationPolicy(ByVal strDecisionPolicy As String) As String
@@ -4053,8 +4312,7 @@ End Function
 ' Procedure : ClearOperationPolicy
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Close the policy SetOperationPolicy set. Safe when none is set, and safe
-'           : to call twice.
+' Purpose   : Harmless compatibility cleanup for retired persistent activation.
 '---------------------------------------------------------------------------------------
 '
 Public Function ClearOperationPolicy() As String
@@ -4082,11 +4340,10 @@ End Function
 '           : action is "close" or "cancel".
 '---------------------------------------------------------------------------------------
 '
-Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close") As String
-    DismissAddinDialog = modDialogInspect.DismissAddinDialog(strName, strAction)
+Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close", _
+    Optional ByVal strOperationId As String) As String
+    DismissAddinDialog = modDialogInspect.DismissAddinDialog(strName, strAction, strOperationId)
 End Function
-
-
 
 
 '---------------------------------------------------------------------------------------
@@ -4102,3 +4359,62 @@ Private Sub Class_Initialize()
     ' when the add-in is opened from the [Database Tools\Add-ins] menu. (See #451)
     If GetInstallSettings.blnUseRibbonAddIn Then modCOMAddIn.VerifyRibbon
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishApiPreflight
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Complete a failed preflight before restoring its owned resources.
+'---------------------------------------------------------------------------------------
+'
+Private Function FinishApiPreflight(ByVal dResult As Dictionary, ByVal blnBegun As Boolean) As String
+    If blnBegun Then
+        AddOperationIdentity dResult, Operation
+        Operation.Finish eorFailed
+        If Operation.Result = eorDecisionRequired Then
+            SetDecisionRequiredOutcome dResult, Operation.LastDecisions
+        Else
+            AddDecisionJournal dResult, Operation.LastDecisions
+        End If
+    End If
+    FinishApiPreflight = ConvertToJson(dResult)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RebuildLauncherForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Inject the inert disposable rebuild launcher fixture.
+'---------------------------------------------------------------------------------------
+'
+Friend Property Set RebuildLauncherForTest(ByVal objLauncher As Object)
+    Set m_RebuildLauncherForTest = objLauncher
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ImportSourceExists
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Accept theme source folders while retaining ordinary file validation.
+'---------------------------------------------------------------------------------------
+'
+Private Function ImportSourceExists(ByVal cComponent As IDbComponent, ByRef strPath As String) As Boolean
+    Dim strFolder As String
+    If Len(strPath) = 0 Then Exit Function
+    If FSO.FileExists(strPath) Then
+        ImportSourceExists = True
+    ElseIf TypeName(cComponent) = "clsDbTheme" Then
+        If FSO.FolderExists(strPath) Then
+            ImportSourceExists = True
+        Else
+            strFolder = FSO.BuildPath(FSO.GetParentFolderName(strPath), FSO.GetBaseName(strPath))
+            If FSO.FolderExists(strFolder) Then
+                strPath = strFolder
+                ImportSourceExists = True
+            End If
+        End If
+    End If
+End Function

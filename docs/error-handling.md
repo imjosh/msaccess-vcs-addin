@@ -43,6 +43,18 @@ Under an MCP or external API call, `DebugMode` returns `False` and
 `LogUnhandledErrors` never breaks into the debugger. See
 [mcp-runvba.md](mcp-runvba.md) for why.
 
+### Request admission exception
+
+Request construction, identity claims, and queued refusals run before the caller
+owns an operation. They must not send an error to the shared `Log`, because that
+log can belong to another active request. `InitializeRequestErrors` captures
+inherited `Err` diagnostics with `Debug.Print` before clearing them, then calls
+`DebugMode(True)` with no pending error. The caller installs its local handler.
+Parsing failures propagate to the owning dispatcher;
+identity-store failures return an explicit refusal and release their mutex.
+These helpers document that boundary in their source. Once a request owns the
+operation, use the normal structured pattern above.
+
 ---
 
 ## Reading `LogUnhandledErrors` entries in a log

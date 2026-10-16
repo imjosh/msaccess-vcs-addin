@@ -1,4 +1,7 @@
-"""Ensure refused calls never use an active operation's callback."""
+"""Ensure refused requests preserve the active operation and its callback.
+
+Use a source-built request-policy add-in and its paired pre-session MCP client.
+"""
 import argparse
 import gc
 import importlib.util

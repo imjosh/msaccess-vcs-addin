@@ -25,6 +25,7 @@ Private Type udtThis
     CallbackUrl As String
     OperationId As String
     IsActive As Boolean
+    TerminalPosted As Boolean
     LastCancelCheck As Double
     LogPostAttempts As Long
     ProgressPostAttempts As Long
@@ -57,6 +58,7 @@ Public Sub RegisterCallback(strCallbackInfo As String)
     Dim strJson As String
     Dim strRegistrationError As String
 
+    this.TerminalPosted = False
     ResetDiagnostics
 
     ' Parse the callback info JSON
@@ -141,6 +143,10 @@ Public Sub PostCallback(strType As String, _
     Dim lngSendError As Long
 
     If Not this.IsActive Or Len(this.CallbackUrl) = 0 Then Exit Sub
+    If Not IsStreamingCallback(strType) Then
+        If this.TerminalPosted Then Exit Sub
+        this.TerminalPosted = True
+    End If
 
     LogUnhandledErrors
     On Error Resume Next  ' Don't let callback failures break the operation
@@ -160,7 +166,9 @@ Public Sub PostCallback(strType As String, _
 
     If Not dExtraData Is Nothing Then
         For Each varKey In dExtraData.Keys
-            dPayload.Add varKey, dExtraData(varKey)
+            If varKey <> "operation_id" And varKey <> "type" Then
+                If Not dPayload.Exists(varKey) Then dPayload.Add varKey, dExtraData(varKey)
+            End If
         Next varKey
     End If
 
@@ -457,3 +465,15 @@ Private Sub Class_Initialize()
     this.LastCancelCheck = 0
     Set m_colInFlight = New Collection
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TerminalPosted
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Report whether this emitter already attempted its terminal callback.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get TerminalPosted() As Boolean
+    TerminalPosted = this.TerminalPosted
+End Property

@@ -356,7 +356,7 @@ Public Sub TestEveryPolicyAgainstEveryConfirmationStyle()
     varResolutions = Array("decision_required", "decision_required", "decision_required", "decision_required", "declined")
     varBlocked = Array(True, True, True, True, False)
     varStyles = Array(vbOKCancel, vbAbortRetryIgnore, vbYesNoCancel, vbYesNo, vbRetryCancel)
-    varRefusals = Array(vbCancel, vbAbort, vbNo, vbNo, vbCancel)
+    varRefusals = Array(vbCancel, vbAbort, vbCancel, vbNo, vbCancel)
 
     For lngPolicy = 0 To UBound(varPolicies)
         For lngStyle = 0 To UBound(varStyles)
@@ -386,7 +386,10 @@ Public Sub TestConflictActionForEachPolicyAndRequestedAction()
 
     For Each varRequested In Array(ercNone, ercSkip, ercOverwrite, ercDelete)
         lngToken = cScope.OpenScope(eimNonInteractive, edpPreferSource)
-        If varRequested = ercNone Then
+        If varRequested = ercDelete Then
+            TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercNone, _
+                "prefer_source cannot authorize a conflicting deletion"
+        ElseIf varRequested = ercNone Then
             TestAssert ConflictActionForPolicy(cScope.DecisionPolicy, varRequested) = ercOverwrite, _
                 "prefer_source overwrites when the conflict asks for nothing"
         Else

@@ -37,6 +37,9 @@ Public strSourcePath As String
 ' Set by an API caller that wants the build to run under a noninteractive decision
 ' policy. Operation.Begin opens the scope; edpAsk (the default) leaves it interactive.
 Public intDecisionPolicy As eDecisionPolicy
+Public strStartResult As String
+Public strRequestRootToken As String
+Private m_strDisplayedOperationId As String
 
 ' Design-time and test-console client dimensions (twips; match frmVCSMain.form Width).
 Private Const DESIGN_INSIDE_WIDTH As Long = 9360
@@ -112,63 +115,78 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Sub cmdBuild_Click()
-
     Dim intBuildType As eOperationType
     Dim strFolder As String
     Dim cRoot As clsRootOperationLease
+    Dim cOp As clsOperation
     Dim strToken As String
+    Dim strQueue As String
+    Dim strError As String
+    Dim lngError As Long
 
-    ' Make sure we use the add-in to build the add-in.
-    If CodeProject.FullName = CurrentProject.FullName Then
-        MsgBox2 T("Build must be run from Add-In"), T("Instead of opening this form to build the add-in," & vbCrLf & _
-            "please install and use the Version Control add-in from the Add-in menu"), , vbExclamation
+    Set cOp = Operation
+    intBuildType = IIf(chkFullBuild, eotBuild, eotMerge)
+    If Len(strRequestRootToken) > 0 Then
+        Set cRoot = cOp.ResumeRoot(strRequestRootToken)
+        If cRoot Is Nothing Then Exit Sub
+        strRequestRootToken = vbNullString
+    Else
+        If cOp.IsActive Or TimerIsPending Then
+            If Me.intDecisionPolicy <> edpAsk Then
+                SysCmd acSysCmdSetStatus, OperationRunningMessage()
+            Else
+                ManualCommandRefused
+            End If
+            Exit Sub
+        End If
+        Set cRoot = cOp.TryBeginRoot(intBuildType, Me.intDecisionPolicy)
+    End If
+    strStartResult = vbNullString
+    If cRoot Is Nothing Then
+        strStartResult = cOp.AdmissionRefusal
+        Exit Sub
+    End If
+    On Error GoTo Failed
+    m_strDisplayedOperationId = cOp.PublicId
+    If DatabaseFileOpen Then
+        If CodeProject.FullName = CurrentProject.FullName Then
+            strStartResult = RefusalJson("build_requires_addin", T("Build must be run from the installed add-in library."), False)
+            cRoot.Complete eorFailed
+            Exit Sub
+        End If
+    End If
+    If Len(Me.strSourcePath) > 0 Then
+        strFolder = Me.strSourcePath
+    Else
+        strFolder = GetSourceFolder
+    End If
+    If Len(strFolder) = 0 Then
+        cRoot.Complete eorCanceled
+        strStartResult = CompletedOperationJson(cOp)
         DoCmd.Hourglass False
         Exit Sub
     End If
-
-    ' Under a noninteractive policy, take the root first so the policy scope also
-    ' answers the prompts while resolving the source folder.
-    intBuildType = IIf(chkFullBuild, eotBuild, eotMerge)
-    If Me.intDecisionPolicy <> edpAsk Then
-        Set cRoot = Operation.TryBeginRoot(intBuildType, Me.intDecisionPolicy)
-        If cRoot Is Nothing Then
-            DoCmd.Hourglass False
-            Exit Sub
-        End If
-    End If
-
-    ' Get source files folder
-    If Len(Me.strSourcePath) Then
-        ' Use specified build folder
-        strFolder = Me.strSourcePath
+    strToken = cRoot.DetachForContinuation()
+    strQueue = SetTimer("Build", strFolder, CStr(CBool(chkFullBuild)), strToken)
+    If TimerRequestSucceeded(strQueue) Then
+        strStartResult = StartedJson()
     Else
-        ' Attempt to get the source folder from the current database, or from
-        ' a folder picker dialog.
-        strFolder = GetSourceFolder
-        ' Exit out of build if the user cancelled any of the confirmations.
-        If strFolder = vbNullString Then
-            ' Complete first: closing the form while the root is running reads as a cancel.
-            If Not cRoot Is Nothing Then cRoot.Complete eorCanceled
-            DoCmd.Close acForm, Me.Name
-            DoCmd.Hourglass False
-            Exit Sub
-        End If
+        cOp.RecordRootRuntimeError strToken, T("Could not queue the build continuation."), vbObjectError + 2410
+        cOp.CompleteRootLease strToken, eorFailed
+        strStartResult = CompletedOperationJson(cOp)
     End If
-
-    ' Build project using the selected source folder
-    ' (Use a timer so we can release the reference to this form before beginning the
-    '  build process, just in case we need to import a form with the same name.)
-    If strFolder <> vbNullString Then
-        If cRoot Is Nothing Then Set cRoot = Operation.TryBeginRoot(intBuildType)
-        If Not cRoot Is Nothing Then
-            strToken = cRoot.DetachForContinuation()
-            SetTimer "Build", strFolder, chkFullBuild, strToken
-        Else
-            ' Not ready to begin a new operation. Probably still running something else.
-            DoCmd.Hourglass False
-        End If
+    Exit Sub
+Failed:
+    strError = Err.Description
+    lngError = Err.Number
+    If Len(strToken) > 0 Then
+        cOp.RecordRootRuntimeError strToken, strError, lngError
+        cOp.CompleteRootLease strToken, eorFailed
+    Else
+        cRoot.RecordRuntimeError strError, lngError
+        cRoot.Complete eorFailed
     End If
-
+    strStartResult = CompletedOperationJson(cOp)
 End Sub
 
 
@@ -273,6 +291,7 @@ End Function
 Public Sub StartBuild(blnFullBuild As Boolean)
 
     ResetForOperation
+    m_strDisplayedOperationId = Operation.PublicId
 
     ' Show the status
     SetStatusText T("Running..."), IIf(blnFullBuild, T("Building From Source"), T("Merging From Source")), _
@@ -367,6 +386,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Private Function ConfirmCancel() As Boolean
+    If Len(m_strDisplayedOperationId) = 0 Then Exit Function
+    If StrComp(m_strDisplayedOperationId, Operation.PublicId, vbBinaryCompare) <> 0 Then Exit Function
     ' A noninteractive run already asked the caller to cancel by closing the window,
     ' and no decision policy can answer this confirmation. Do not open or block on one.
     If InteractionIsNonInteractive() Then
@@ -389,10 +410,22 @@ End Function
 '
 Public Sub cmdExport_Click()
 
-    ' Make sure we are ready to begin an operation...
-    If Not Operation.Begin(eotExport) Then Exit Sub
+    Dim cRoot As clsRootOperationLease
+    Dim strError As String
+    Dim lngError As Long
+    If Len(strRequestRootToken) > 0 Then
+        Set cRoot = Operation.ResumeRoot(strRequestRootToken)
+        If cRoot Is Nothing Then Exit Sub
+        strRequestRootToken = vbNullString
+    Else
+        Set cRoot = Operation.TryBeginRoot(eotExport, Me.intDecisionPolicy)
+        If cRoot Is Nothing Then Exit Sub
+    End If
+    On Error GoTo Failed
+    m_strDisplayedOperationId = Operation.PublicId
 
     ResetForOperation
+    m_strDisplayedOperationId = Operation.PublicId
 
     ' Show the status
     SetStatusText T("Running..."), T("Exporting source code"), _
@@ -425,14 +458,21 @@ Public Sub cmdExport_Click()
         cmdOpenLogFile.Visible = (Me.strLastLogFilePath <> vbNullString)
         cmdCopyPath.Visible = cmdOpenLogFile.Visible
         If m_blnCancelRequested Then
-            Operation.Finish eorCanceled
+            cRoot.Complete eorCanceled
         Else
-            Operation.Finish
+            cRoot.Complete IIf(Operation.ErrorLevel >= eelError, eorFailed, eorSuccess)
         End If
         DoEvents
     Else
-        Operation.Finish eorCanceled
+        cRoot.Complete eorCanceled
     End If
+
+    Exit Sub
+Failed:
+    strError = Err.Description
+    lngError = Err.Number
+    cRoot.RecordRuntimeError strError, lngError
+    cRoot.Complete eorFailed
 
 End Sub
 
@@ -451,6 +491,7 @@ Public Sub ResetForOperation()
     If Not FormLoaded(Me) Then Exit Sub
 
     m_blnCancelRequested = False
+    If Operation.IsActive Then m_strDisplayedOperationId = Operation.PublicId
     Me.TimerInterval = 0
     cmdOpenLogFile.Visible = False
     cmdCopyPath.Visible = False
@@ -718,6 +759,12 @@ Private Sub Form_Unload(Cancel As Integer)
 
     ' Check to see if we have an active job running. Staged (paused) roots are
     ' left alone: pause scopes close forms without meaning the user canceled.
+    If Len(m_strDisplayedOperationId) > 0 And StrComp(m_strDisplayedOperationId, Operation.PublicId, vbBinaryCompare) <> 0 Then
+        If Operation.IsActive Then
+            Cancel = True
+            Exit Sub
+        End If
+    End If
     If MainFormWaitsForRoot(Operation.Status, Operation.OperationType, _
         (TestRunner.State = etrsRunning)) Then
         ' Keep the form open either way so the owning procedure can finish

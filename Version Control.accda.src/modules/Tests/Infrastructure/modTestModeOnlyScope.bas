@@ -23,7 +23,7 @@ Public Function ModeOnlyScopeProbe(ByVal strAction As String) As String
             dResult.Add "outcome", ParseJson(cVcs.ExportByType("queries"))
             dResult.Add "after", ModeSnapshot()
         Case "refused"
-            Set cRoot = Operation.TryBeginRoot(eotExport)
+            Set cRoot = Operation.TryBeginRoot(eotExport, edpBlock)
             Operation.ResolvePrompt vbYesNo, "parent", "Unanswered parent prompt"
             dResult.Add "before", ModeSnapshot()
             Set cRefused = Operation.TryBeginRoot(eotMerge, edpDecline)
@@ -64,6 +64,11 @@ Private Function ModeSnapshot() As Dictionary
     dResult.Add "token", Operation.CurrentRootToken
     dResult.Add "result", Operation.Result
     dResult.Add "force_unattended", Operation.ForceUnattended
+    dResult.Add "operation_id", Operation.PublicId
+    dResult.Add "initiating_source", Operation.SourceLabel
+    dResult.Add "decision_policy", Operation.PolicyName
+    dResult.Add "callback_id", MCP.OperationId
+    dResult.Add "callback_url", MCP.CallbackUrl
     dResult.Add "error_trapping", Application.GetOption("Error Trapping")
     dResult.Add "form_loaded", IsLoaded(acForm, "frmVCSMain", False)
     If IsLoaded(acForm, "frmVCSMain", False) Then
@@ -72,13 +77,13 @@ Private Function ModeSnapshot() As Dictionary
     Set ModeSnapshot = dResult
 End Function
 
-Public Sub TestModeOnlyRootDiscardsItsJournal()
+Public Sub TestRequestRootDiscardsItsJournal()
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     On Error GoTo ErrHandler
     Set cOp = New clsOperation
-    SelectInteractionMode cOp, eimNonInteractive
-    Set cRoot = cOp.TryBeginRoot(eotExport)
+    TestAssert InStr(SelectInteractionMode(cOp, eimNonInteractive), "interaction_mode_refused") > 0, "standalone mode activation is retired"
+    Set cRoot = cOp.TryBeginRoot(eotExport, edpBlock)
     cOp.ResolvePrompt vbYesNo, "", "Proceed?"
     cRoot.Complete eorSuccess
     TestAssert cOp.Result = eorDecisionRequired, "blocked operation reports decision_required"

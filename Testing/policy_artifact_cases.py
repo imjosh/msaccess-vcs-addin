@@ -1,0 +1,249 @@
+"""Actual native fixtures for complete artifact and grouped dependency policies."""
+import hashlib
+import json
+from pathlib import Path
+import re
+import shutil
+import uuid
+import zipfile
+
+import win32com.client
+
+from request_policy_cases import POLICIES, require
+
+
+FIXTURES = Path(__file__).with_name('Testing.accdb.src')
+
+
+def digest_tree(folder):
+    return {str(p.relative_to(folder)).lower(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in folder.rglob('*') if p.is_file()}
+
+
+def bitmap_variant(data, step):
+    value = bytearray(data)
+    require(value[:2] == b'BM', 'Native fixture must be a BMP')
+    offset = int.from_bytes(value[10:14], 'little')
+    require(offset < len(value), 'Invalid BMP pixel offset')
+    value[offset] ^= step
+    return bytes(value)
+
+
+def menu_fixture(cases, name):
+    menu = cases.source / 'menus' / (name + '.json')
+    images = menu.parent / (name + '_Images')
+    images.mkdir(parents=True)
+    data = json.loads((FIXTURES / 'menus/Demo Popup.json').read_text(encoding='utf-8-sig'))
+    data['Items']['NameLocal'] = name
+    data['Items']['Controls'][0]['ImagePath'] = 'rel:' + name + '_Images\\Custom Button'
+    data['Items']['Controls'][0]['OnAction'] = ''
+    menu.write_bytes(b'\xef\xbb\xbf' + json.dumps(data, indent=2).encode())
+    for source in (FIXTURES / 'menus/Demo Popup_Images').iterdir():
+        shutil.copy2(source, images / source.name)
+    return menu, images
+
+
+def command_bars(cases, transports):
+    for transport in transports:
+        for direction in ['import', 'export']:
+            for policy in POLICIES:
+                key = '-'.join(['artifact-menu', transport, direction, policy])
+                item = cases.new(key)
+                name = 'F1 Menu ' + uuid.uuid4().hex[:8]
+                menu, images = menu_fixture(cases, name)
+                imported = cases.call('external', 'ImportObject', 'command_bar', name, 'block')
+                cases.outcome(imported, transferred=True)
+                seeded = cases.call('external', 'ExportObject', 'command_bar', name, 'block')
+                cases.outcome(seeded, transferred=True)
+                picture = next(images.glob('*_Picture.bmp'))
+                baseline = picture.read_bytes()
+                db_picture = cases.folder / (key + '-database.bmp')
+                db_picture.write_bytes(bitmap_variant(baseline, 0x40))
+                picture.write_bytes(bitmap_variant(baseline, 0x80))
+                source_before = digest_tree(menu.parent)
+                # WIA supplies a native IPictureDisp without touching the clipboard.
+                image = win32com.client.Dispatch('WIA.ImageFile')
+                image.LoadFile(str(db_picture))
+                button = cases.app.CommandBars(name).Controls(1)
+                button.Picture = image.FileData.Picture
+                button.BuiltInFace = False
+                button = image = None
+                history_before = cases.history()
+                result = cases.call(transport, direction.title() + 'Object', 'command_bar', name, policy)
+                item.update(seed_import=imported, seed_export=seeded, result=result,
+                            source_before=source_before, source_after=digest_tree(menu.parent))
+                cases.save()
+                winning = policy == ('prefer_source' if direction == 'import' else 'prefer_database')
+                blocked = policy == 'block'
+                cases.outcome(result, blocked=blocked, skipped=not blocked and not winning, transferred=winning)
+                if not winning or direction == 'import':
+                    require(item['source_after'] == source_before, 'Menu comparison changed canonical image content')
+                if not winning:
+                    require(cases.history() == history_before, 'Menu preservation advanced history')
+                # A deliberate database export makes the actual native picture observable.
+                observed = cases.call('external', 'ExportObject', 'command_bar', name, 'prefer_database')
+                cases.outcome(observed, transferred=True)
+                expected = bitmap_variant(baseline, 0x80 if direction == 'import' and winning else 0x40)
+                item['observed_picture_sha256'] = hashlib.sha256(picture.read_bytes()).hexdigest()
+                item['expected_picture_sha256'] = hashlib.sha256(expected).hexdigest()
+                require(item['observed_picture_sha256'] == item['expected_picture_sha256'], 'Native menu contains the wrong picture')
+                cases.reopen()
+                item['reopened_history'] = cases.history()
+                cases.save()
+
+
+def theme_xml_variant(data, color):
+    text = data.decode('utf-8-sig')
+    changed, count = re.subn(r'(?<=val=")[0-9A-Fa-f]{6}(?=")', color, text, count=1)
+    require(count == 1, 'Theme fixture has no editable RGB color')
+    return changed.encode('utf-8')
+
+
+def replace_theme_attachment(cases, name, path):
+    db = cases.app.CurrentDb()
+    rows = db.OpenRecordset("SELECT [Data] FROM MSysResources WHERE [Type]='thmx' AND [Name]='" + name.replace("'", "''") + "'")
+    require(not rows.EOF, 'Imported theme resource was not found')
+    rows.Edit()
+    attachment = rows.Fields('Data').Value
+    if not attachment.EOF:
+        attachment.Delete()
+    attachment.AddNew()
+    attachment.Fields('FileData').LoadFromFile(str(path))
+    attachment.Update()
+    attachment.Close()
+    rows.Update()
+    rows.Close()
+    attachment = rows = db = None
+
+
+def read_theme_attachment(cases, name, path):
+    db = cases.app.CurrentDb()
+    rows = db.OpenRecordset("SELECT [Data] FROM MSysResources WHERE [Type]='thmx' AND [Name]='" + name.replace("'", "''") + "'")
+    attachment = rows.Fields('Data').Value
+    attachment.Fields('FileData').SaveToFile(str(path))
+    attachment.Close()
+    rows.Close()
+    attachment = rows = db = None
+
+
+def themes(cases, transports):
+    for transport in transports:
+        for direction in ['import', 'export']:
+            for policy in POLICIES:
+                key = '-'.join(['artifact-theme', transport, direction, policy])
+                item = cases.new(key)
+                name = 'F1 Theme ' + uuid.uuid4().hex[:8]
+                folder = cases.source / 'themes' / name
+                folder.mkdir(parents=True)
+                fixture = FIXTURES / 'themes/Angles.thmx'
+                with zipfile.ZipFile(fixture) as archive:
+                    for member in archive.namelist():
+                        require((folder / member).resolve().is_relative_to(folder.resolve()), 'Unsafe fixture archive path')
+                    archive.extractall(folder)
+                options_file = cases.source / 'vcs-options.json'
+                options = json.loads(options_file.read_text(encoding='utf-8-sig'))
+                options['Options']['ExtractThemeFiles'] = True
+                options_file.write_bytes(b'\xef\xbb\xbf' + json.dumps(options).encode())
+                configured = cases.api('SetOption', 'ExtractThemeFiles', True)
+                require(configured.get('success') is True, 'Theme extraction setup failed')
+                imported = cases.call('external', 'ImportObject', 'theme', name, 'block')
+                cases.outcome(imported, transferred=True)
+                seeded = cases.call('external', 'ExportObject', 'theme', name, 'block')
+                cases.outcome(seeded, transferred=True)
+                xml = next(p for p in folder.rglob('*.xml') if 'clrScheme' in p.read_text(encoding='utf-8-sig'))
+                original = xml.read_bytes()
+                source_xml = theme_xml_variant(original, '112233')
+                database_xml = theme_xml_variant(original, '445566')
+                xml.write_bytes(source_xml)
+                db_archive = cases.folder / (key + '-database.thmx')
+                with zipfile.ZipFile(db_archive, 'w', zipfile.ZIP_DEFLATED) as archive:
+                    for path in folder.rglob('*'):
+                        if path.is_file():
+                            archive.writestr(path.relative_to(folder).as_posix(), database_xml if path == xml else path.read_bytes())
+                replace_theme_attachment(cases, name, db_archive)
+                source_before = digest_tree(folder)
+                history_before = cases.history()
+                result = cases.call(transport, direction.title() + 'Object', 'theme', name, policy)
+                item.update(seed_import=imported, seed_export=seeded, result=result,
+                            source_before=source_before, source_after=digest_tree(folder))
+                cases.save()
+                winning = policy == ('prefer_source' if direction == 'import' else 'prefer_database')
+                blocked = policy == 'block'
+                cases.outcome(result, blocked=blocked, skipped=not blocked and not winning, transferred=winning)
+                if not winning or direction == 'import':
+                    require(item['source_after'] == source_before, 'Theme comparison/import changed canonical source')
+                require(not folder.with_suffix('.thmx').exists(), 'Extracted theme import wrote a canonical upload archive')
+                if not winning:
+                    require(cases.history() == history_before, 'Theme preservation advanced history')
+                observed = cases.folder / (key + '-observed.thmx')
+                read_theme_attachment(cases, name, observed)
+                with zipfile.ZipFile(observed) as archive:
+                    actual = archive.read(xml.relative_to(folder).as_posix())
+                expected = source_xml if direction == 'import' and winning else database_xml
+                require(actual == expected, 'Native theme resource has the wrong XML content')
+                item['observed_xml_sha256'] = hashlib.sha256(actual).hexdigest()
+                cases.reopen()
+                item['reopened_history'] = cases.history()
+                cases.save()
+
+
+def access_text(path):
+    data = path.read_bytes()
+    return data.decode('utf-16') if data.startswith((b'\xff\xfe', b'\xfe\xff')) else data.decode('utf-8-sig')
+
+
+def grouped_table_macros(cases):
+    template = (FIXTURES / 'tdmacros/tblSaveXML.xml').read_text(encoding='utf-8-sig')
+    action = re.search(r'<Action Name="SetLocalVar">.*?</Action>', template, flags=re.S).group()
+    macro = '<?xml version="1.0"?>\r\n<DataMacros xmlns="http://schemas.microsoft.com/office/accessservices/2010/12/application"><DataMacro Event="AfterUpdate"><Statements>' + action + '</Statements></DataMacro></DataMacros>'
+    for direction in ['import', 'export']:
+        for policy in POLICIES:
+            item = cases.new('grouped-table-macro-' + direction + '-' + policy)
+            macro_source = cases.source / 'tdmacros/tblPolicy.xml'
+            macro_source.parent.mkdir(parents=True)
+            macro_source.write_text(macro, encoding='utf-8-sig')
+            imported = cases.call('external', 'ImportObject', 'table_data_macro', 'tblPolicy', 'block')
+            cases.outcome(imported, transferred=True)
+            seeded = cases.call('external', 'ExportObject', 'table', 'tblPolicy', 'prefer_database')
+            require(seeded.get('transferred_count') == 3, f'Table/data/macro group missing a member: {seeded}')
+            baseline = macro_source.read_text(encoding='utf-8-sig')
+            source_macro = baseline.replace('[ID]', '3')
+            database_macro = baseline.replace('[ID]', '2')
+            require(source_macro != baseline and database_macro != baseline, 'Macro fixture mutation failed')
+            macro_source.write_text(source_macro, encoding='utf-8-sig')
+            database_path = cases.folder / ('database-macro-' + uuid.uuid4().hex + '.xml')
+            database_path.write_text(database_macro, encoding='utf-8-sig')
+            cases.app.LoadFromText(win32com.client.constants.acTableDataMacro, 'tblPolicy', str(database_path))
+            cases.set_source('table_data', 99)
+            cases.set_db('table_data', 2)
+            before = digest_tree(cases.source)
+            history = cases.history()
+            result = cases.call('external', direction.title() + 'Object', 'table', 'tblPolicy', policy)
+            item.update(seed_import=imported, seed_export=seeded, result=result)
+            cases.save()
+            winning = policy == ('prefer_source' if direction == 'import' else 'prefer_database')
+            blocked = policy == 'block'
+            cases.outcome(result, blocked=blocked, skipped=not blocked and not winning, transferred=not blocked)
+            require(result.get('transferred_count') == (0 if blocked else 3 if winning else 1), f'Grouped macro transfer count mismatch: {result}')
+            require(result.get('skipped_count') == (2 if not blocked and not winning else 0), f'Grouped macro preservation count mismatch: {result}')
+            if blocked:
+                # Logs/overrides may be written, so compare the actual transfer groups.
+                after = digest_tree(cases.source)
+                for path, value in before.items():
+                    if path.startswith(('tbldefs', 'tdmacros', 'tables')):
+                        require(after.get(path) == value, 'Blocked macro dependency partially transferred')
+                require(cases.history() == history, 'Blocked macro dependency advanced history')
+            observed = cases.folder / ('observed-macro-' + uuid.uuid4().hex + '.xml')
+            cases.app.SaveAsText(win32com.client.constants.acTableDataMacro, 'tblPolicy', str(observed))
+            actual = access_text(observed)
+            require(('>3<' if direction == 'import' and winning else '>2<') in actual, 'Native table macro has wrong content')
+            require(cases.db_value('table_data') == str(99 if direction == 'import' and winning else 2), 'Grouped table data has wrong value')
+            cases.reopen()
+            item['reopened_history'] = cases.history()
+            cases.save()
+
+
+def run_artifacts(cases, transports):
+    command_bars(cases, transports)
+    themes(cases, transports)
+    grouped_table_macros(cases)

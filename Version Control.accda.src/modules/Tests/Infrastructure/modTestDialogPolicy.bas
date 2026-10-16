@@ -45,7 +45,7 @@ Public Sub TestPolicyNamesRoundTripThroughTheTable()
     TestAssert Len(DecisionPolicyName(edpAsk)) = 0, "edpAsk is not a named policy"
     TestAssert InStr(InvalidPolicyMessage(), "block, prefer_source, prefer_database, skip, or decline") > 0, _
         "the invalid-policy message lists every name in table order"
-    TestAssert ConflictResolutionName(edpPreferSource) = "prefer_source", "prefer_source reports its own name"
+    TestAssert ConflictResolutionName(edpPreferSource) = "import_source", "prefer_source reports the import transfer"
     TestAssert ConflictResolutionName(edpSkip) = "keep_database", "other policies keep the database object"
 
 End Sub
@@ -235,4 +235,62 @@ Public Sub TestMainFormWaitsOnlyForARootItCanCancel()
     TestAssert Not MainFormWaitsForRoot(eosStaged, eotExport, False), "a paused root does not block the close"
     TestAssert Not MainFormWaitsForRoot(eosReady, eotTestRun, True), "no root, no wait"
 
+End Sub
+
+
+Public Sub TestYesNoCancelReturnsCancelUnderEveryPolicyAndStyle()
+
+    Dim varPolicy As Variant
+    Dim varButtons As Variant
+    Dim cOutcome As clsPromptOutcome
+
+    For Each varPolicy In Array(edpBlock, edpPreferSource, edpPreferDatabase, edpSkip, edpDecline)
+        For Each varButtons In Array(vbYesNoCancel, vbYesNoCancel + vbQuestion, _
+            vbYesNoCancel + vbQuestion + vbDefaultButton3)
+            Set cOutcome = ResolveNonInteractivePrompt(CLng(varButtons), varPolicy)
+            TestAssert cOutcome.Result = vbCancel, "Yes/No/Cancel always returns Cancel"
+            TestAssert cOutcome.Blocked = (varPolicy <> edpDecline), "only decline resolves the confirmation"
+            If varPolicy = edpDecline Then
+                TestAssert cOutcome.Resolution = "declined", "decline records its answer"
+            Else
+                TestAssert cOutcome.Resolution = "decision_required", "other policies require a decision"
+            End If
+        Next varButtons
+    Next varPolicy
+
+End Sub
+
+
+Public Sub TestDirectionAwareConflictPolicyTable()
+
+    Dim varPolicy As Variant
+    Dim lngIndex As Long
+    Dim varPolicies As Variant
+    Dim varExpected As Variant
+
+    varPolicies = Array(edpBlock, edpPreferSource, edpPreferDatabase, edpSkip, edpDecline)
+    varExpected = Array(ercNone, ercOverwrite, ercSkip, ercSkip, ercSkip)
+    For lngIndex = 0 To UBound(varPolicies)
+        varPolicy = varPolicies(lngIndex)
+        TestAssert ConflictActionForPolicy(varPolicy, ercOverwrite, eatImport) = varExpected(lngIndex), "import overwrite policy table"
+    Next lngIndex
+    varExpected = Array(ercNone, ercSkip, ercOverwrite, ercSkip, ercSkip)
+    For lngIndex = 0 To UBound(varPolicies)
+        varPolicy = varPolicies(lngIndex)
+        TestAssert ConflictActionForPolicy(varPolicy, ercOverwrite, eatExport) = varExpected(lngIndex), "export overwrite policy table"
+    Next lngIndex
+    varExpected = Array(ercNone, ercNone, ercSkip, ercSkip, ercSkip)
+    For lngIndex = 0 To UBound(varPolicies)
+        varPolicy = varPolicies(lngIndex)
+        TestAssert ConflictActionForPolicy(varPolicy, ercDelete, eatImport) = varExpected(lngIndex), "edited database deletion policy table"
+    Next lngIndex
+    varExpected = Array(ercNone, ercSkip, ercNone, ercSkip, ercSkip)
+    For lngIndex = 0 To UBound(varPolicies)
+        varPolicy = varPolicies(lngIndex)
+        TestAssert ConflictActionForPolicy(varPolicy, ercDelete, eatExport, "tracked_changed_orphan") = varExpected(lngIndex), "tracked changed orphan policy table"
+        TestAssert ConflictActionForPolicy(varPolicy, ercDelete, eatExport, "untracked_orphan") = ercSkip, "untracked source survives every policy"
+    Next lngIndex
+    TestAssert ConflictResolutionName(edpPreferSource, eatExport) = "keep_source", "export preservation names source"
+    TestAssert ConflictResolutionName(edpPreferDatabase, eatExport) = "export_database", "export transfer names database"
+    TestAssert ConflictResolutionName(edpPreferDatabase, eatImport) = "keep_database", "import preservation names database"
 End Sub

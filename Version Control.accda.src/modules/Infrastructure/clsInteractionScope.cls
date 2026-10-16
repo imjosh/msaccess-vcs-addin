@@ -279,6 +279,7 @@ End Function
 Public Sub RecordDecision(ByVal cRecord As clsDecisionRecord)
 
     Dim dItem As Dictionary
+    Dim varKey As Variant
 
     Set dItem = New Dictionary
     dItem.Add "kind", cRecord.Kind
@@ -286,6 +287,11 @@ Public Sub RecordDecision(ByVal cRecord As clsDecisionRecord)
     dItem.Add "message", cRecord.Message
     dItem.Add "resolution", cRecord.Resolution
     dItem.Add "detail", cRecord.Detail
+    If Not cRecord.ConflictContext Is Nothing Then
+        For Each varKey In cRecord.ConflictContext.Keys
+            dItem(varKey) = cRecord.ConflictContext(varKey)
+        Next varKey
+    End If
     this.Journal.Add dItem
 
     If StrComp(cRecord.Kind, DECISION_REQUIRED, vbTextCompare) = 0 Then
@@ -421,4 +427,18 @@ End Sub
 '
 Private Sub Class_Initialize()
     Set this.Journal = New Collection
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RestoreJournal
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Restore persisted decisions without mutating another operation.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RestoreJournal(ByVal strJson As String, ByVal blnBlocked As Boolean)
+    If Len(strJson) > 0 Then Set this.Journal = ParseJson(strJson)
+    this.Blocked = blnBlocked
+    If blnBlocked Then this.ErrorLevel = eelCritical
 End Sub

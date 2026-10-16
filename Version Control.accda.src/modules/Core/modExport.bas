@@ -75,6 +75,7 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
         .Add T("Full Path: {0}", var0:=CurrentProject.FullName), False
         .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         If Not frmMain Is Nothing Then frmMain.strLastLogFilePath = .LogFilePath
         .Flush
@@ -444,6 +445,8 @@ CleanUp:
         End With
     End If
 
+    If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
+
 End Sub
 
 
@@ -658,6 +661,8 @@ Public Sub ExportScoped(colContainers As Collection, blnFullExport As Boolean)
         End If
     Next varCatKey
 
+    If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
+
 End Sub
 
 
@@ -693,12 +698,12 @@ End Sub
 ' Purpose   : Export a single object (such as a selected item)
 '           : When blnNoIndex is True, the VCS index is disabled for the duration
 '           : of the call, skipping the expensive full-file parse/serialize cycle
-'           : and conflict detection. Used by MCP/API callers that treat the export
-'           : as a deliberate action (like a user saving directly in the designer).
+'           : and conflict detection for legacy MCP/API calls without a policy.
+'           : An effective noninteractive policy always enables content protection.
 '---------------------------------------------------------------------------------------
 '
 Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_frmVCSMain, _
-    Optional blnNoIndex As Boolean = False)
+    Optional blnNoIndex As Boolean = False, Optional ByRef dTransferResult As Dictionary)
 
     Dim dCategories As Dictionary
     Dim dCategory As Dictionary
@@ -706,6 +711,7 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     Dim cDbObject As IDbComponent
     Dim cDisabledIndex As clsVCSIndex
     Dim strTempFile As String
+    Dim blnPolicy As Boolean
 
     ' Guard clause
     If objItem Is Nothing Then Exit Sub
@@ -722,6 +728,14 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
                 End If
         End Select
     End With
+
+    blnPolicy = InteractionIsNonInteractive()
+    blnNoIndex = blnNoIndex And Not blnPolicy
+    Set dTransferResult = New Dictionary
+    dTransferResult.Add "transferred", False
+    dTransferResult.Add "skipped", False
+    dTransferResult.Add "transferred_count", 0&
+    dTransferResult.Add "skipped_count", 0&
 
     If blnNoIndex Then
         ' Skip expensive index conflict work, but still reload options so
@@ -756,6 +770,7 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
         .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
         ' Log operation source (file only, not console)
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
         .Add T("Exporting {0}...", var0:=objItem.Name)
@@ -771,7 +786,11 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     ' Get a database component class from the item
     Set cDbObject = GetClassFromObject(objItem)
 
-    If Not blnNoIndex Then
+    If blnPolicy Then
+        ExecuteSingleObjectExportPlan cDbObject, dTransferResult
+        If Operation.ErrorLevel >= eelCritical Or Operation.DecisionBlocked Then GoTo CleanUp
+        GoTo PostExport
+    ElseIf Not blnNoIndex Then
         ' Check for conflicts
         Set dObjects = New Dictionary
         Set dCategory = New Dictionary
@@ -810,7 +829,11 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
 
     ' If we have already exported this object while scanning for changes, use that copy.
     If Not blnNoIndex Then
-        strTempFile = Replace(cDbObject.SourceFile, Options.GetExportFolder, VCSIndex.GetTempExportFolder)
+        If blnPolicy Then
+            strTempFile = VCSIndex.SingleObjectTempFile(cDbObject, cDbObject.SourceFile)
+        Else
+            strTempFile = Replace(cDbObject.SourceFile, Options.GetExportFolder, VCSIndex.GetTempExportFolder)
+        End If
         If FSO.FileExists(strTempFile) Then
             ' Move the temp file(s) over to the source export folder.
             cDbObject.MoveSource FSO.GetParentFolderName(strTempFile) & PathSep, _
@@ -824,7 +847,13 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
         ' Export a fresh copy
         cDbObject.Export
     End If
-    ExportDependentObjects cDbObject
+    If Operation.ErrorLevel < eelCritical Then
+        dTransferResult("transferred") = True
+        dTransferResult("transferred_count") = 1&
+    End If
+    ' Explicit policy checks cover the requested object and its indexed companions.
+    ' Grouped legacy dependencies must pass the preflight above before any transfer.
+    If Not blnPolicy Then ExportDependentObjects cDbObject
 
     ' Export AGENTS.md and its reference documents for AI agent assistance
     modResource.ExtractAgentDocs Options.GetExportFolder
@@ -855,7 +884,8 @@ CleanUp:
 
     If blnNoIndex Then
         Set VCSIndex = Nothing
-    ElseIf Not VCSIndex.Conflicts.UserCanceled Then
+    ElseIf Not VCSIndex.Conflicts.UserCanceled And Not Operation.DecisionBlocked _
+        And (Not blnPolicy Or CBool(dTransferResult("transferred"))) Then
         ' Save index file (don't change export date for single item export).
         ' Skipped if the user canceled a conflict dialog so the same conflicts
         ' will reappear on the next run.
@@ -945,6 +975,7 @@ Public Sub ExportMultipleObjects(objItems As Dictionary, Optional bolForceClose 
         .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
         ' Log operation source (file only, not console)
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
         .Flush
@@ -1086,6 +1117,8 @@ CleanUp:
     ' Skipped if the user canceled a conflict dialog so the same conflicts
     ' will reappear on the next run.
     If Not VCSIndex.Conflicts.UserCanceled Then VCSIndex.Save
+
+    If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
 
 End Sub
 
@@ -1255,3 +1288,159 @@ Private Function CloseObjectsOrAbort() As Boolean
     End If
 
 End Function
+
+
+' Shared policy path for component exports which have no core AccessObject wrapper.
+' The API owns options, logging, operation admission, and aggregate result assembly.
+'---------------------------------------------------------------------------------------
+' Procedure : ExportPolicyComponent
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Run the shared protected export plan for components without an AccessObject wrapper.
+'---------------------------------------------------------------------------------------
+'
+Public Function ExportPolicyComponent(ByVal cItem As IDbComponent) As Dictionary
+    Dim dResult As Dictionary
+    ExecuteSingleObjectExportPlan cItem, dResult
+    Set ExportPolicyComponent = dResult
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PrepareSingleObjectPlan
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Preflight the requested object and configured table dependencies before any resolution.
+'---------------------------------------------------------------------------------------
+'
+Public Function PrepareSingleObjectPlan(ByVal cPrimary As IDbComponent, ByVal intDirection As eIndexOperationType, _
+    ByVal strSourceFile As String, ByVal blnDestinationExists As Boolean, ByRef dResult As Dictionary) As Boolean
+    Dim dMember As Dictionary
+    Dim cData As clsDbTableData
+    Dim cMacro As IDbComponent
+    Dim cExisting As IDbComponent
+    Dim dMacros As Dictionary
+    Dim varKey As Variant
+    Dim strName As String
+    Dim strDependent As String
+    Dim blnExists As Boolean
+    Dim intFormat As eTableDataExportFormat
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    VCSIndex.BeginSingleObjectPlan intDirection
+    If Not VCSIndex.SingleObjectTransferAllowed(cPrimary, intDirection, strSourceFile, dMember, blnDestinationExists) Then
+        Set dResult = dMember
+        Exit Function
+    End If
+    If cPrimary.ComponentType = edbTableDef Then
+        strName = cPrimary.Name
+        If Len(strName) = 0 Then strName = GetObjectNameFromFileName(strSourceFile)
+        If Options.TablesToExportData.Exists(strName) Then
+            intFormat = Options.GetTableExportFormat(dNZ(Options.TablesToExportData, strName & "\Format"))
+            If intFormat > etdNoData Then
+                Set cData = New clsDbTableData
+                cData.Format = intFormat
+                If Not cPrimary.DbObject Is Nothing Then Set cData.Parent.DbObject = cPrimary.DbObject
+                strDependent = Options.GetExportFolder & "tables" & PathSep & GetSafeFileName(strName) _
+                    & IIf(intFormat = etdXML, ".xml", ".txt")
+                If intDirection <> eatImport Or FSO.FileExists(strDependent) Then
+                    If Not VCSIndex.SingleObjectTransferAllowed(cData.Parent, intDirection, strDependent, dMember, blnDestinationExists) Then
+                        Set dResult = dMember
+                        Exit Function
+                    End If
+                End If
+            End If
+        End If
+        Set cMacro = New clsDbTableDataMacro
+        strDependent = cMacro.BaseFolder & GetSafeFileName(strName) & ".xml"
+        blnExists = False
+        Set dMacros = cMacro.GetAllFromDB(False)
+        For Each varKey In dMacros.Keys
+            Set cExisting = dMacros(varKey)
+            If StrComp(cExisting.Name, strName, vbTextCompare) = 0 Then
+                Set cMacro = cExisting
+                blnExists = True
+                Exit For
+            End If
+        Next varKey
+        If (intDirection = eatImport And FSO.FileExists(strDependent)) Or (intDirection <> eatImport And blnExists) Then
+            If Not VCSIndex.SingleObjectTransferAllowed(cMacro, intDirection, strDependent, dMember, blnExists) Then
+                Set dResult = dMember
+                Exit Function
+            End If
+        End If
+    End If
+    Set dResult = NewSingleObjectOutcome()
+    PrepareSingleObjectPlan = VCSIndex.ResolveSingleObjectPlan()
+    CatchAny eelCritical, T("Unable to prepare the complete requested transfer safely."), "modExport.PrepareSingleObjectPlan", True, True
+    If Operation.ErrorLevel >= eelCritical Then PrepareSingleObjectPlan = False
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : NewSingleObjectOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Create explicit zero transfer and preservation counts for a requested group.
+'---------------------------------------------------------------------------------------
+'
+Public Function NewSingleObjectOutcome() As Dictionary
+    Dim dResult As New Dictionary
+    dResult.Add "transferred", False
+    dResult.Add "skipped", False
+    dResult.Add "transferred_count", 0&
+    dResult.Add "skipped_count", 0&
+    Set NewSingleObjectOutcome = dResult
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : AddSingleObjectOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Aggregate completed and preserved members without inferring transfer from success.
+'---------------------------------------------------------------------------------------
+'
+Public Sub AddSingleObjectOutcome(ByVal dTotal As Dictionary, ByVal dMember As Dictionary)
+    Dim varKey As Variant
+    dTotal("transferred_count") = CLng(dTotal("transferred_count")) + CLng(dMember("transferred_count"))
+    dTotal("skipped_count") = CLng(dTotal("skipped_count")) + CLng(dMember("skipped_count"))
+    dTotal("transferred") = (dTotal("transferred_count") > 0)
+    dTotal("skipped") = (dTotal("skipped_count") > 0)
+    For Each varKey In Array("error", "error_pattern", "unsupported_component")
+        If dMember.Exists(varKey) Then dTotal(varKey) = dMember(varKey)
+    Next varKey
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ExecuteSingleObjectExportPlan
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Promote only admitted comparison outputs and record their actual completed transfers.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ExecuteSingleObjectExportPlan(ByVal cPrimary As IDbComponent, ByRef dResult As Dictionary)
+    Dim dPlan As Dictionary
+    Dim dMember As Dictionary
+    Dim cItem As IDbComponent
+    Dim strTemp As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    If Not PrepareSingleObjectPlan(cPrimary, eatExport, cPrimary.SourceFile, True, dResult) Then Exit Sub
+    For Each dPlan In VCSIndex.SingleObjectPlanItems
+        Set cItem = dPlan("Component")
+        Set dMember = dPlan("Result")
+        If dPlan("Allowed") Then
+            strTemp = VCSIndex.SingleObjectTempFile(cItem, dPlan("SourceFile"))
+            cItem.MoveSource FSO.GetParentFolderName(strTemp) & PathSep, _
+                FSO.GetParentFolderName(dPlan("SourceFile")) & PathSep
+            If Operation.ErrorLevel < eelCritical Then
+                VCSIndex.UpdateFromAltExport cItem
+                dMember("transferred") = True
+                dMember("transferred_count") = 1&
+            End If
+        End If
+        AddSingleObjectOutcome dResult, dMember
+        If Operation.ErrorLevel >= eelCritical Then Exit For
+    Next dPlan
+    CatchAny eelCritical, T("Unable to export the requested component safely."), "modExport.ExecuteSingleObjectExportPlan", True, True
+End Sub

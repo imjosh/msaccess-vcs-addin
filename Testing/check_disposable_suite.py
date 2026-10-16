@@ -28,6 +28,7 @@ OUT=None
 INSTALLED=Path.home()/'AppData/Roaming/MSAccessVCS/Version Control.accda'
 # Full-suite quits can take well over five seconds to finish releasing the process.
 EXIT_WAIT_MS=60000
+INVENTORY_SETTLE_MS=30000
 FIXTURES=['vcs_test_import_alpha','vcs_test_import_beta',
           'vcs_test_import_fast_alpha','vcs_test_import_fast_beta']
 
@@ -164,9 +165,30 @@ def run(label,binary,pin,filters,fault=None,sync=False):
             # No handle was opened: the exclusive-use precondition makes an empty process list the evidence.
             exited=wait_for_no_access(wait_ms)
             info['process_list_exit']=exited
-        pids=list_access_pids_or_none()
+        # A confirmed original-process exit can precede the disappearance of
+        # transient Access helpers from the process inventory. Observe a bounded
+        # settlement window; never terminate extra processes or accept an unknown
+        # inventory. Both original handles and retained-fixture checks stay required.
+        samples=[]
+        settle_start=time.monotonic()
+        settle_deadline=settle_start+(INVENTORY_SETTLE_MS/1000 if exited else 0)
+        empty_samples=0
+        inventory_unknown=False
+        while True:
+            pids=list_access_pids_or_none()
+            samples.append({'elapsed_ms':round((time.monotonic()-settle_start)*1000),
+                            'pids':sorted(pids) if pids is not None else None})
+            if pids is None:
+                inventory_unknown=True
+                break
+            empty_samples=empty_samples+1 if pids==set() else 0
+            if empty_samples>=2 or time.monotonic()>=settle_deadline:
+                break
+            time.sleep(0.25)
+        info['inventory_settle_ms']=INVENTORY_SETTLE_MS if exited else 0
+        info['inventory_samples']=samples
         info['pids_after_exit']=sorted(pids) if pids is not None else None
-        info['closure_confirmed']=bool(exited and pids==set())
+        info['closure_confirmed']=bool(exited and not inventory_unknown and empty_samples>=2)
         current_phase=None
     def close_owned(phase):
         shutdown_owned(phase)

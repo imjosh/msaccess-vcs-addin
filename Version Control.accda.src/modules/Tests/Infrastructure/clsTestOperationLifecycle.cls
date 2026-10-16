@@ -13,8 +13,8 @@ Attribute VB_Exposed = False
 ' Date      : 09/29/2026
 ' Purpose   : Wiring tests for policy requests against a running operation: a policy request
 '           : made while an operation runs is refused without changing that operation's
-'           : interaction state. A session policy is caller-owned: it outlives the
-'           : operations that run under it and closes only when the caller clears it.
+'           : interaction state. Explicit policies belong to individual requests and
+'           : completion releases them without requiring a client cleanup call.
 '           : Every test that needs a running operation uses a private
 '           : instance, so no result depends on where the host run started. The session
 '           : operation is only read, by the clearing test and the invalid test-run
@@ -75,7 +75,7 @@ Public Sub TestBeginWithPolicyRefusedWhileRunning()
     ' the registry when it is created after the root begins.
     Set cOp = New clsOperation
     cOp.ForceUnattended = True
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     TestAssert Not cRoot Is Nothing, "the first root is granted"
     intMode = cOp.InteractionMode
     intPolicyBefore = cOp.DecisionPolicy
@@ -126,7 +126,7 @@ Public Sub TestRefusedNestedBeginPreservesSynchronousRoot()
     TestAssert cOp.LastCompletion Is Nothing, "the refusal emits no terminal callback"
 
     ' A second refusal is as harmless as the first.
-    TestAssert Not cOp.Begin(eotOther), "an unscoped nested Begin is refused"
+    TestAssert Not cOp.Begin(eotOther, edpBlock), "an unscoped nested Begin is refused"
     TestAssert cOp.Status = eosRunning, "the root is still running"
     TestAssert cOp.LastCompletion Is Nothing, "still no terminal callback"
 
@@ -136,7 +136,7 @@ Public Sub TestRefusedNestedBeginPreservesSynchronousRoot()
     TestAssert cOp.Status = eosReady, "the operation is ready again"
     TestAssert cOp.Result = eorSuccess, "the root keeps the owner's result"
     TestAssert cOp.InteractionMode = intModeBefore, "the interaction scope is restored"
-    TestAssert cOp.Begin(eotOther), "a later Begin succeeds"
+    TestAssert cOp.Begin(eotOther, edpBlock), "a later Begin succeeds"
     cOp.Finish eorSuccess
     TestAssert Not cOp.LastCompletion Is dDone, "the later root completes on its own"
 
@@ -156,7 +156,7 @@ Public Sub TestPolicyRequestRefusedWhileRunning()
     ' where the host run started.
     Set cOp = New clsOperation
     cOp.ForceUnattended = True
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     TestAssert Not cRoot Is Nothing, "the root is granted"
     intModeBefore = cOp.InteractionMode
     intPolicyBefore = cOp.DecisionPolicy
@@ -193,22 +193,19 @@ Public Sub TestClearOperationPolicyIsHarmlessWhileRunning()
 End Sub
 
 
-Public Sub TestSessionPolicyStaysInForceAfterFinish()
-
-    Dim cOp As clsOperation
+Public Sub TestRequestPolicyEndsAtFinish()
+Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
-
     Set cOp = NewUnattendedOperation
-    TestAssert InStr(SetSessionPolicy(cOp, "decline"), """success"":true") > 0, "the policy is set"
-    Set cRoot = cOp.TryBeginRoot(eotOther)
-    TestAssert cOp.DecisionPolicy = edpDecline, "the operation runs under the session policy"
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpDecline)
+    TestAssert cOp.DecisionPolicy = edpDecline, "this request owns its policy"
     cRoot.Complete eorSuccess
-    TestAssert cOp.Status = eosReady, "the operation finished"
-    TestAssert cOp.InteractionMode = eimNonInteractive, "Finish leaves the session policy noninteractive"
-    TestAssert cOp.DecisionPolicy = edpDecline, "Finish leaves the session policy in force"
-    TestAssert Not cOp.ResolvePrompt(vbYesNo, "Confirm", "Proceed?").Blocked, "the policy still answers prompts"
-    ClearSessionPolicy cOp
-
+    TestAssert cOp.Status = eosReady, "the request completed"
+    TestAssert cOp.InteractionMode = eimNormal, "completion releases noninteractive mode"
+    TestAssert cOp.DecisionPolicy = edpAsk, "completion releases the request policy"
+    Set cRoot = cOp.TryBeginRoot(eotOther)
+    TestAssert cOp.DecisionPolicy = edpAsk, "a later request has no remembered policy"
+    cRoot.Complete eorSuccess
 End Sub
 
 
@@ -223,7 +220,6 @@ Public Sub TestClearSessionPolicyClosesItAndASecondClearIsANoOp()
     Set cOp = NewUnattendedOperation
     intMode = cOp.InteractionMode
     intPolicy = cOp.DecisionPolicy
-    SetSessionPolicy cOp, "block"
     TestAssert InStr(ClearSessionPolicy(cOp), """success"":true") > 0, "clearing succeeds"
     TestAssert (cOp.InteractionMode = intMode) And (cOp.DecisionPolicy = intPolicy), _
         "clearing restores the mode and policy from before the set"
@@ -237,37 +233,25 @@ Public Sub TestClearSessionPolicyClosesItAndASecondClearIsANoOp()
 End Sub
 
 
-Public Sub TestSetSessionPolicyReplacesRatherThanNests()
-
-    Dim cOp As clsOperation
-    Dim intPolicy As eDecisionPolicy
-
+Public Sub TestPersistentPolicyActivationIsRetired()
+Dim cOp As clsOperation
     Set cOp = NewUnattendedOperation
-    intPolicy = cOp.DecisionPolicy
-    SetSessionPolicy cOp, "block"
-    SetSessionPolicy cOp, "decline"
-    TestAssert cOp.DecisionPolicy = edpDecline, "the second policy is in force"
-    ClearSessionPolicy cOp
-    TestAssert cOp.DecisionPolicy = intPolicy, "one clear removes it, with nothing left underneath"
-
+    TestAssert InStr(SetSessionPolicy(cOp, "block"), "policy_activation_retired") > 0, "activation is explicitly retired"
+    TestAssert InStr(SetSessionPolicy(cOp, "decline"), "policy_activation_retired") > 0, "a second activation is also refused"
+    TestAssert cOp.InteractionMode = eimNormal, "retired activation changes no mode"
+    TestAssert cOp.DecisionPolicy = edpAsk, "retired activation remembers no policy"
 End Sub
 
 
-Public Sub TestInvalidSessionPolicyLeavesThePolicyInForce()
-
-    Dim cOp As clsOperation
-    Dim intPolicy As eDecisionPolicy
-
+Public Sub TestRetiredActivationPreservesActivePolicy()
+Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
     Set cOp = NewUnattendedOperation
-    intPolicy = cOp.DecisionPolicy
-    SetSessionPolicy cOp, "block"
-    TestAssert InStr(SetSessionPolicy(cOp, "no-such-policy"), ERR_INVALID_DECISION_POLICY) > 0, _
-        "an unknown name is refused"
-    TestAssert cOp.DecisionPolicy = edpBlock, "the refusal leaves the earlier policy in force"
-    TestAssert cOp.InteractionMode = eimNonInteractive, "the refusal leaves the operation noninteractive"
-    ClearSessionPolicy cOp
-    TestAssert cOp.DecisionPolicy = intPolicy, "one clear still removes it"
-
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
+    TestAssert InStr(SetSessionPolicy(cOp, "no-such-policy"), "policy_activation_retired") > 0, "all persistent activation is retired"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the active request keeps its policy"
+    TestAssert cOp.Decisions.Count = 0, "a refusal does not append to its journal"
+    cRoot.Complete eorSuccess
 End Sub
 
 
@@ -296,7 +280,7 @@ Public Sub TestInvalidTestRunPolicyRefusedBeforeLoadingOptions()
 End Sub
 
 
-Public Sub TestEachOperationUnderASessionPolicyStartsUnblocked()
+Public Sub TestEachExplicitRequestStartsUnblocked()
 
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
@@ -304,13 +288,12 @@ Public Sub TestEachOperationUnderASessionPolicyStartsUnblocked()
     ' A prompt one operation left unanswered belongs to that operation's result, not
     ' to every later operation that runs under the same session policy.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     cOp.ResolvePrompt vbYesNo, "Confirm", "Proceed?"
     cRoot.Complete eorSuccess
     TestAssert cOp.Result = eorDecisionRequired, "the first operation stopped for a decision"
 
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     TestAssert Not cOp.DecisionBlocked, "the next operation starts unblocked"
     TestAssert cOp.Decisions.Count = 0, "the next operation starts with no decisions"
     TestAssert cOp.DecisionPolicy = edpBlock, "the next operation runs under the session policy"
@@ -321,26 +304,18 @@ Public Sub TestEachOperationUnderASessionPolicyStartsUnblocked()
 End Sub
 
 
-Public Sub TestOperationPolicyInsideSessionPolicyEndsAtFinish()
-
-    Dim cOp As clsOperation
+Public Sub TestRequestPolicyHasNoSessionFallback()
+Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
-
-    ' MergeBuild and RunFilteredTests pass their own policy to the root. It applies for
-    ' that operation only, and the session policy is back in force afterwards.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "decline"
     Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
-    TestAssert cOp.DecisionPolicy = edpBlock, "the operation's own policy applies while it runs"
+    TestAssert cOp.DecisionPolicy = edpBlock, "the request policy applies"
     cRoot.Complete eorSuccess
-    TestAssert (cOp.InteractionMode = eimNonInteractive) And (cOp.DecisionPolicy = edpDecline), _
-        "the session policy is back after Finish"
-    ClearSessionPolicy cOp
-
+    TestAssert cOp.InteractionMode = eimNormal And cOp.DecisionPolicy = edpAsk, "completion releases owned policy state"
 End Sub
 
 
-Public Sub TestRefusedSingleObjectImportFailsUnderSessionPolicy()
+Public Sub TestRefusedSingleObjectImportFailsUnderRequestPolicy()
 
     Dim cOp As clsOperation
     Dim colErrors As Collection
@@ -351,8 +326,7 @@ Public Sub TestRefusedSingleObjectImportFailsUnderSessionPolicy()
     ' refuses with Log.Error. The policy acknowledges the error's message box, and the
     ' result still has to report the failure after Finish restores the error level.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins under the session policy"
     TestAssert Not cOp.ResolvePrompt(vbExclamation, "Error", "Merging not supported").Blocked, _
         "the logged error's message box is acknowledged without a dialog"
     cOp.ErrorLevel = eelError
@@ -381,18 +355,17 @@ Public Sub TestSingleObjectErrorFinishesItsOperation()
     ' could not begin while the root stays open, and the session policy set around this
     ' one must be back in force, not the operation's scope.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotMerge), "the import begins"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins"
 
     strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set")
     TestAssert cOp.Status = eosReady, "the raised error finishes the operation"
     TestAssert cOp.Result = eorFailed, "the operation finishes as failed"
-    TestAssert cOp.DecisionPolicy = edpBlock, "the session policy is back in force"
+    TestAssert cOp.DecisionPolicy = edpAsk, "the completed request releases its policy"
     TestAssert InStr(strJson, """success"":false") > 0, "the result is not a success"
     TestAssert InStr(strJson, "Object variable not set") > 0, "the result carries the error"
     TestAssert InStr(strJson, """errorNumber"":91") > 0, "the result carries the error number"
     TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
-    TestAssert cOp.Begin(eotMerge), "the next call can begin"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the next call can begin"
     cOp.Finish eorSuccess
     ClearSessionPolicy cOp
 
@@ -407,8 +380,7 @@ Public Sub TestBlockedPromptInSingleObjectImportIsDecisionRequired()
     ' ImportObject as the MCP calls it, with a confirmation the block policy does not
     ' answer. The caller has to see the decision, not a plain success.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins under the session policy"
     TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Overwrite?").Blocked, "the policy blocks the prompt"
 
     strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", New Collection)
@@ -429,8 +401,7 @@ Public Sub TestBlockedPromptInSingleObjectExportIsDecisionRequired()
     Dim strJson As String
 
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotExport), "the export begins under the session policy"
+    TestAssert cOp.Begin(eotExport, edpBlock), "the export begins under the session policy"
     TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Overwrite?").Blocked, "the policy blocks the prompt"
 
     strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary)
@@ -450,8 +421,7 @@ Public Sub TestSingleObjectExportWithoutPromptSucceeds()
     Dim strJson As String
 
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotExport), "the export begins under the session policy"
+    TestAssert cOp.Begin(eotExport, edpBlock), "the export begins under the session policy"
 
     strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary)
     TestAssert InStr(strJson, """success"":true") > 0, "an export with no prompt succeeds"
@@ -469,8 +439,7 @@ Public Sub TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired()
 
     ' A raised error after a blocked prompt: the decision is primary, the error rides along.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotMerge), "the import begins"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins"
     cOp.ResolvePrompt vbYesNo, "Confirm", "Overwrite?"
 
     strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set")
@@ -506,8 +475,9 @@ Private Function BeginWithAnsweredPrompt(ByVal strScenario As String, _
         Case Else:           strPolicy = "decline"
     End Select
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, strPolicy
-    TestAssert cOp.Begin(intType), strScenario & ": the operation begins under " & strPolicy
+    Dim intPolicy As eDecisionPolicy
+    ParseDecisionPolicy strPolicy, intPolicy
+    TestAssert cOp.Begin(intType, intPolicy), strScenario & ": the operation begins under " & strPolicy
 
     Select Case strScenario
         Case "acknowledged"
@@ -664,8 +634,7 @@ Public Sub TestScopedDecisionRequiredKeepsLogPath()
     Dim dResult As Dictionary
 
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins under the session policy"
     cOp.ResolvePrompt vbOKOnly, "Notice", "Finished."
     TestAssert cOp.ResolvePrompt(vbYesNo, "Confirm", "Overwrite?").Blocked, "the policy blocks the prompt"
 
@@ -733,26 +702,25 @@ Public Sub TestEmptyJournalLeavesResultShapeUnchanged()
     Dim strRun As String
 
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotMerge), "the import begins under the session policy"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins under the session policy"
     TestAssert InStr(FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", New Collection), "decisions") = 0, _
         "an import that met no prompt has no decisions key"
 
-    TestAssert cOp.Begin(eotExport), "the export begins under the session policy"
+    TestAssert cOp.Begin(eotExport, edpBlock), "the export begins under the session policy"
     TestAssert InStr(FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", New Dictionary), "decisions") = 0, _
         "an export that met no prompt has no decisions key"
 
-    TestAssert cOp.Begin(eotExport), "the scoped export begins under the session policy"
+    TestAssert cOp.Begin(eotExport, edpBlock), "the scoped export begins under the session policy"
     Set dResult = New Dictionary
     dResult.Add "success", True
     TestAssert InStr(FinishScopedOperation(cOp, dResult, eorSuccess, "C:\src\logs\Export_1.log"), "decisions") = 0, _
         "a scoped sync that met no prompt has no decisions key"
 
-    TestAssert cOp.Begin(eotMerge), "the failing import begins under the session policy"
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the failing import begins under the session policy"
     TestAssert InStr(FailSingleObjectOperation(cOp, "C:\src\logs\Merge_1.log", 91, "Object variable not set"), "decisions") = 0, _
         "a runtime error that met no prompt has no decisions key"
 
-    TestAssert cOp.Begin(eotTestRun), "the test run begins under the session policy"
+    TestAssert cOp.Begin(eotTestRun, edpBlock), "the test run begins under the session policy"
     strRun = "{""success"":true,""allPassed"":true}"
     TestAssert OverlayDecisionJournal(strRun, cOp.Decisions) = strRun, "an empty journal leaves the test JSON as it was"
     TestAssert OverlayDecisionJournal(strRun, Nothing) = strRun, "no journal leaves the test JSON as it was"
@@ -770,7 +738,7 @@ Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
 
     ' An error before the call's own Begin: the running root belongs to someone else.
     Set cOp = NewUnattendedOperation
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     strJson = FailSingleObjectOperation(Nothing, vbNullString, 5, "Invalid procedure call")
     TestAssert cOp.Status = eosRunning, "the other root is still running"
     TestAssert InStr(strJson, """success"":false") > 0, "the result is not a success"
@@ -789,15 +757,14 @@ Public Sub TestApiErrorAfterOwnFinishDoesNotFinishAgain()
     ' An error raised in ImportByType or ExportByType after FinishScopedSync already
     ' finished the call's own root. The root completes once, with its own result.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    TestAssert cOp.Begin(eotExport), "the export begins"
+    TestAssert cOp.Begin(eotExport, edpBlock), "the export begins"
     cOp.Finish eorSuccess
     Set dDone = cOp.LastCompletion
 
     strJson = FailSingleObjectOperation(cOp, "C:\src\logs\Export_1.log", 6, "Overflow")
     TestAssert cOp.LastCompletion Is dDone, "no second completion is emitted"
     TestAssert cOp.Result = eorSuccess, "the finished root keeps its result"
-    TestAssert cOp.DecisionPolicy = edpBlock, "the session policy is still in force"
+    TestAssert cOp.DecisionPolicy = edpAsk, "the completed request leaves no policy"
     TestAssert InStr(strJson, """success"":false") > 0, "the result is not a success"
     TestAssert InStr(strJson, """error"":""Overflow""") > 0, "the result carries the error"
     TestAssert InStr(strJson, """errorNumber"":6") > 0, "the result carries the error number"
@@ -806,57 +773,28 @@ Public Sub TestApiErrorAfterOwnFinishDoesNotFinishAgain()
 End Sub
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-Public Sub TestSessionPolicySetAndClearedInSeparateCalls()
-
-    Dim cOp As clsOperation
-    Dim intMode As eInteractionMode
-    Dim intPolicy As eDecisionPolicy
-
-    ' The MCP sets and clears the policy in two API calls, each on a new
-    ' clsVersionControl, so nothing but the operation lives from one to the next.
+Public Sub TestRetiredSetterAndHarmlessCleanup()
+Dim cOp As clsOperation
     Set cOp = NewUnattendedOperation
-    intMode = cOp.InteractionMode
-    intPolicy = cOp.DecisionPolicy
-    SetPolicyInOneCall cOp, "block"
-    SetPolicyInOneCall cOp, "decline"
-    TestAssert cOp.DecisionPolicy = edpDecline, "the second call's policy is in force"
-    ClearPolicyInOneCall cOp
-    TestAssert (cOp.InteractionMode = intMode) And (cOp.DecisionPolicy = intPolicy), _
-        "a clear in a later call restores the mode and policy from before the first set"
-
+    TestAssert InStr(SetSessionPolicy(cOp, "block"), "policy_activation_retired") > 0, "setter calls must migrate"
+    TestAssert InStr(ClearSessionPolicy(cOp), "true") > 0, "legacy cleanup succeeds harmlessly"
+    TestAssert cOp.DecisionPolicy = edpAsk, "neither call leaves a policy"
 End Sub
 
 
-Public Sub TestSessionPolicyBelongsToItsOperation()
-
-    Dim cFirst As clsOperation
+Public Sub TestRequestPoliciesBelongToTheirOperations()
+Dim cFirst As clsOperation
     Dim cSecond As clsOperation
-    Dim intMode As eInteractionMode
-
-    ' Scope tokens are numbered per operation, so each operation must hold its own.
+    Dim cFirstRoot As clsRootOperationLease
+    Dim cSecondRoot As clsRootOperationLease
     Set cFirst = NewUnattendedOperation
     Set cSecond = NewUnattendedOperation
-    intMode = cFirst.InteractionMode
-    SetSessionPolicy cFirst, "block"
-    SetSessionPolicy cSecond, "decline"
-    ClearSessionPolicy cFirst
-    TestAssert cFirst.InteractionMode = intMode, "clearing one operation's policy closes it"
-    TestAssert (cSecond.InteractionMode = eimNonInteractive) And (cSecond.DecisionPolicy = edpDecline), _
-        "the other operation's policy stays in force"
-    ClearSessionPolicy cSecond
-
+    Set cFirstRoot = cFirst.TryBeginRoot(eotOther, edpBlock)
+    Set cSecondRoot = cSecond.TryBeginRoot(eotOther, edpDecline)
+    cFirstRoot.Complete eorSuccess
+    TestAssert cSecond.DecisionPolicy = edpDecline, "another owner retains its policy"
+    TestAssert cFirst.PublicId <> cSecond.PublicId, "public IDs are unique across roots"
+    cSecondRoot.Complete eorSuccess
 End Sub
 
 
@@ -868,7 +806,7 @@ Public Sub TestRuntimeErrorRidesOnTerminalCallback()
 
     ' An async caller reads only the callback, so the error text has to be on it.
     Set cOp = NewUnattendedOperation
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     cRoot.RecordRuntimeError "Division by zero", 11
     cRoot.Complete eorFailed
 
@@ -890,8 +828,7 @@ Public Sub TestRuntimeErrorAfterBlockedPromptRidesOnDecisionCallback()
 
     ' The decision is primary; the runtime error rides along, as in the sync result.
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     cOp.ResolvePrompt vbYesNo, "Confirm", "Overwrite?"
     cRoot.RecordRuntimeError "Object variable not set", 91
     cRoot.Complete eorFailed
@@ -915,11 +852,11 @@ Public Sub TestRuntimeErrorBelongsToItsRoot()
 
     ' Neither the next root nor a lease that no longer holds the root can carry it over.
     Set cOp = NewUnattendedOperation
-    Set cFirst = cOp.TryBeginRoot(eotOther)
+    Set cFirst = cOp.TryBeginRoot(eotOther, edpBlock)
     cFirst.RecordRuntimeError "Division by zero", 11
     cFirst.Complete eorFailed
 
-    Set cSecond = cOp.TryBeginRoot(eotOther)
+    Set cSecond = cOp.TryBeginRoot(eotOther, edpBlock)
     cFirst.RecordRuntimeError "Stale lease", 5
     cSecond.Complete eorSuccess
     TestAssert cOp.LastCompletion("type") = "complete", "the next root succeeds"
@@ -930,35 +867,19 @@ End Sub
 
 
 Public Sub TestInteractionModeSelectionReportsEffectiveMode()
-
-    Dim lngErr As Long
-    Dim strErr As String
-    Dim cOp As clsOperation
+Dim cOp As clsOperation
     Dim dResult As Dictionary
     Dim intMode As Long
-
-    On Error GoTo ErrHandler
     Set cOp = NewUnattendedOperation
-    For intMode = eimNonInteractive To eimNormal Step -1
+    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNonInteractive))
+    TestAssert Not dResult("success"), "standalone mode 2 is retired"
+    TestAssert dResult("requested_mode") = 2 And dResult("effective_mode") = 0, "the response preserves requested and effective modes"
+    TestAssert dResult("error_pattern") = ERR_INTERACTION_MODE_REFUSED, "mode retirement is explicit"
+    For intMode = eimSilent To eimNormal Step -1
         Set dResult = ParseJson(SelectInteractionMode(cOp, intMode))
-        TestAssert dResult("success") = True, "unscoped mode selection succeeds"
-        TestAssert dResult("requested_mode") = intMode, "requested mode is reported"
-        TestAssert dResult("effective_mode") = intMode, "effective mode matches the request"
-        TestAssert cOp.InteractionMode = intMode, "the mode actually took effect"
-        TestAssert Not dResult.Exists("error_pattern"), "acceptance has no refusal pattern"
-        TestAssert Not dResult.Exists("started"), "selecting a mode starts no operation"
+        TestAssert dResult("success"), "legacy idle mode remains available"
+        TestAssert dResult("effective_mode") = intMode, "effective mode is truthful"
     Next intMode
-
-CleanUp:
-    On Error Resume Next
-    If lngErr <> 0 Then TestAssert False, "TestInteractionModeSelectionReportsEffectiveMode " & lngErr & ": " & strErr
-    Exit Sub
-
-ErrHandler:
-    lngErr = Err.Number
-    strErr = Err.Description
-    Resume CleanUp
-
 End Sub
 
 
@@ -1006,76 +927,33 @@ End Sub
 
 
 Public Sub TestInteractiveSelectionAfterFailedPolicyCleanup()
-
-    Dim lngErr As Long
-    Dim strErr As String
-    Dim cOp As clsOperation
+Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim dResult As Dictionary
-
-    On Error GoTo ErrHandler
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "block"
-    Set cRoot = cOp.TryBeginRoot(eotOther)
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpBlock)
     cRoot.RecordRuntimeError "Failed operation", 5
     cRoot.Complete eorFailed
-    ' Simulate a caller whose cleanup never reached ClearOperationPolicy.
-    ' Finishing the failed root releases only operation-owned scopes.
     Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
-    TestAssert cOp.Status = eosReady, "the failed operation has finished"
-    TestAssert dResult("success") = False, "leftover session policy refuses interactive mode"
-    TestAssert dResult("error_pattern") = "interaction_mode_refused", "cleanup failure is observable"
-    TestAssert dResult("effective_mode") = 2, "leftover noninteractive mode is reported"
-    TestAssert cOp.DecisionPolicy = edpBlock, "the caller's policy remains intact"
-    TestAssert cOp.Result = eorFailed, "selecting a mode preserves the failed outcome"
-    ClearPolicyInOneCall cOp
-    Set dResult = ParseJson(SelectInteractionMode(cOp, eimNormal))
-    TestAssert dResult("success") = True, "a later owner cleanup allows selection"
-    TestAssert dResult("effective_mode") = 0, "interactive mode is effective after cleanup"
-
-CleanUp:
-    On Error Resume Next
-    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
-    If lngErr <> 0 Then TestAssert False, "TestInteractiveSelectionAfterFailedPolicyCleanup " & lngErr & ": " & strErr
-    Exit Sub
-
-ErrHandler:
-    lngErr = Err.Number
-    strErr = Err.Description
-    Resume CleanUp
-
+    TestAssert dResult("success"), "failure requires no client cleanup call"
+    TestAssert cOp.DecisionPolicy = edpAsk, "failure releases the request policy"
+    TestAssert cOp.Result = eorFailed, "mode selection preserves the failed result"
 End Sub
 
 
 Public Sub TestSilentSelectionInsidePolicyScopeIsRefused()
-
-    Dim lngErr As Long
-    Dim strErr As String
-    Dim cOp As clsOperation
+Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
     Dim dResult As Dictionary
-
-    On Error GoTo ErrHandler
     Set cOp = NewUnattendedOperation
-    SetSessionPolicy cOp, "decline"
+    Set cRoot = cOp.TryBeginRoot(eotOther, edpDecline)
     Set dResult = ParseJson(SelectInteractionMode(cOp, eimSilent))
-    TestAssert dResult("success") = False, "silent mode cannot weaken a noninteractive scope"
-    TestAssert dResult("requested_mode") = 1, "silent request is reported"
-    TestAssert dResult("effective_mode") = 2, "effective mode remains noninteractive"
+    TestAssert Not dResult("success"), "another request cannot change the owner mode"
+    TestAssert dResult("effective_mode") = 2, "the request remains noninteractive"
     Set dResult = ParseJson(SelectInteractionMode(cOp, eimNonInteractive))
-    TestAssert dResult("success") = True, "an already effective mode is accepted"
-    TestAssert cOp.DecisionPolicy = edpDecline, "selecting the same mode preserves policy"
-    ClearPolicyInOneCall cOp
-
-CleanUp:
-    On Error Resume Next
-    If lngErr <> 0 Then TestAssert False, "TestSilentSelectionInsidePolicyScopeIsRefused " & lngErr & ": " & strErr
-    Exit Sub
-
-ErrHandler:
-    lngErr = Err.Number
-    strErr = Err.Description
-    Resume CleanUp
-
+    TestAssert Not dResult("success"), "mode-only activation is retired even when a root is noninteractive"
+    TestAssert cOp.DecisionPolicy = edpDecline, "the owner retains its policy"
+    cRoot.Complete eorSuccess
 End Sub
 
 
@@ -1149,10 +1027,6 @@ End Sub
 
 ' One SetOperationPolicy or ClearOperationPolicy request: no state survives the call
 ' except what the operation itself keeps.
-Private Sub SetPolicyInOneCall(ByVal cOp As clsOperation, ByVal strPolicy As String)
-    TestAssert InStr(SetSessionPolicy(cOp, strPolicy), """success"":true") > 0, "the " & strPolicy & " policy is set"
-End Sub
-
 Private Sub ClearPolicyInOneCall(ByVal cOp As clsOperation)
     TestAssert InStr(ClearSessionPolicy(cOp), """success"":true") > 0, "clearing succeeds"
 End Sub

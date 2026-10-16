@@ -253,9 +253,13 @@ def live(label):
         app.Run(driver + '.Preload')
         print('preloaded', flush=True)
         run('RegisterSession', 'policy-' + uuid.uuid4().hex)
-        run('SetOperationPolicy', 'block')
+        mode_result = run('SetInteractionMode', 1)
+        if not mode_result.get('success'):
+            raise RuntimeError(mode_result)
         run('InstallTestAssertModule')
-        run('ClearOperationPolicy')
+        mode_result = run('SetInteractionMode', 0)
+        if not mode_result.get('success'):
+            raise RuntimeError(mode_result)
         # Select by observed filename: never mutate the installed driver's project.
         project = next(p for p in app.VBE.VBProjects if Path(p.FileName) == fixture)
         helper = project.VBComponents('modTestAssert').CodeModule
@@ -288,25 +292,49 @@ def live(label):
             ('combined_save_failure', 'async', True, True, True),
             ('combined_sync_save_failure', 'sync', True, True, True),
             ('final_clean', 'async', False, False, False)):
-            assert not case(name, transport, blocked, failed, save_failed), name
-        assert not case('payload_failure', 'async', True, True, completion_fault=5)
-        assert not case('after_payload_failure', 'async', False, False)
-        assert not case('payload_failure_sync', 'sync', True, True, completion_fault=5)
-        assert not case('after_payload_failure_sync', 'sync', False, False)
-        assert not case('delivery_failure', 'async', True, True, delivery_failure=True)
-        assert not case('after_delivery_failure', 'async', False, False)
-        assert run('SetOperationPolicy', 'block')['success']
-        assert not case('caller_session_combined', 'async', True, True, mode=2)
-        assert not case('caller_session_subsequent', 'async', False, False, mode=2)
-        assert run('ClearOperationPolicy')['success']
-        assert not case('after_session_clear', 'async', False, False)
+            failures = case(name, transport, blocked, failed, save_failed)
+            if failures:
+                raise AssertionError(failures)
+        failures = case('payload_failure', 'async', True, True, completion_fault=5)
+        if failures:
+            raise AssertionError(failures)
+        failures = case('after_payload_failure', 'async', False, False)
+        if failures:
+            raise AssertionError(failures)
+        failures = case('payload_failure_sync', 'sync', True, True, completion_fault=5)
+        if failures:
+            raise AssertionError(failures)
+        failures = case('after_payload_failure_sync', 'sync', False, False)
+        if failures:
+            raise AssertionError(failures)
+        failures = case('delivery_failure', 'async', True, True, delivery_failure=True)
+        if failures:
+            raise AssertionError(failures)
+        failures = case('after_delivery_failure', 'async', False, False)
+        if failures:
+            raise AssertionError(failures)
+        retired_policy = run('SetOperationPolicy', 'block')
+        retired_mode = run('SetInteractionMode', 2)
+        harmless_clear = run('ClearOperationPolicy')
+        result['retired_calls'] = {'policy': retired_policy, 'mode': retired_mode, 'clear': harmless_clear}
+        if retired_policy.get('error_pattern') != 'policy_activation_retired':
+            raise AssertionError(retired_policy)
+        if retired_mode.get('success') or retired_mode.get('effective_mode') != 0:
+            raise AssertionError(retired_mode)
+        if not harmless_clear.get('success'):
+            raise AssertionError(harmless_clear)
+        failures = case('after_retired_calls', 'async', False, False)
+        if failures:
+            raise AssertionError(failures)
         for name, blocked, failed, save_failed, fault in (
             ('mcp_combined', True, True, False, 0),
             ('mcp_compile_only', False, True, False, 0),
             ('mcp_save_failure', True, True, True, 0),
             ('mcp_payload_failure', True, True, False, 5),
             ('mcp_final_clean', False, False, False, 0)):
-            assert not case(name, 'mcp', blocked, failed, save_failed, fault), name
+            failures = case(name, 'mcp', blocked, failed, save_failed, fault)
+            if failures:
+                raise AssertionError(failures)
         import win32file
         existing=folder/'locked-results.json'
         existing.write_text('{"stale":true}',encoding='utf-8')

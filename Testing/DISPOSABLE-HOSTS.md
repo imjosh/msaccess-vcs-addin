@@ -26,6 +26,12 @@ driver creates the designation in its owned host, before any test runs, by impor
 `DesignateDisposableHost`. It records the stored value as `designation` in the receipt.
 Copying a designated database to another path invalidates the designation.
 
+Run Python with optimization disabled. Do not use `-O` or `-OO`. Keep
+`PYTHONOPTIMIZE` unset or `0`, and disable equivalent launcher settings.
+Assertions include validation and required setup. Require `__debug__ == True`
+and `sys.flags.optimize == 0`. See the interpreter check in
+[NONINTERACTIVE-POLICIES.md](NONINTERACTIVE-POLICIES.md).
+
 From this repository, run these commands with the MCP client's Python environment:
 
 ```powershell

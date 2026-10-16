@@ -557,8 +557,9 @@ Public Function RefusalOwnershipProbe(ByVal strCallbackInfo As String) As String
         GoTo CleanUp
     End If
     Set cCallback = MCP
-    cCallback.RegisterCallback strCallbackInfo
-    Operation.Source = eosMCPTool
+    Dim cPriorRequest As clsOperationRequest
+    Set cPriorRequest = IncomingOperationRequest
+    Set IncomingOperationRequest = CreateOperationRequest(eosMCPTool, strCallbackInfo)
     Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
     dResult.Add "before", ParseJson(ModeOnlyScopeProbe("snapshot"))
     dResult.Add "invalid_policy", ParseJson(VCS.MergeBuild("invalid-policy"))
@@ -577,6 +578,7 @@ CleanUp:
         dResult.Add "probe_error", strErr
         dResult.Add "probe_error_number", lngErr
     End If
+    Set IncomingOperationRequest = cPriorRequest
     RefusalOwnershipProbe = ConvertToJson(dResult)
     Exit Function
 ErrHandler:

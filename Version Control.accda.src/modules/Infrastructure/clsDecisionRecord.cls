@@ -27,3 +27,4 @@ Public Title As String
 Public Message As String
 Public Resolution As String
 Public Detail As String
+Public ConflictContext As Dictionary

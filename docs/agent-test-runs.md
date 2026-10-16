@@ -14,6 +14,11 @@ For the layers, the round-trip harness, and where results land, see
 [testing-strategy.md](testing-strategy.md).
 For reproducible checks and safe failure controls, use
 [the disposable-host driver](../Testing/DISPOSABLE-HOSTS.md).
+Run Python drivers with optimization disabled: omit `-O` and `-OO`, keep
+`PYTHONOPTIMIZE` unset or `0`, and disable equivalent launcher settings.
+Their assertions include validation and required setup. Require `__debug__ == True`
+and `sys.flags.optimize == 0`. See
+[the interpreter check](../Testing/NONINTERACTIVE-POLICIES.md).
 
 ## Prepare and dispose of the entire development host
 
@@ -38,6 +43,7 @@ repository's suite; it is not a requirement to discard developers' user database
    `?DesignateDisposableHost("")` in the VBA Immediate Window. Never designate a primary
    development copy. Copying the host afterward invalidates the designation. See
    [the disposable-host driver](../Testing/DISPOSABLE-HOSTS.md).
+
 4. Run focused checks and the original unfiltered suite through MCP. Start each
    independent run from a fresh disposable host. Retain alpha/beta modules through
    validation; normal and batch fixtures need distinct module names/source paths

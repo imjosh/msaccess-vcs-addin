@@ -115,7 +115,11 @@ Private Sub IDbComponent_Export(Optional strAlternatePath As String)
         strZip = strFolder & ".zip"
         If FSO.FileExists(strZip) Then DeleteFile (strZip)
         Name strFile As strZip
-        ExtractFromZip strZip, strFolder, False
+        If InteractionIsNonInteractive() Then
+            If Not CopyThemeContents(strZip, strFolder, True) Then Exit Sub
+        Else
+            ExtractFromZip strZip, strFolder, False
+        End If
         ' Rather than holding up the export while we extract the file,
         ' use a cleanup sub to do this after the export.
         Perf.OperationEnd
@@ -158,16 +162,28 @@ Private Sub IDbComponent_Import(strFile As String)
     If blnIsFolder Then
         ' We need to compress this folder back into a zipped theme file.
         ' Build zip file name; if it's a folder, just add the extension.
-        strZip = strFile & ".zip"
+        If InteractionIsNonInteractive() Then
+            strZip = VCSIndex.GetTempExportFolder & "theme-import" & PathSep & FSO.GetFileName(StripSlash(strFile)) & ".zip"
+        Else
+            strZip = strFile & ".zip"
+        End If
         ' Get theme name
         strThemeName = GetObjectNameFromFileName(FSO.GetBaseName(strZip))
         ' Remove any existing zip file
         If FSO.FileExists(strZip) Then DeleteFile strZip, True
         ' Copy source files into new zip file
         CreateZipFile strZip
-        CopyFolderToZip strFile, strZip
+        If InteractionIsNonInteractive() Then
+            If Not CopyThemeContents(strFile, strZip, False) Then Exit Sub
+        Else
+            CopyFolderToZip strFile, strZip
+        End If
         DoEvents
-        strThemeFile = strFile & ".thmx"
+        If InteractionIsNonInteractive() Then
+            strThemeFile = SwapExtension(strZip, "thmx")
+        Else
+            strThemeFile = strFile & ".thmx"
+        End If
         If FSO.FileExists(strThemeFile) Then DeleteFile strThemeFile, True
         Name strZip As strThemeFile
     Else
@@ -693,3 +709,88 @@ End Property
 Public Property Get Parent() As IDbComponent
     Set Parent = Me
 End Property
+
+
+' Shell copying is asynchronous. Compare the full expected nested file set before
+' hashing an extraction or uploading an archive. Suppress Shell UI under policy.
+'---------------------------------------------------------------------------------------
+' Procedure : CopyThemeContents
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Await complete nested theme contents while suppressing asynchronous Shell copy UI.
+'---------------------------------------------------------------------------------------
+'
+Private Function CopyThemeContents(ByVal strFrom As String, ByVal strTo As String, ByVal blnExtracting As Boolean) As Boolean
+    Const ShellCopySilent As Long = &H4
+    Const ShellCopyNoConfirmation As Long = &H10
+    Const ShellCopyNoConfirmFolder As Long = &H200
+    Const ShellCopyNoErrorUI As Long = &H400
+    Dim oShell As Object
+    Dim oFrom As Object
+    Dim oTo As Object
+    Dim dExpected As New Dictionary
+    Dim dActual As Dictionary
+    Dim varKey As Variant
+    Dim dteDeadline As Date
+    Dim blnReady As Boolean
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    dExpected.CompareMode = TextCompare
+    If blnExtracting Then
+        If Not FSO.FolderExists(strTo) Then FSO.CreateFolder strTo
+    End If
+    Set oShell = CreateObject("Shell.Application")
+    Set oFrom = oShell.Namespace(CVar(strFrom))
+    Set oTo = oShell.Namespace(CVar(strTo))
+    AddThemeShellFiles oFrom, vbNullString, dExpected
+    If dExpected.Count = 0 Or oTo Is Nothing Then GoTo Failed
+    oTo.CopyHere oFrom.Items, ShellCopySilent Or ShellCopyNoConfirmation Or ShellCopyNoConfirmFolder Or ShellCopyNoErrorUI
+    dteDeadline = DateAdd("s", 60, Now)
+    Do
+        Set dActual = New Dictionary
+        dActual.CompareMode = TextCompare
+        Set oTo = oShell.Namespace(CVar(strTo))
+        AddThemeShellFiles oTo, vbNullString, dActual
+        blnReady = (dActual.Count = dExpected.Count)
+        If blnReady Then
+            For Each varKey In dExpected.Keys
+                If Not dActual.Exists(varKey) Then
+                    blnReady = False
+                    Exit For
+                ElseIf dActual(varKey) <> dExpected(varKey) Then
+                    blnReady = False
+                    Exit For
+                End If
+            Next varKey
+        End If
+        If blnReady Then Exit Do
+        Pause 0.05
+    Loop While Now < dteDeadline
+    If Not blnReady Then GoTo Failed
+    If CatchAny(eelCritical, T("Unable to complete the theme content copy safely."), ModuleName(Me) & ".CopyThemeContents", True, True) Then Exit Function
+    CopyThemeContents = True
+    Exit Function
+Failed:
+    Log.Error eelCritical, T("The complete theme content was not available before the copy deadline."), ModuleName(Me) & ".CopyThemeContents"
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : AddThemeShellFiles
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Collect nested Shell file names and sizes to verify a completed theme copy.
+'---------------------------------------------------------------------------------------
+'
+Private Sub AddThemeShellFiles(ByVal oFolder As Object, ByVal strPrefix As String, ByVal dFiles As Dictionary)
+    Dim oItem As Object
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    If oFolder Is Nothing Then Exit Sub
+    For Each oItem In oFolder.Items
+        If oItem.IsFolder Then
+            AddThemeShellFiles oItem.GetFolder, strPrefix & oItem.Name & PathSep, dFiles
+        Else
+            dFiles(LCase$(strPrefix & oItem.Name)) = CDbl(oItem.Size)
+        End If
+    Next oItem
+    CatchAny eelCritical, T("Unable to inspect complete nested theme content."), ModuleName(Me) & ".AddThemeShellFiles", True, True
+End Sub

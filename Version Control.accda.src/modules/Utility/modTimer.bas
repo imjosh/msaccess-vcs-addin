@@ -1,109 +1,296 @@
 ﻿Attribute VB_Name = "modTimer"
 '---------------------------------------------------------------------------------------
 ' Module    : modTimer
-' Author    : Adam Waller
-' Date      : 12/4/2020
-' Purpose   : API timer functions for callbacks
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Reserves callback capacity and validates explicitly owned continuations.
 '---------------------------------------------------------------------------------------
 Option Compare Database
 Option Private Module
 Option Explicit
 '@Folder("Utility")
 
-' Windows API calls for Timer functionality
 Private Declare PtrSafe Function ApiSetTimer Lib "user32" Alias "SetTimer" (ByVal hwnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr
 Private Declare PtrSafe Function ApiKillTimer Lib "user32" Alias "KillTimer" (ByVal hwnd As LongPtr, ByVal nIDEvent As LongPtr) As Long
-
-Private Const REG_TIMER_OP_TOKEN As String = "OpToken"
-
 Private m_lngTimerID As LongPtr
+Private m_blnFailNextTimer As Boolean
+Private m_blnFailReservation As Boolean
+Private m_strFailTimerOperation As String
+Private m_lngProjectResetCalls As Long
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TimerIsPending
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Report installed or reserved callback capacity.
+'---------------------------------------------------------------------------------------
+'
+Public Function TimerIsPending() As Boolean
+    TimerIsPending = (m_lngTimerID <> 0) Or Len(GetSetting(PROJECT_NAME, "Timer", "Operation")) > 0
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TimerRequestSucceeded
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Read explicit timer admission results.
+'---------------------------------------------------------------------------------------
+'
+Public Function TimerRequestSucceeded(ByVal strResult As String) As Boolean
+    Dim d As Dictionary
+    Set d = ParseJson(strResult)
+    If d.Exists("success") Then TimerRequestSucceeded = CBool(d("success"))
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FailNextTimerForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Inject one timer installation failure in a disposable qualification host.
+'---------------------------------------------------------------------------------------
+'
+Public Sub FailNextTimerForTest()
+    m_blnFailNextTimer = True
+End Sub
+
+' Admission and installation contain no DoEvents or network delivery. A missing token
+' means a NEW request; it never acquires an existing root's continuation ownership.
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetTimer
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Reserve and install a new callback only after root/token admission.
+'---------------------------------------------------------------------------------------
+'
+Public Function SetTimer(strOperation As String, _
+    Optional strParam1 As String, Optional strParam2 As String, _
+    Optional strOpToken As String, Optional sngSeconds As Single = 0.5, _
+    Optional strCallbackInfo As String, Optional strRequestJson As String, _
+    Optional blnReserveOnly As Boolean = False) As String
+
+    Dim strReservation As String
+    InitializeRequestErrors "SetTimer"
+    On Error GoTo Failed
+    If TimerIsPending Then
+        SetTimer = RefusalJson("timer_busy", T("Another request is waiting for its callback timer."), False)
+        Exit Function
+    End If
+    If Operation.IsActive Then
+        If Len(strOpToken) = 0 Or Not Operation.RootLeaseIsActive(strOpToken) Then
+            SetTimer = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+            Exit Function
+        End If
+    ElseIf Len(strOpToken) > 0 Then
+        SetTimer = RefusalJson("stale_continuation", T("The continuation does not belong to the current operation."), False)
+        Exit Function
+    End If
+    If StrComp(m_strFailTimerOperation, strOperation, vbBinaryCompare) = 0 And Len(m_strFailTimerOperation) > 0 Then
+        m_strFailTimerOperation = vbNullString
+        m_blnFailNextTimer = True
+    End If
+    If m_blnFailReservation Then
+        m_blnFailReservation = False
+        SetTimer = RefusalJson("timer_reservation_failed", T("The callback timer capacity could not be reserved."), False)
+        Exit Function
+    End If
+    strReservation = NewOperationIdentity()
+    SaveSetting PROJECT_NAME, "Timer", "Reservation", strReservation
+    SaveSetting PROJECT_NAME, "Timer", "Operation", strOperation
+    SaveSetting PROJECT_NAME, "Timer", "Param1", strParam1
+    SaveSetting PROJECT_NAME, "Timer", "Param2", strParam2
+    SaveSetting PROJECT_NAME, "Timer", "OpToken", strOpToken
+    SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
+    SaveSetting PROJECT_NAME, "Timer", "RequestJson", strRequestJson
+    SaveSetting PROJECT_NAME, "Timer", "TimerID", "0"
+    If blnReserveOnly Then
+        SetTimer = "{""success"":true}"
+    Else
+        SetTimer = ActivateReservedTimer(strOpToken, sngSeconds)
+    End If
+    Exit Function
+Failed:
+    Dim strError As String
+    strError = Err.Description
+    If Len(strReservation) > 0 Then
+        If GetSetting(PROJECT_NAME, "Timer", "Reservation") = strReservation Then KillTimer
+        ClearTimerRequest strReservation
+    End If
+    SetTimer = RefusalJson("timer_install_failed", T("Could not install the callback timer: {0}", var0:=strError), False)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ActivateReservedTimer
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Activate matching reserved capacity and report Windows installation failure.
+'---------------------------------------------------------------------------------------
+'
+Public Function ActivateReservedTimer(ByVal strOpToken As String, Optional ByVal sngSeconds As Single = 0.5, _
+    Optional ByVal blnRetainReservationOnFailure As Boolean = False) As String
+    Dim strReservation As String
+    strReservation = GetSetting(PROJECT_NAME, "Timer", "Reservation")
+    If Len(strOpToken) > 0 Then
+        If Not Operation.RootLeaseIsActive(strOpToken) Then
+            ActivateReservedTimer = RefusalJson("stale_continuation", T("The continuation no longer owns an active operation."), False)
+            Exit Function
+        End If
+    ElseIf Operation.IsActive Then
+        ActivateReservedTimer = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+        Exit Function
+    End If
+    If Len(strReservation) = 0 Or m_lngTimerID <> 0 Then
+        ActivateReservedTimer = RefusalJson("timer_reservation_missing", T("The callback timer reservation is unavailable."), False)
+        Exit Function
+    End If
+    If StrComp(GetSetting(PROJECT_NAME, "Timer", "OpToken"), strOpToken, vbBinaryCompare) <> 0 Then
+        ActivateReservedTimer = RefusalJson("stale_continuation", T("The continuation does not own this timer reservation."), False)
+        Exit Function
+    End If
+    If Not m_blnFailNextTimer Then m_lngTimerID = ApiSetTimer(0, 0, CLng(1000 * sngSeconds), AddressOf WinAPITimerCallback)
+    m_blnFailNextTimer = False
+    If m_lngTimerID = 0 Then
+        If Not blnRetainReservationOnFailure Then ClearTimerRequest strReservation
+        ActivateReservedTimer = RefusalJson("timer_install_failed", T("Windows could not install the callback timer."), False)
+        Exit Function
+    End If
+    SaveSetting PROJECT_NAME, "Timer", "TimerID", CStr(m_lngTimerID)
+    ActivateReservedTimer = "{""success"":true}"
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ReleaseTimerReservation
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Release only the reservation owned by the supplied root token.
+'---------------------------------------------------------------------------------------
+'
+Public Sub ReleaseTimerReservation(ByVal strOpToken As String)
+    If StrComp(GetSetting(PROJECT_NAME, "Timer", "OpToken"), strOpToken, vbBinaryCompare) <> 0 Then Exit Sub
+    If Len(strOpToken) = 0 Then Exit Sub
+    KillTimer
+    ClearTimerRequest GetSetting(PROJECT_NAME, "Timer", "Reservation")
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearTimerRequest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Clear fields only while the expected reservation still owns them.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ClearTimerRequest(ByVal strReservation As String)
+    Dim varKey As Variant
+    If Len(strReservation) = 0 Then Exit Sub
+    If GetSetting(PROJECT_NAME, "Timer", "Reservation") <> strReservation Then Exit Sub
+    For Each varKey In Array("Operation", "Param1", "Param2", "OpToken", "CallbackInfo", "RequestJson", "Reservation")
+        SaveSetting PROJECT_NAME, "Timer", CStr(varKey), vbNullString
+    Next varKey
+    SaveSetting PROJECT_NAME, "Timer", "TimerID", "0"
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : KillTimer
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Kill the currently recorded Windows timer.
+'---------------------------------------------------------------------------------------
+'
+Private Sub KillTimer()
+    If m_lngTimerID = 0 Then m_lngTimerID = CLngPtr(GetSetting(PROJECT_NAME, "Timer", "TimerID", "0"))
+    If m_lngTimerID <> 0 Then ApiKillTimer 0, m_lngTimerID
+    m_lngTimerID = 0
+End Sub
 
 
 '---------------------------------------------------------------------------------------
 ' Procedure : WinAPITimerCallback
-' Author    : Adam Waller
-' Date      : 2/25/2022
-' Purpose   : Generic callback function to handle timer requests to resume operations.
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Ignore stale Windows events before touching a newer queue.
 '---------------------------------------------------------------------------------------
 '
-Public Sub WinAPITimerCallback()
+Public Sub WinAPITimerCallback(ByVal hwnd As LongPtr, ByVal uMsg As Long, ByVal nIDEvent As LongPtr, ByVal dwTime As Long)
+    Dim lngExpected As LongPtr
+    lngExpected = m_lngTimerID
+    If lngExpected = 0 Then lngExpected = CLngPtr(GetSetting(PROJECT_NAME, "Timer", "TimerID", "0"))
+    ' A killed timer can have an already-queued event. Validate its Windows ID
+    ' before touching the current timer or reading/clearing its request fields.
+    If nIDEvent = 0 Or nIDEvent <> lngExpected Then Exit Sub
+    DispatchTimerRequest GetSetting(PROJECT_NAME, "Timer", "Reservation")
+End Sub
 
+
+'---------------------------------------------------------------------------------------
+' Procedure : DispatchTimerRequest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Consume matching queued work and resume only explicit owner tokens.
+'---------------------------------------------------------------------------------------
+'
+Private Sub DispatchTimerRequest(ByVal strExpectedReservation As String)
+    Dim strCommand As String
     Dim strParam1 As String
     Dim strParam2 As String
-    Dim strCommand As String
-    Dim strOpToken As String
-    Dim intMergeFilter As eContainerFilter
+    Dim strToken As String
+    Dim strCallback As String
+    Dim strRequest As String
+    Dim strReservation As String
+    Dim strQueueResult As String
+    Dim cRequest As clsOperationRequest
+    Dim cPrior As clsOperationRequest
 
-    ' First, make sure we kill the timer!
-    KillTimer
-
-    ' Read in parameter values
+    If Len(strExpectedReservation) = 0 Then Exit Sub
+    If GetSetting(PROJECT_NAME, "Timer", "Reservation") <> strExpectedReservation Then Exit Sub
     strCommand = GetSetting(PROJECT_NAME, "Timer", "Operation")
     strParam1 = GetSetting(PROJECT_NAME, "Timer", "Param1")
     strParam2 = GetSetting(PROJECT_NAME, "Timer", "Param2")
+    strToken = GetSetting(PROJECT_NAME, "Timer", "OpToken")
+    strCallback = GetSetting(PROJECT_NAME, "Timer", "CallbackInfo")
+    strRequest = GetSetting(PROJECT_NAME, "Timer", "RequestJson")
+    strReservation = GetSetting(PROJECT_NAME, "Timer", "Reservation")
+    KillTimer
+    ClearTimerRequest strReservation
 
-    ' Read callback info before clearing (needed for APIAsyncOperation)
-    Dim strCallbackInfo As String
-    strCallbackInfo = GetSetting(PROJECT_NAME, "Timer", "CallbackInfo")
-    strOpToken = GetSetting(PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN)
-    MCPDebugLog "WinAPITimerCallback: Command=" & strCommand & ", CallbackInfo length=" & Len(strCallbackInfo)
-
-    ' Clear values from registry (In case an operation sets another timer)
-    SaveSetting PROJECT_NAME, "Timer", "Operation", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", "Param1", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", "Param2", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", vbNullString
-    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, vbNullString
-
-    ' Now, run the desired operation. Root ownership crosses this boundary in strOpToken,
-    ' never in mutable global state: a continuation resumes only the root it was armed
-    ' for, and a stale or foreign token resumes nothing.
     Select Case strCommand
-
-        Case "HandleRibbonCommand"
-            HandleRibbonCommand strParam1
-
         Case "Build"
-            ' Build from source (full or merge build)
-            RunBuildFromContinuation strOpToken, strParam1, CBool(strParam2)
-
+            RunBuildFromContinuation strToken, strParam1, CBool(strParam2)
         Case "MergeReset"
-            ' Reset the target database's VBA project between the two merge stages, on the
-            ' smallest stack available: the call that prepared the database has fully
-            ' unwound, and the merge has not started.
-            '
-            ' The next stage is armed BEFORE the reset on purpose. The reset's teardown
-            ' lands asynchronously, so this stack must do nothing afterwards and simply
-            ' return to the message loop. (See modBuild.ResetProjectForInPlaceMerge.)
-            '
-            ' The root is normally already staged by the call that armed this timer. Stage
-            ' it here only if it is somehow still running, so the reset's asynchronous
-            ' teardown is not mistaken for a canceled operation.
-            If Operation.Status = eosRunning Then Operation.DetachRootLease strOpToken
+            If Not Operation.RootLeaseIsActive(strToken) Then Exit Sub
+            If Operation.Status = eosRunning Then Operation.DetachRootLease strToken
+            strQueueResult = SetTimer("MergeResume", strParam1, strParam2, strToken)
+            If Not TimerRequestSucceeded(strQueueResult) Then
+                Operation.RecordRootRuntimeError strToken, T("Could not queue the merge continuation."), vbObjectError + 2410
+                Operation.CompleteRootLease strToken, eorFailed
+                Exit Sub
+            End If
             TraceInPlaceMerge "reset stage: merge timer armed"
-            SetTimer "MergeResume", strParam1, strParam2, strOpToken
+            m_lngProjectResetCalls = m_lngProjectResetCalls + 1
             ResetProjectForInPlaceMerge
-
         Case "MergeResume"
-            ' Continue a merge build after the database was prepared in place and its VBA
-            ' project reset. (See modBuild.PrepareMergeInPlace.)
-            intMergeFilter = Val(strParam2)
-            RunBuildFromContinuation strOpToken, strParam1, False, intMergeFilter, vbNullString, True
-
+            RunBuildFromContinuation strToken, strParam1, False, Val(strParam2), vbNullString, True
         Case "APIAsyncOperation"
-            ' Handle async operation with MCP callbacks
-            HandleAPIAsyncOperation strParam1, strParam2, strCallbackInfo
-
+            HandleAPIAsyncOperation strParam1, strParam2, strRequest
         Case "QuitForRebuild"
-            ' Close this instance so the rebuild worker can replace the files it holds.
-            ' Armed by clsVersionControl.RebuildAddIn before the worker is launched,
-            ' because the worker cannot close an instance it could not attach to, and it
-            ' cannot attach when the current database is the add-in itself.
-            ' (See clsWorker.Main.)
+            If Not Operation.RootLeaseIsActive(strToken) Then Exit Sub
             Application.Quit acQuitSaveAll
-
         Case Else
-            ' Use the Run command to execute the specified operation with supplied parameters
+            If ManualCommandRefused Then Exit Sub
+            Set cPrior = IncomingOperationRequest
+            If Len(strRequest) > 0 Then
+                Set cRequest = New clsOperationRequest
+                cRequest.FromJson strRequest
+                Set IncomingOperationRequest = cRequest
+            End If
+            LogUnhandledErrors
+            On Error GoTo DispatchFailed
             If strParam2 <> vbNullString Then
                 Application.Run strCommand, strParam1, strParam2
             ElseIf strParam1 <> vbNullString Then
@@ -111,133 +298,122 @@ Public Sub WinAPITimerCallback()
             Else
                 Application.Run strCommand
             End If
-
+DispatchFailed:
+            Set IncomingOperationRequest = cPrior
     End Select
-
 End Sub
 
-
-'---------------------------------------------------------------------------------------
-' Procedure : SetTimer
-' Author    : Adam Waller
-' Date      : 2/25/2022
-' Purpose   : Set the API timer to trigger the desired operation.
-'           : strOpToken carries root ownership to the continuation; pass the token from
-'           : the lease that was detached for this handoff. It defaults to the current
-'           : root so a timer armed inside an operation resumes that same operation.
-'---------------------------------------------------------------------------------------
-'
-Public Sub SetTimer(strOperation As String, _
-    Optional strParam1 As String, Optional strParam2 As String, _
-    Optional strOpToken As String, Optional sngSeconds As Single = 0.5)
-
-    If Len(strOpToken) = 0 Then strOpToken = Operation.CurrentRootToken
-
-    ' Make sure we are not trying to stack timer operations
-    If m_lngTimerID <> 0 Then
-        MsgBox2 "Failed to Set Callback Timer", _
-            "Multiple callback timers are not currently supported.", _
-            "Please ensure that any previous timer was completed or killed first.", vbExclamation
-        Exit Sub
-    End If
-
-    ' Save parameter values
-    SaveSetting PROJECT_NAME, "Timer", "Param1", strParam1
-    SaveSetting PROJECT_NAME, "Timer", "Param2", strParam2
-    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, strOpToken
-
-    ' Save ID to registry before setting the timer
-    SaveSetting PROJECT_NAME, "Timer", "Operation", strOperation
-    SaveSetting PROJECT_NAME, "Timer", "TimerID", m_lngTimerID
-    m_lngTimerID = ApiSetTimer(0, 0, 1000 * sngSeconds, AddressOf WinAPITimerCallback)
-
-End Sub
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : KillTimer
-' Author    : Adam Waller
-' Date      : 2/25/2022
-' Purpose   : Kill any existing timer
-'---------------------------------------------------------------------------------------
-'
-Private Sub KillTimer()
-    If m_lngTimerID = 0 Then m_lngTimerID = GetSetting(PROJECT_NAME, "Timer", "TimerID", 0)
-    If m_lngTimerID <> 0 Then
-        ApiKillTimer 0, m_lngTimerID
-        Debug.Print "Killed API Timer " & m_lngTimerID
-        m_lngTimerID = 0
-        SaveSetting PROJECT_NAME, "Timer", "TimerID", 0
-    End If
-End Sub
-
+' This emitter is request-local on every path. In particular, an execution-time
+' refusal never registers over another root's shared callback.
 
 '---------------------------------------------------------------------------------------
 ' Procedure : HandleAPIAsyncOperation
-' Author    : Adam Waller
-' Date      : 1/23/2026
-' Purpose   : Handle async operation with MCP callbacks. Reads callback info from
-'           : registry, registers with MCP, then starts the operation.
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Recheck queued admission and emit refusals through the queued request owner.
 '---------------------------------------------------------------------------------------
 '
-Private Sub HandleAPIAsyncOperation(strMethod As String, strArgs As String, strCallbackInfo As String)
+Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As String, ByVal strRequest As String)
+    Dim cRequest As New clsOperationRequest
+    Dim cEmitter As New clsMCP
+    Dim cOwnerEmitter As clsMCP
+    Dim colArgs As Collection
+    Dim varResult As Variant
+    Dim dResult As Object
+    Dim strRefusal As String
+    Dim strError As String
 
-    SuppressErrorBreaks
-    LogUnhandledErrors
-    On Error GoTo ErrHandler
-
-    Dim strArg1 As String
-    Dim strArg2 As String
-    Dim lngPipePos As Long
-
-    ' Register callback with MCP if provided
-    MCPDebugLog "HandleAPIAsyncOperation: Method=" & strMethod & ", CallbackInfo length=" & Len(strCallbackInfo)
-    If Len(strCallbackInfo) > 0 Then
-        MCPDebugLog "HandleAPIAsyncOperation: Registering callback..."
-        MCP.RegisterCallback strCallbackInfo
-        MCPDebugLog "HandleAPIAsyncOperation: MCP.IsActive=" & MCP.IsActive
-        Operation.Source = eosMCPTool
+    ' Re-admission failures must not log into another operation.
+    InitializeRequestErrors "HandleAPIAsyncOperation"
+    On Error GoTo Failed
+    cRequest.FromJson strRequest
+    cEmitter.RegisterCallback cRequest.CallbackInfo
+    strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
+    If APIDispatchBusy Then strRefusal = RefusalJson("api_busy", T("Another API command is still running."), False)
+    If Len(strRefusal) > 0 Then
+        Set dResult = ParseJson(strRefusal)
+        cEmitter.PostCallback "error", -1, -1, CStr(dResult("error")), dResult
+        Exit Sub
+    End If
+    Set colArgs = ParseJson(strArgs)
+    Set cOwnerEmitter = MCP
+    varResult = DispatchOperationRequest(cRequest, strMethod, colArgs)
+    If cOwnerEmitter.TerminalPosted Then Exit Sub
+    If Operation.IsActive Then
+        If Operation.PublicId = cRequest.PublicId Then Exit Sub
+    End If
+    If VarType(varResult) = vbString And Len(CStr(varResult)) > 0 Then
+        Set dResult = ParseJson(CStr(varResult))
     Else
-        MCPDebugLog "HandleAPIAsyncOperation: No callback info, using External API source"
-        Operation.Source = eosExternalAPI
+        Set dResult = New Dictionary
+        dResult("success") = False
+        dResult("error_pattern") = "operation_not_started"
+        dResult("error") = T("The operation returned without starting or reporting a result.")
     End If
-
-    ' Parse arguments (format: "arg1|arg2" or just "arg1")
-    If Len(strArgs) > 0 Then
-        lngPipePos = InStr(strArgs, "|")
-        If lngPipePos > 0 Then
-            strArg1 = Left(strArgs, lngPipePos - 1)
-            strArg2 = Mid(strArgs, lngPipePos + 1)
-        Else
-            strArg1 = strArgs
-        End If
+    Dim strType As String
+    strType = "error"
+    If dResult.Exists("success") Then
+        If CBool(dResult("success")) Then strType = "complete"
     End If
-
-    ' Start the operation via API
-    ' Log.Add automatically routes to MCP when MCP.IsActive
-    If Len(strArg2) > 0 Then
-        API strMethod, strArg1, strArg2
-    ElseIf Len(strArg1) > 0 Then
-        API strMethod, strArg1
-    Else
-        API strMethod
-    End If
-
-    ' Completion callback is sent from the root operation's completion, before ReleaseObjects
-    MCPDebugLog "HandleAPIAsyncOperation: Operation complete, Result=" & Operation.Result
-
-    RestoreErrorBreaks
+    cEmitter.PostCallback strType, -1, -1, vbNullString, dResult
     Exit Sub
-
-ErrHandler:
-    ' Post error callback if MCP is active
-    If MCP.IsActive Then
-        MCP.PostCallback "error", -1, -1, strMethod & " failed: " & Err.Description
+Failed:
+    strError = Err.Description
+    If cEmitter.TerminalPosted Then Exit Sub
+    If Not cOwnerEmitter Is Nothing Then
+        If cOwnerEmitter.TerminalPosted Then Exit Sub
     End If
-
-    RestoreErrorBreaks
-
-    ' Re-throw error
-    Err.Raise Err.Number, Err.Source, Err.Description, Err.HelpFile, Err.HelpContext
-
+    Set dResult = New Dictionary
+    dResult("success") = False
+    dResult("error") = strError
+    dResult("error_pattern") = "dispatch_error"
+    cEmitter.PostCallback "error", -1, -1, strError, dResult
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FailNextTimerReservationForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Inject one prelaunch callback-capacity failure.
+'---------------------------------------------------------------------------------------
+'
+Public Sub FailNextTimerReservationForTest()
+    m_blnFailReservation = True
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DispatchReservedTimerForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Enter actual dispatch for the currently reserved disposable request.
+'---------------------------------------------------------------------------------------
+'
+Public Sub DispatchReservedTimerForTest()
+    DispatchTimerRequest GetSetting(PROJECT_NAME, "Timer", "Reservation")
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FailNamedTimerForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Inject failure only for the named continuation handoff.
+'---------------------------------------------------------------------------------------
+'
+Public Sub FailNamedTimerForTest(ByVal strOperation As String)
+    m_strFailTimerOperation = strOperation
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ProjectResetCallsForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Observe whether qualification reached the real project-reset boundary.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get ProjectResetCallsForTest() As Long
+    ProjectResetCallsForTest = m_lngProjectResetCalls
+End Property

@@ -69,9 +69,10 @@ Public Function Run_BuildAndInstall(strSourcePath As String, _
     Optional strStatusFile As String, _
     Optional strPhaseStarted As String, _
     Optional strCallbackUrl As String, _
-    Optional strOperationId As String)
+    Optional strOperationId As String) As Boolean
 
-    CallWorker PROJECT_NAME, 300, "BuildAndInstall", _
+    Dim cJob As clsJob
+    Set cJob = CallWorker(PROJECT_NAME, 300, "BuildAndInstall", _
         """" & strSourcePath & """", _
         IIf(blnUnattended, "1", "0"), _
         """" & strStatusFile & """", _
@@ -79,7 +80,8 @@ Public Function Run_BuildAndInstall(strSourcePath As String, _
         modInstall.GetThisProcessId, _
         """" & strPhaseStarted & """", _
         """" & strCallbackUrl & """", _
-        """" & strOperationId & """"
+        """" & strOperationId & """")
+    Run_BuildAndInstall = Not cJob Is Nothing
 
 End Function
 
@@ -1503,10 +1505,9 @@ Function BuildAndInstall(strSourcePath, strUnattended, strStatusFile, _
         On Error GoTo 0
     End If
 
-    ' Trigger build via the installed library. When an MCP callback identity was passed
-    ' through the disconnected worker, use the same APIAsync entry point as ordinary
-    ' database builds. This reuses Log.Add and Log.Progress rather than inventing a
-    ' second stream. The worker still owns compile/install and their durable status.
+    ' A child build has its own fresh MCP callback identity, distinct from the
+    ' launcher's public ID. The existing log/progress pump follows that child;
+    ' the status-file watcher remains authoritative for the complete rebuild.
     On Error Resume Next
     If Len(strCallbackUrl) > 0 And Len(strOperationId) > 0 Then
         strCallbackInfo = "{""callback_url"":""" & JsonEscape(strCallbackUrl) & _
@@ -1519,7 +1520,15 @@ Function BuildAndInstall(strSourcePath, strUnattended, strStatusFile, _
                 "The asynchronous build entry point did not accept the rebuild."
         End If
     Else
-        objNewAccess.Run strInstalledLib & ".HandleRibbonCommand", "btnBuild", strSourcePath
+        ' Use the automation entry point so admission is observable. Older libraries
+        ' return Empty here; retain their existing log-completion check below.
+        strBuildResult = objNewAccess.Run(strInstalledLib & ".API", "Build", strSourcePath)
+        If VarType(strBuildResult) = vbString Then
+            If InStr(1, strBuildResult, """success"":false", vbTextCompare) > 0 Then
+                Err.Raise 1001, "BuildAndInstall", _
+                    "The build entry point refused the rebuild: " & strBuildResult
+            End If
+        End If
     End If
     If Err.Number <> 0 Then
         Dim strBuildErr

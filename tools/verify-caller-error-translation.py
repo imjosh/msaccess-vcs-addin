@@ -40,15 +40,16 @@ Public Function CheckRefusal(ByVal strPolicy As String) As String
     Dim cmp As Object
     Dim blnHelper As Boolean
     Dim strJson As String
+    Dim strStateBefore As String
     Operation.Source = eosUserInterface
     Translation.SetLanguage "POL_TEST"
+    strStateBefore = CStr(Operation.InteractionMode) & "|" & CStr(Operation.DecisionBlocked) & _
+        "|" & CStr(Operation.Decisions.Count) & "|" & Operation.PublicId & "|" & CStr(Operation.Result)
     Select Case strPolicy
         Case "mode_only"
-            VCS.SetInteractionMode 2
-            Set dResult = ParseJson(VCS.RunFilteredTests())
+            Set dResult = ParseJson(VCS.SetInteractionMode(2))
         Case "session"
-            VCS.SetOperationPolicy "block"
-            Set dResult = ParseJson(VCS.RunFilteredTests())
+            Set dResult = ParseJson(VCS.SetOperationPolicy("block"))
         Case "automation"
             Operation.Source = eosExternalAPI
             strJson = VCS.RunFilteredTests("block")
@@ -71,6 +72,9 @@ Public Function CheckRefusal(ByVal strPolicy As String) As String
     dResult.Add "liveMode", CLng(Operation.InteractionMode)
     dResult.Add "liveBlocked", Operation.DecisionBlocked
     dResult.Add "liveJournalCount", Operation.Decisions.Count
+    dResult.Add "stateUnchanged", strStateBefore = CStr(Operation.InteractionMode) & _
+        "|" & CStr(Operation.DecisionBlocked) & "|" & CStr(Operation.Decisions.Count) & _
+        "|" & Operation.PublicId & "|" & CStr(Operation.Result)
     If strPolicy = "session" Then VCS.ClearOperationPolicy
     CheckRefusal = ConvertToJson(dResult)
 End Function
@@ -100,6 +104,15 @@ async def check(database_path, policy):
     assert payload["success"], payload
     decoded = json.loads(payload["result"])
     assert decoded["operationReady"] is True, decoded
+    if policy in ["mode_only", "session"]:
+        assert decoded["success"] is False and decoded["helperInstalled"] is False, decoded
+        assert decoded["stateUnchanged"] is True, decoded
+        expected = "interaction_mode_refused" if policy == "mode_only" else "policy_activation_retired"
+        assert decoded["error_pattern"] == expected, decoded
+        if policy == "mode_only":
+            assert decoded["requested_mode"] == 2 and decoded["effective_mode"] == decoded["liveMode"], decoded
+        (EVIDENCE/(policy+".json")).write_text(json.dumps(decoded,indent=2),encoding="utf-8")
+        return
     if policy == "automation":
         assert decoded["helperInstalled"] is True and not decoded.get("decision_required"), decoded
         assert decoded["liveMode"] == 0 and not decoded["liveBlocked"], decoded
@@ -116,9 +129,6 @@ async def check(database_path, policy):
         assert decoded["error_pattern"] == "decision_required", decoded
         assert decoded["decisionRequiredOutcome"] is True, decoded
         assert decoded["decisions"], decoded
-    if policy in ["mode_only","session"]:
-        assert not decoded["liveBlocked"] and decoded["liveJournalCount"] == 0, decoded
-        assert decoded["liveMode"] == (2 if policy == "session" else 0), decoded
     (EVIDENCE/(policy+".json")).write_text(json.dumps(decoded,indent=2),encoding="utf-8")
     print(json.dumps({"policy": policy, "decoded": decoded}, ensure_ascii=False), flush=True)
 

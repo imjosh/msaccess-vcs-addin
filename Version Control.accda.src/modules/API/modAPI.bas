@@ -86,6 +86,8 @@ Public Function HandleRibbonCommand(strCommand As String, Optional strArgument A
     ' don't want it to be since that'd cause errors. To avoid this, we will ignore any
     ' commands while the current command is running.
     Static IsRunning As Boolean
+    Dim varResult As Variant
+    Dim dResult As Dictionary
 
     LogUnhandledErrors
     On Error GoTo ErrHandler
@@ -95,18 +97,20 @@ Public Function HandleRibbonCommand(strCommand As String, Optional strArgument A
         Exit Function
     End If
 
+    If APIDispatchBusy Then Exit Function
+    If ManualCommandRefused Then Exit Function
     IsRunning = True
 
     ' Make sure we are not attempting to run this from the current database when making
     ' changes to the add-in itself. (It will re-run the command through the add-in.)
     If RunningOnLocal() Then
-        RunInAddIn "HandleRibbonCommand", True, strCommand, strArgument
-        GoTo CleanUp
+        varResult = RunInAddIn("HandleRibbonCommand", True, strCommand, strArgument)
+        GoTo CheckResult
     End If
 
-    ' Ribbon commands are interactive by definition. Operation.Source is sticky,
-    ' so clear any value left behind by an earlier API/MCP call in this instance.
-    Operation.Source = eosUserInterface
+    Dim cPriorRequest As clsOperationRequest
+    Set cPriorRequest = IncomingOperationRequest
+    Set IncomingOperationRequest = CreateOperationRequest(eosUserInterface)
 
     ' If a function is not found, this will throw an error. It is up to the ribbon
     ' designer to ensure that the control IDs match public procedures in the VCS
@@ -115,18 +119,28 @@ Public Function HandleRibbonCommand(strCommand As String, Optional strArgument A
 
     ' Trim off control ID prefix when calling command
     If Len(strArgument) Then
-        CallByName VCS, Mid(strCommand, 4), VbMethod, strArgument
+        varResult = CallByName(VCS, Mid(strCommand, 4), VbMethod, strArgument)
     Else
-        CallByName VCS, Mid(strCommand, 4), VbMethod
+        varResult = CallByName(VCS, Mid(strCommand, 4), VbMethod)
     End If
 
+CheckResult:
+    HandleRibbonCommand = True
+    If VarType(varResult) = vbString Then
+        If Left$(CStr(varResult), 1) = "{" Then
+            Set dResult = ParseJson(CStr(varResult))
+            If dResult.Exists("success") Then HandleRibbonCommand = CBool(dResult("success"))
+        End If
+    End If
 CleanUp:
+    Set IncomingOperationRequest = cPriorRequest
     IsRunning = False
     Exit Function
 
 ErrHandler:
     ' An error occurred so we need to make it available for further attempts
     ' but do not handle the error.
+    Set IncomingOperationRequest = cPriorRequest
     IsRunning = False
 
     ' Re-throw
@@ -263,47 +277,36 @@ End Function
 ' Purpose   : Run a proceedure with optional parameters in the VCS add-in database.
 '---------------------------------------------------------------------------------------
 '
-Public Function RunInAddIn(strProcedure As String, blnUseTimer As Boolean, Optional varArg1 As Variant, Optional varArg2 As Variant)
-
+Public Function RunInAddIn(strProcedure As String, blnUseTimer As Boolean, Optional varArg1 As Variant, Optional varArg2 As Variant) As Variant
     Dim strLibName As String
     Dim strRunCmd As String
-
-    ' Make sure the add-in is loaded.
+    Dim cRequest As clsOperationRequest
+    If ManualCommandRefused Then
+        RunInAddIn = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+        Exit Function
+    End If
     If Not AddinLoaded Then LoadVCSAddIn
-
-    ' When running code from the add-in project itself, it gets a little
-    ' tricky because both the add-in and the currentdb have the same VBProject name.
-    ' This means we can't just call `Run "MSAccessVCS.*" because it will run in
-    ' the local project instead of the add-in. We can resolve this by using the
-    ' full path to the add-in library instead. (#593)
     If RunningOnLocal Then
         strLibName = GetRunCmdAddInFullLibName
     Else
         strLibName = PROJECT_NAME
     End If
-
-    ' See if we should run the command directly, or with an API timer callback.
-    ' (The API timer is helpful when you need to clear the call stack on the
-    '  current database before running the add-in code.)
     If blnUseTimer And Not RunningOnLocal Then
-        ' The dispatched procedure begins and owns its own root, so nothing here stages or
-        ' resumes the current one. A root that is still active when the callback fires
-        ' belongs to another caller: that caller's request is refused and logged, which is
-        ' far better than silently resuming an operation nobody holds a lease on.
-        SetTimer strProcedure, CStr(varArg1), CStr(varArg2)
+        Set cRequest = CreateOperationRequest(eosUserInterface)
+        ' The current database can contain an older project with the same module
+        ' names. A delayed Application.Run must return to this code database.
+        strRunCmd = FSO.BuildPath(FSO.GetParentFolderName(CodeProject.FullName), FSO.GetBaseName(CodeProject.FullName)) & "." & strProcedure
+        RunInAddIn = SetTimer(strRunCmd, CStr(Nz(varArg1, vbNullString)), CStr(Nz(varArg2, vbNullString)), , , , cRequest.ToJson)
     Else
-        ' Build the command to execute using Application.Run
         strRunCmd = strLibName & "." & strProcedure
-        ' Call based on arguments
         If Not IsMissing(varArg2) Then
-            Application.Run strRunCmd, varArg1, varArg2
+            RunInAddIn = Application.Run(strRunCmd, varArg1, varArg2)
         ElseIf Not IsMissing(varArg1) Then
-            Application.Run strRunCmd, varArg1
+            RunInAddIn = Application.Run(strRunCmd, varArg1)
         Else
-            Application.Run strRunCmd
+            RunInAddIn = Application.Run(strRunCmd)
         End If
     End If
-
 End Function
 
 
@@ -365,47 +368,15 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function API(strMethod As String, _
-    Optional varArg1 As Variant, _
-    Optional varArg2 As Variant, _
-    Optional varArg3 As Variant) As Variant
+    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant) As Variant
 
-    ' The function is called by Application.Run, which can be re-entrant. We really don't
-    ' want it to be, since a nested call would run against Operation state the outer call
-    ' owns. Refuse it, and say so in the return value rather than coming back Empty --
-    ' see RefuseReentrantCall for why silence was worse and why this is not an Err.Raise.
-    Static IsRunning As Boolean
-    Dim varResult As Variant
-    Dim strLibName As String
+    Dim colArgs As New Collection
+    Dim cRequest As clsOperationRequest
     Dim strRunCmd As String
-
-    SuppressErrorBreaks
-    LogUnhandledErrors
-    On Error GoTo ErrHandler
-
-    If IsRunning Then
-        API = RefuseReentrantCall(strMethod, "API", RefusalReason)
-        RestoreErrorBreaks
-        Exit Function
-    End If
-
-    IsRunning = True
-
-    ' Set operation source before any operations
-    Operation.Source = eosExternalAPI
-
-    ' Make sure we are not attempting to run this from the current database when making
-    ' changes to the add-in itself. (It will re-run the command through the add-in.)
-    ' Only redirect when the installed add-in is a *different* file than the one running:
-    ' where they are the same, the redirect re-enters this function and refuses itself.
-    ' See RedirectTargetIsSelf.
+    InitializeRequestErrors "API"
+    On Error GoTo Failed
     If RunningOnLocal() And Not RedirectTargetIsSelf() Then
-        ' When running from within the add-in database, we need to use the full path
-        ' to ensure we call the add-in version, not a local version.
-        strLibName = GetRunCmdAddInFullLibName
-        strRunCmd = strLibName & ".API"
-
-        ' Use Application.Run to call the add-in version, which will return the value
-        m_blnRedirecting = True
+        strRunCmd = GetRunCmdAddInFullLibName & ".API"
         If Not IsMissing(varArg3) Then
             API = Application.Run(strRunCmd, strMethod, varArg1, varArg2, varArg3)
         ElseIf Not IsMissing(varArg2) Then
@@ -415,50 +386,16 @@ Public Function API(strMethod As String, _
         Else
             API = Application.Run(strRunCmd, strMethod)
         End If
-        GoTo CleanUp
+        Exit Function
     End If
-
-    ' Use the VCS() function to get an instance (same pattern as HandleRibbonCommand)
-    ' This ensures we don't interfere with any staging of settings during a running operation
-    ' Use CallByName to invoke the method dynamically
-    ' Handle different numbers of arguments
-    ' Every parameter of a method reachable from here must be declared ByVal. These
-    ' arguments arrive as Variants, and CallByName cannot bind a Variant to a ByRef typed
-    ' parameter: it raises a type mismatch before the method runs a single line, which
-    ' reads to the caller as the method having done nothing.
-    If Not IsMissing(varArg3) Then
-        ' Three arguments
-        varResult = CallByName(VCS, strMethod, VbMethod, varArg1, varArg2, varArg3)
-    ElseIf Not IsMissing(varArg2) Then
-        ' Two arguments
-        varResult = CallByName(VCS, strMethod, VbMethod, varArg1, varArg2)
-    ElseIf Not IsMissing(varArg1) Then
-        ' One argument
-        varResult = CallByName(VCS, strMethod, VbMethod, varArg1)
-    Else
-        ' No arguments
-        varResult = CallByName(VCS, strMethod, VbMethod)
-    End If
-
-    ' Return the result (will be Empty for Subs)
-    API = varResult
-
-CleanUp:
-    IsRunning = False
-    m_blnRedirecting = False
-    RestoreErrorBreaks
+    If Not IsMissing(varArg1) Then colArgs.Add varArg1
+    If Not IsMissing(varArg2) Then colArgs.Add varArg2
+    If Not IsMissing(varArg3) Then colArgs.Add varArg3
+    Set cRequest = CreateOperationRequest(eosExternalAPI)
+    API = DispatchOperationRequest(cRequest, strMethod, colArgs)
     Exit Function
-
-ErrHandler:
-    ' An error occurred so we need to make it available for further attempts
-    ' but do not handle the error.
-    IsRunning = False
-    m_blnRedirecting = False
-    RestoreErrorBreaks
-
-    ' Re-throw
-    Err.Raise Err.Number, Err.Source, Err.Description, Err.HelpFile, Err.HelpContext
-
+Failed:
+    API = RefusalJson("api_error", Err.Description, False)
 End Function
 
 
@@ -472,138 +409,70 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
-    Optional varArg1 As Variant, Optional varArg2 As Variant) As String
+    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant) As String
 
-    ' The function is called by Application.Run, which can be re-entrant. We really don't
-    ' want it to be, since a nested call would run against Operation state the outer call
-    ' owns. Refuse it, and say so in the return value rather than coming back Empty --
-    ' see RefuseReentrantCall for why silence was worse and why this is not an Err.Raise.
-    Static IsRunning As Boolean
-    Dim varResult As Variant
-    Dim strLibName As String
+    Dim cRequest As clsOperationRequest
+    Dim colArgs As New Collection
+    Dim dResult As New Dictionary
+    Dim strRefusal As String
+    Dim strQueue As String
     Dim strRunCmd As String
-    Dim strJsonResult As String
-    Dim dResult As Dictionary
     Dim lngTimeoutMs As Long
-
-    SuppressErrorBreaks
-    LogUnhandledErrors
-    On Error GoTo ErrHandler
-
-    If IsRunning Then
-        ' Callers parse this return value as JSON, so the refusal has to arrive as JSON.
-        Set dResult = New Dictionary
-        dResult.Add "success", False
-        dResult.Add "error", RefuseReentrantCall(strMethod, "APIAsync", RefusalReason)
-        APIAsync = modJsonConverter.ConvertToJson(dResult)
-        RestoreErrorBreaks
-        Exit Function
-    End If
-
-    IsRunning = True
-
-    ' Set operation source - MCP if callback provided, otherwise external API
-    If Len(strCallbackInfo) > 0 Then
-        Operation.Source = eosMCPTool
-    Else
-        Operation.Source = eosExternalAPI
-    End If
-
-    ' Make sure we are not attempting to run this from the current database when making
-    ' changes to the add-in itself. (It will re-run the command through the add-in.)
-    ' Same self-dispatch guard as API -- see RedirectTargetIsSelf.
+    InitializeRequestErrors "APIAsync"
+    On Error GoTo Failed
     If RunningOnLocal() And Not RedirectTargetIsSelf() Then
-        ' When running from within the add-in database, we need to use the full path
-        ' to ensure we call the add-in version, not a local version.
-        strLibName = GetRunCmdAddInFullLibName
-        strRunCmd = strLibName & ".APIAsync"
-
-        ' Use Application.Run to call the add-in version
-        m_blnRedirecting = True
-        If Not IsMissing(varArg2) Then
+        strRunCmd = GetRunCmdAddInFullLibName & ".APIAsync"
+        If Not IsMissing(varArg3) Then
+            APIAsync = Application.Run(strRunCmd, strCallbackInfo, strMethod, varArg1, varArg2, varArg3)
+        ElseIf Not IsMissing(varArg2) Then
             APIAsync = Application.Run(strRunCmd, strCallbackInfo, strMethod, varArg1, varArg2)
         ElseIf Not IsMissing(varArg1) Then
             APIAsync = Application.Run(strRunCmd, strCallbackInfo, strMethod, varArg1)
         Else
             APIAsync = Application.Run(strRunCmd, strCallbackInfo, strMethod)
         End If
-        GoTo CleanUp
+        Exit Function
     End If
-
-    ' Determine if this is an async operation or should fall back to sync
-    Select Case strMethod
-        Case "Export", "FullExport", "ExportVBA", "Build", "BuildAs", "MergeBuild", "RunFilteredTests"
-            ' These are async operations - spawn via timer with callback support
-
-            ' Store callback info in registry for timer callback to retrieve
-            SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
-            MCPDebugLog "APIAsync: Method=" & strMethod & ", CallbackInfo length=" & Len(strCallbackInfo)
-            MCPDebugLog "APIAsync: CallbackInfo=" & Left$(strCallbackInfo, 200)
-
-            ' Determine timeout based on operation type
-            Select Case strMethod
-                Case "Export"
-                    lngTimeoutMs = 300000  ' 5 minutes
-                Case "FullExport"
-                    lngTimeoutMs = 600000  ' 10 minutes (full export takes longer)
-                Case "ExportVBA"
-                    lngTimeoutMs = 120000  ' 2 minutes
-                Case "Build", "BuildAs", "RunFilteredTests"
-                    lngTimeoutMs = 600000  ' 10 minutes
-                Case "MergeBuild"
-                    lngTimeoutMs = 300000  ' 5 minutes
-            End Select
-
-            ' Use timer to spawn async operation
-            ' The timer callback will read the callback info and start the operation
-            If Not IsMissing(varArg2) Then
-                SetTimer "APIAsyncOperation", strMethod, CStr(varArg1) & "|" & CStr(varArg2)
-            ElseIf Not IsMissing(varArg1) Then
-                SetTimer "APIAsyncOperation", strMethod, CStr(varArg1)
-            Else
-                SetTimer "APIAsyncOperation", strMethod, vbNullString
+    If Not IsMissing(varArg1) Then colArgs.Add varArg1
+    If Not IsMissing(varArg2) Then colArgs.Add varArg2
+    If Not IsMissing(varArg3) Then colArgs.Add varArg3
+    Set cRequest = CreateOperationRequest(IIf(Len(strCallbackInfo) > 0, eosMCPTool, eosExternalAPI), strCallbackInfo)
+    If APIDispatchBusy Then
+        APIAsync = RefusalJson("api_busy", T("Another API command is still running."), False)
+        Exit Function
+    End If
+    strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
+    If Len(strRefusal) > 0 Then
+        APIAsync = strRefusal
+        Exit Function
+    End If
+    Select Case LCase$(strMethod)
+        Case "export", "fullexport", "exportvba", "build", "buildas", "mergebuild", "runfilteredtests", "exportbytype", "importbytype", "exportobject", "importobject"
+            strRefusal = ClaimOperationRequest(cRequest)
+            If Len(strRefusal) > 0 Then
+                APIAsync = strRefusal
+                Exit Function
             End If
-
-            ' Return async response immediately
-            Set dResult = New Dictionary
-            dResult.Add "async", True
-            dResult.Add "timeout_ms", lngTimeoutMs
-            APIAsync = modJsonConverter.ConvertToJson(dResult)
-
+            strQueue = SetTimer("APIAsyncOperation", strMethod, ConvertToJson(colArgs), , , strCallbackInfo, cRequest.ToJson)
+            If Not TimerRequestSucceeded(strQueue) Then
+                APIAsync = strQueue
+                Exit Function
+            End If
+            lngTimeoutMs = 600000
+            If LCase$(strMethod) = "export" Or LCase$(strMethod) = "mergebuild" Then lngTimeoutMs = 300000
+            If LCase$(strMethod) = "exportvba" Then lngTimeoutMs = 120000
+            dResult("success") = True
+            dResult("async") = True
+            dResult("operation_id") = cRequest.PublicId
+            dResult("timeout_ms") = lngTimeoutMs
         Case Else
-            ' Fall back to sync API for quick operations
-            ' Call existing API function
-            If Not IsMissing(varArg2) Then
-                varResult = API(strMethod, varArg1, varArg2)
-            ElseIf Not IsMissing(varArg1) Then
-                varResult = API(strMethod, varArg1)
-            Else
-                varResult = API(strMethod)
-            End If
-
-            ' Return sync response
-            Set dResult = New Dictionary
-            dResult.Add "sync", True
-            dResult.Add "result", varResult
-            APIAsync = modJsonConverter.ConvertToJson(dResult)
+            dResult("sync") = True
+            dResult("result") = DispatchOperationRequest(cRequest, strMethod, colArgs)
     End Select
-
-CleanUp:
-    IsRunning = False
-    m_blnRedirecting = False
-    RestoreErrorBreaks
+    APIAsync = ConvertToJson(dResult)
     Exit Function
-
-ErrHandler:
-    ' An error occurred so we need to make it available for further attempts
-    ' but do not handle the error.
-    IsRunning = False
-    m_blnRedirecting = False
-    RestoreErrorBreaks
-
-    ' Re-throw
-    Err.Raise Err.Number, Err.Source, Err.Description, Err.HelpFile, Err.HelpContext
-
+Failed:
+    APIAsync = RefusalJson("api_error", Err.Description, False)
 End Function
 
 
@@ -723,3 +592,143 @@ End Sub
 Public Sub PreferFullPowerCore()
     PreferFullPowerCurrentProcess
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : DispatchOperationRequest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Install and restore typed incoming request context around method dispatch.
+'---------------------------------------------------------------------------------------
+'
+Public Function DispatchOperationRequest(ByVal cRequest As clsOperationRequest, _
+    ByVal strMethod As String, ByVal colArgs As Collection) As Variant
+
+    Dim cPrior As clsOperationRequest
+    Dim blnPriorBusy As Boolean
+    Dim strRefusal As String
+    Dim blnInspection As Boolean
+    Dim strError As String
+    blnInspection = RequestCanInspect(strMethod)
+    If APIDispatchBusy And Not blnInspection Then
+        DispatchOperationRequest = RefusalJson("api_busy", T("Another API command is still running."), False)
+        Exit Function
+    End If
+    If Not blnInspection Then
+        strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
+        If Len(strRefusal) > 0 Then
+            DispatchOperationRequest = strRefusal
+            Exit Function
+        End If
+    End If
+    Set cPrior = IncomingOperationRequest
+    blnPriorBusy = APIDispatchBusy
+    Set IncomingOperationRequest = cRequest
+    APIDispatchBusy = True
+    InitializeRequestErrors "DispatchOperationRequest"
+    On Error GoTo Failed
+    Select Case colArgs.Count
+        Case 0: DispatchOperationRequest = CallByName(VCS, strMethod, VbMethod)
+        Case 1: DispatchOperationRequest = CallByName(VCS, strMethod, VbMethod, RequestArgument(colArgs(1)))
+        Case 2: DispatchOperationRequest = CallByName(VCS, strMethod, VbMethod, RequestArgument(colArgs(1)), RequestArgument(colArgs(2)))
+        Case 3: DispatchOperationRequest = CallByName(VCS, strMethod, VbMethod, RequestArgument(colArgs(1)), RequestArgument(colArgs(2)), RequestArgument(colArgs(3)))
+        Case Else: DispatchOperationRequest = RefusalJson("unsupported_arguments", T("This method accepts at most three API arguments."), False)
+    End Select
+CleanUp:
+    Set IncomingOperationRequest = cPrior
+    APIDispatchBusy = blnPriorBusy
+    Exit Function
+Failed:
+    strError = Err.Description
+    DispatchOperationRequest = RefusalJson("api_error", strError, False)
+    Resume CleanUp
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RequestCanInspect
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Allow present read/cancel/retirement methods without admitting conflicting mutations.
+'---------------------------------------------------------------------------------------
+'
+Private Function RequestCanInspect(ByVal strMethod As String) As Boolean
+    Select Case LCase$(strMethod)
+        Case "listaddindialogs", "dismissaddindialog", "getlogcontent", "getvcsversion", "isdatabaseopen", "getprojectname", "isvbacompiled", "getoption", "getexportfolder", "setoperationpolicy", "clearoperationpolicy", "setinteractionmode"
+            RequestCanInspect = True
+    End Select
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : APIMCP
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Dispatch synchronous MCP work while retaining the supplied public operation ID.
+'---------------------------------------------------------------------------------------
+'
+Public Function APIMCP(ByVal strOperationId As String, ByVal strMethod As String, _
+    Optional ByVal varArg1 As Variant, Optional ByVal varArg2 As Variant, Optional ByVal varArg3 As Variant) As Variant
+
+    Dim cRequest As clsOperationRequest
+    Dim colArgs As New Collection
+    Dim strRunCmd As String
+    InitializeRequestErrors "APIMCP"
+    On Error GoTo Failed
+    If Len(strOperationId) = 0 Or Len(strOperationId) > 128 Or InStr(strOperationId, vbNullChar) > 0 Then
+        APIMCP = RefusalJson("invalid_operation_id", T("Operation IDs must contain 1 to 128 characters and no null characters."), False)
+        Exit Function
+    End If
+    If RunningOnLocal() And Not RedirectTargetIsSelf() Then
+        strRunCmd = GetRunCmdAddInFullLibName & ".APIMCP"
+        If Not IsMissing(varArg3) Then
+            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod, varArg1, varArg2, varArg3)
+        ElseIf Not IsMissing(varArg2) Then
+            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod, varArg1, varArg2)
+        ElseIf Not IsMissing(varArg1) Then
+            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod, varArg1)
+        Else
+            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod)
+        End If
+        Exit Function
+    End If
+    Set cRequest = CreateOperationRequest(eosMCPTool)
+    cRequest.PublicId = strOperationId
+    If Not IsMissing(varArg1) Then colArgs.Add varArg1
+    If Not IsMissing(varArg2) Then colArgs.Add varArg2
+    If Not IsMissing(varArg3) Then colArgs.Add varArg3
+    APIMCP = DispatchOperationRequest(cRequest, strMethod, colArgs)
+    Exit Function
+Failed:
+    APIMCP = RefusalJson("api_error", Err.Description, False)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RequestArgument
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Restore queued JSON arrays as typed VBA method arguments.
+'---------------------------------------------------------------------------------------
+'
+Private Function RequestArgument(ByVal varValue As Variant) As Variant
+    Dim varArray() As Variant
+    Dim lngIdx As Long
+    If IsObject(varValue) Then
+        If TypeName(varValue) = "Collection" Then
+            If varValue.Count = 0 Then
+                RequestArgument = Array()
+                Exit Function
+            End If
+            ReDim varArray(0 To varValue.Count - 1)
+            For lngIdx = 1 To varValue.Count
+                varArray(lngIdx - 1) = RequestArgument(varValue(lngIdx))
+            Next lngIdx
+            RequestArgument = varArray
+        Else
+            Set RequestArgument = varValue
+        End If
+    Else
+        RequestArgument = varValue
+    End If
+End Function

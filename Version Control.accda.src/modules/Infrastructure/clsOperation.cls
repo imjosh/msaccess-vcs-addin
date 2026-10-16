@@ -29,7 +29,11 @@ Private Const REG_KEY_ROOT_PROJECT As String = "RootProject"
 
 Public Heartbeat As Date
 Public Result As eOperationResult
-Public Source As eOperationSource
+Private m_intIdleSource As eOperationSource
+Private m_RootEmitter As clsMCP
+Private m_strAdmissionRefusal As String
+Private m_TransferOutcome As Dictionary
+Private m_PolicyComparisonRefusal As Dictionary
 
 ' Set by headless entry points before TryBeginRoot/Begin so Attended stays False even
 ' when Source is still eosUserInterface (Immediate Window callers).
@@ -38,6 +42,10 @@ Public ForceUnattended As Boolean
 
 Private Type udtRoot
     Token As String
+    PublicId As String
+    InitiatingSource As eOperationSource
+    Policy As eDecisionPolicy
+    CallbackInfo As String
     OperationType As eOperationType
     Attended As Boolean
     StartTime As Date
@@ -47,6 +55,7 @@ Private Type udtRoot
     ErrorTrapping As eVbeErrorTrapping
     Detached As Boolean
     Completed As Boolean
+    RebuildHandoffHold As Boolean
     PauseDepth As Long
     RuntimeError As String
     RuntimeErrorNumber As Long
@@ -89,13 +98,20 @@ Private m_lngCompletionFaultForTest As Long
 '           : operation's interaction state untouched and never shows a dialog.
 '---------------------------------------------------------------------------------------
 '
-Public Function TryBeginRoot(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk) As clsRootOperationLease
+Public Function TryBeginRoot(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk, _
+    Optional ByVal blnUnattended As Boolean = False, Optional ByVal intMode As Long = -1) As clsRootOperationLease
 
     Dim cLease As clsRootOperationLease
 
     If Not CanBeginRoot(intPolicy) Then Exit Function
 
-    InitializeRoot intType, intPolicy
+    Dim cRequest As clsOperationRequest
+    If IsSessionSingleton Then Set cRequest = IncomingOperationRequest
+    If cRequest Is Nothing Then Set cRequest = CreateOperationRequest(m_intIdleSource)
+    m_strAdmissionRefusal = ClaimOperationRequest(cRequest, IsSessionSingleton)
+    If Len(m_strAdmissionRefusal) > 0 Then Exit Function
+    InitializeRoot intType, intPolicy, cRequest, blnUnattended, intMode
+    cRequest.Consumed = True
     Set cLease = New clsRootOperationLease
     cLease.Init Me, m_Root.Token
     Set TryBeginRoot = cLease
@@ -113,13 +129,14 @@ End Function
 '           : timer, a form lifetime, or a procedure boundary instead.
 '---------------------------------------------------------------------------------------
 '
-Public Function Begin(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk) As Boolean
+Public Function Begin(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk, _
+    Optional ByVal blnUnattended As Boolean = False, Optional ByVal intMode As Long = -1) As Boolean
 
     Dim cLease As clsRootOperationLease
 
     ' Acquire into a local. A refused Begin returns Nothing, and storing that would
     ' release the lease of the root that is already running here, abandoning it.
-    Set cLease = TryBeginRoot(intType, intPolicy)
+    Set cLease = TryBeginRoot(intType, intPolicy, blnUnattended, intMode)
     If cLease Is Nothing Then Exit Function
 
     Set m_cSyncLease = cLease
@@ -145,6 +162,7 @@ Public Function ResumeRoot(strToken As String) As clsRootOperationLease
     If StrComp(m_Root.Token, strToken, vbBinaryCompare) <> 0 Then Exit Function
     If m_Root.AppHwnd <> hWndAccessApp Then Exit Function
 
+    EnsureRootEmitter
     m_Root.Detached = False
     m_Root.State = eosRunning
     SetErrorTrapping
@@ -444,12 +462,9 @@ Public Property Get Status() As eOperationState
     ' or a form closing) that can legitimately run past the timeout and that we have
     ' no way to pulse through. Expiring it there would strand the root: EndPauseScope
     ' only restores a root it still finds staged.
-    If m_Root.State <> eosReady And m_Root.PauseDepth = 0 Then
+    If m_Root.State <> eosReady And m_Root.PauseDepth = 0 And Not m_Root.RebuildHandoffHold Then
         If DateAdd("s", HEARTBEAT_TIMEOUT_SECONDS, Me.Heartbeat) < Now Then
-            m_Root.State = eosReady
-            Me.Result = eorTimeout
-            Scope.ReleaseOperationScopes
-            RestoreUserErrorTrapping
+            FinishRootInternal eorTimeout
         End If
     End If
     Status = m_Root.State
@@ -529,8 +544,10 @@ End Property
 
 Private Function CanBeginRoot(Optional ByVal intPolicy As eDecisionPolicy = edpAsk) As Boolean
 
-    Select Case m_Root.State
+    m_strAdmissionRefusal = vbNullString
+    Select Case Me.Status
         Case eosRunning, eosStaged
+            m_strAdmissionRefusal = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
             ReportRefusal T("Another Operation Already Running"), _
                 T("Please complete the current operation before beginning a new one."), _
                 (intPolicy <> edpAsk)
@@ -560,29 +577,42 @@ Private Sub ReportRefusal(strTitle As String, strMessage As String, Optional ByV
     If IsSessionSingleton _
         And Scope.InteractionMode = eimNormal _
         And Not blnQuiet _
-        And Not (Me.AutomationSource Or Me.ForceUnattended) Then
+        And Not (Me.AutomationSource Or Me.ForceUnattended) _
+        And RequestSource = eosUserInterface Then
         MsgBox2 strTitle, strMessage, , vbExclamation
     Else
-        LogDiagnostic strTitle & ": " & strMessage, "clsOperation.CanBeginRoot"
+        If IsSessionSingleton Then
+            SysCmd acSysCmdSetStatus, strTitle & ": " & strMessage
+        Else
+            Debug.Print strTitle & ": " & strMessage
+        End If
     End If
 
 End Sub
 
 
-Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy As eDecisionPolicy = edpAsk)
+Private Sub InitializeRoot(intType As eOperationType, ByVal intPolicy As eDecisionPolicy, _
+    ByVal cRequest As clsOperationRequest, ByVal blnUnattended As Boolean, ByVal intMode As Long)
 
     m_Root.Token = NewRootToken()
+    m_Root.PublicId = cRequest.PublicId
+    m_Root.InitiatingSource = cRequest.Source
+    m_Root.Policy = intPolicy
+    m_Root.CallbackInfo = cRequest.CallbackInfo
     m_Root.OperationType = intType
-    m_Root.Attended = Not (Me.AutomationSource Or Me.ForceUnattended)
+    m_Root.Attended = Not (Me.AutomationSource Or Me.ForceUnattended Or blnUnattended)
     m_Root.StartTime = Now
     m_Root.FinishTime = 0
     m_Root.State = eosRunning
     m_Root.Detached = False
     m_Root.Completed = False
+    m_Root.RebuildHandoffHold = False
     m_Root.PauseDepth = 0
     m_Root.AppHwnd = hWndAccessApp
     m_Root.RuntimeError = vbNullString
     m_Root.RuntimeErrorNumber = 0
+    Set m_TransferOutcome = Nothing
+    Set m_PolicyComparisonRefusal = Nothing
 
     Me.ErrorLevel = eelNoError
     Me.Result = eorUnknown
@@ -593,15 +623,17 @@ Private Sub InitializeRoot(intType As eOperationType, Optional ByVal intPolicy A
     ' saves must not find the previous run's path still set.
     If intType = eotTestRun And IsSessionSingleton Then TestRunner.ClearLastResultsPath
 
-    ' The policy scope opens only now that the root is granted. Finish closes it, and
-    ' UpdateRegistry saves it so RestoreFromRegistry can reopen it. Under a caller-owned
-    ' session policy the root still opens its own scope, with that policy, so its
-    ' blocked flag and decisions start empty and do not carry into the next root.
-    ' Mode-only noninteractive callers need the same ownership even without a frame.
+    ' Every root owns a fresh journal. An omitted policy never inherits activation.
     If intPolicy <> edpAsk Then
         Scope.OpenScope eimNonInteractive, intPolicy, True
-    ElseIf Scope.InteractionMode = eimNonInteractive Or Scope.InNonInteractiveScope Then
-        Scope.OpenScope eimNonInteractive, Scope.DecisionPolicy, True
+    Else
+        If intMode < 0 Then intMode = Scope.InteractionMode
+        If intMode = eimNonInteractive Then intMode = eimNormal
+        Scope.OpenScope intMode, edpAsk, True
+    End If
+    If IsSessionSingleton Then
+        Set m_RootEmitter = MCP
+        m_RootEmitter.RegisterCallback m_Root.CallbackInfo
     End If
 
     SetErrorTrapping
@@ -634,6 +666,9 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     ' An unresolved prompt is not a successful or merely cancelled run.
     If Not ApplyBlockedResult() Then
         If intResult > eorUnknown Then Me.Result = intResult
+        If Me.Result = eorUnknown Then
+            Me.Result = IIf(Me.ErrorLevel >= eelError, eorFailed, eorSuccess)
+        End If
     End If
 
     ' Claim completion before any code that can yield or fail. Cleanup below is
@@ -641,10 +676,25 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     m_Root.Completed = True
     m_Root.State = eosReady
     m_Root.FinishTime = Now
-    If IsSessionSingleton Then Set cCallback = MCP
+    EnsureRootEmitter
+    Set cCallback = m_RootEmitter
     Set m_LastDecisions = Scope.Decisions
 
     Set dExtra = New Dictionary
+    If Not m_TransferOutcome Is Nothing Then
+        For Each varKey In m_TransferOutcome.Keys
+            dExtra.Add varKey, m_TransferOutcome(varKey)
+        Next varKey
+    End If
+    If Not m_PolicyComparisonRefusal Is Nothing Then
+        For Each varKey In m_PolicyComparisonRefusal.Keys
+            If dExtra.Exists(varKey) Then dExtra.Remove varKey
+            dExtra.Add varKey, m_PolicyComparisonRefusal(varKey)
+        Next varKey
+    End If
+    AddOperationIdentity dExtra, Me
+    dExtra("error_level") = Me.ErrorLevel
+    dExtra("success") = (Me.Result = eorSuccess)
     dExtra("log_path") = Log.SavedLogFilePath
     If m_Root.OperationType = eotTestRun Then
         If Len(TestRunner.LastResultsPath) > 0 Then
@@ -683,25 +733,25 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     Select Case Me.Result
         Case eorSuccess
             strType = "complete"
-            strMessage = "Operation completed successfully"
+            strMessage = T("Operation completed successfully")
         Case eorFailed
             strType = "error"
-            strMessage = "Operation failed"
+            strMessage = T("Operation failed")
             If Len(m_Root.RuntimeError) > 0 Then strMessage = m_Root.RuntimeError
             If dExtra.Exists("error") Then strMessage = dExtra("error")
         Case eorCanceled
             strType = "cancelled"
-            strMessage = "Operation was cancelled"
+            strMessage = T("Operation was cancelled")
         Case eorTimeout
             strType = "error"
-            strMessage = "Operation timed out"
+            strMessage = T("Operation timed out")
         Case eorDecisionRequired
             strType = "error"
             SetDecisionRequiredOutcome dExtra, m_LastDecisions
             strMessage = dExtra("error")
         Case Else
             strType = "complete"
-            strMessage = "Operation completed"
+            strMessage = T("Operation completed")
     End Select
     If strType <> "complete" Then dExtra("success") = False
 
@@ -745,9 +795,12 @@ CleanUp:
     Set m_cSyncLease = Nothing
     If m_LastDecisions Is Nothing Then Set m_LastDecisions = Scope.Decisions
     Scope.ReleaseOperationScopes
+    If IsSessionSingleton Then ReleaseTimerReservation m_Root.Token
+    Set m_RootEmitter = Nothing
     Me.ForceUnattended = False
     Scope.InteractionMode = eimNormal
     m_Root.Token = vbNullString
+    m_Root.RebuildHandoffHold = False
     m_Root.PauseDepth = 0
     m_Root.Detached = False
     UpdateRegistry
@@ -775,7 +828,7 @@ End Sub
 
 
 Private Function NewRootToken() As String
-    NewRootToken = Format$(Now, "yyyymmddhhnnss") & "_" & CStr(Timer * 1000000@)
+    NewRootToken = NewOperationIdentity()
 End Function
 
 
@@ -814,6 +867,14 @@ Private Sub UpdateRegistry()
         CheckSetting "ErrorTrapping", m_Root.ErrorTrapping
         CheckSetting REG_KEY_ROOT_TOKEN, m_Root.Token
         CheckSetting REG_KEY_ROOT_TYPE, m_Root.OperationType
+        CheckSetting "PublicOperationId", m_Root.PublicId
+        CheckSetting "InitiatingSource", m_Root.InitiatingSource
+        CheckSetting "Attended", m_Root.Attended
+        CheckSetting "RequestPolicy", m_Root.Policy
+        CheckSetting "CallbackInfo", m_Root.CallbackInfo
+        CheckSetting "RebuildHandoffHold", m_Root.RebuildHandoffHold
+        CheckSetting "DecisionJournal", ConvertToJson(Scope.Decisions)
+        CheckSetting "DecisionBlocked", Scope.Blocked
         CheckSetting REG_KEY_ROOT_PROJECT, CodeProject.FullName
         CheckSetting "InteractionMode", Scope.InteractionMode
         CheckSetting "DecisionPolicy", Scope.DecisionPolicy
@@ -830,7 +891,8 @@ End Sub
 
 Private Function RestoreFromRegistry() As Boolean
 
-    If CanAdoptRegistryState(ReadReg("AppHwnd"), ReadReg("Heartbeat"), ReadReg(REG_KEY_ROOT_PROJECT)) Then
+    If CanAdoptRegistryState(ReadReg("AppHwnd"), ReadReg("Heartbeat"), ReadReg(REG_KEY_ROOT_PROJECT), _
+        (ReadReg("RebuildHandoffHold") = "True")) Then
         ' The heartbeat came from the same registry value the timeout check just
         ' accepted; without it Status would see a zero heartbeat and report the
         ' restored operation as timed out.
@@ -843,8 +905,15 @@ Private Function RestoreFromRegistry() As Boolean
         m_Root.ErrorTrapping = CInt(ReadReg("ErrorTrapping"))
         m_Root.Token = ReadReg(REG_KEY_ROOT_TOKEN)
         m_Root.OperationType = Val(ReadReg(REG_KEY_ROOT_TYPE))
+        m_Root.PublicId = ReadReg("PublicOperationId")
+        m_Root.InitiatingSource = Val(ReadReg("InitiatingSource"))
+        m_Root.Attended = (ReadReg("Attended") = "True")
+        m_Root.Policy = Val(ReadReg("RequestPolicy"))
+        m_Root.CallbackInfo = ReadReg("CallbackInfo")
+        m_Root.RebuildHandoffHold = (ReadReg("RebuildHandoffHold") = "True")
         m_Root.Completed = False
         RestoreScopeFromRegistry
+        Scope.RestoreJournal ReadReg("DecisionJournal"), (ReadReg("DecisionBlocked") = "True")
         RestoreFromRegistry = True
     End If
 
@@ -865,11 +934,13 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Friend Function CanAdoptRegistryState(ByVal strAppHwnd As String, ByVal strHeartbeat As String, _
-    ByVal strProject As String) As Boolean
+    ByVal strProject As String, Optional ByVal blnRebuildHandoffHold As Boolean = False) As Boolean
 
     If strAppHwnd <> CStr(hWndAccessApp) Then Exit Function
     If Not IsDate(strHeartbeat) Then Exit Function
-    If DateAdd("s", HEARTBEAT_TIMEOUT_SECONDS, CDate(strHeartbeat)) <= Now Then Exit Function
+    If Not blnRebuildHandoffHold Then
+        If DateAdd("s", HEARTBEAT_TIMEOUT_SECONDS, CDate(strHeartbeat)) <= Now Then Exit Function
+    End If
     CanAdoptRegistryState = (StrComp(strProject, CodeProject.FullName, vbTextCompare) = 0)
 
 End Function
@@ -1077,6 +1148,7 @@ Public Sub RecordDecision(ByVal cRecord As clsDecisionRecord)
 
     Scope.RecordDecision cRecord
     ApplyBlockedResult
+    UpdateRegistry
 
 End Sub
 
@@ -1145,3 +1217,219 @@ Private Sub Class_Initialize()
     End If
     m_Root.AppHwnd = Application.hWndAccessApp
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : Source
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Read captured owner source or configure only an idle direct caller.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get Source() As eOperationSource
+    If Len(m_Root.Token) > 0 Then
+        Source = m_Root.InitiatingSource
+    ElseIf IsSessionSingleton And Not IncomingOperationRequest Is Nothing Then
+        Source = RequestSource
+    Else
+        Source = m_intIdleSource
+    End If
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : Source
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Read captured owner source or configure only an idle direct caller.
+'---------------------------------------------------------------------------------------
+'
+Public Property Let Source(ByVal intSource As eOperationSource)
+    ' Compatibility for internal callers/tests. Dispatch uses its own request object.
+    If IsActive Then Exit Property
+    m_intIdleSource = intSource
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PublicId
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Return the stable admitted public identity independently of callbacks.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get PublicId() As String
+    PublicId = m_Root.PublicId
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PolicyName
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Report the captured policy, including an explicitly absent policy.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get PolicyName() As String
+    PolicyName = OperationPolicyName(m_Root.Policy)
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SourceLabel
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Report the captured initiating source for public metadata.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get SourceLabel() As String
+    Select Case m_Root.InitiatingSource
+        Case eosMCPTool: SourceLabel = "mcp"
+        Case eosExternalAPI: SourceLabel = "api"
+        Case Else: SourceLabel = "user_interface"
+    End Select
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : AdmissionRefusal
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Return the last request-local root-admission refusal.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get AdmissionRefusal() As String
+    AdmissionRefusal = m_strAdmissionRefusal
+    If Len(AdmissionRefusal) = 0 Then AdmissionRefusal = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetTransferOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Retain completed/preserved transfer counts for final callbacks.
+'---------------------------------------------------------------------------------------
+'
+Public Sub SetTransferOutcome(ByVal dTransfer As Dictionary)
+    Dim varKey As Variant
+    Set m_TransferOutcome = New Dictionary
+    If dTransfer Is Nothing Then Exit Sub
+    For Each varKey In dTransfer.Keys
+        Select Case CStr(varKey)
+            Case "success", "decisions", "operation_id", "type", "message", "decision_policy", "initiating_source", "error_level"
+                ' The final operation, rather than a component, owns these fields.
+            Case Else
+                m_TransferOutcome.Add varKey, dTransfer(varKey)
+        End Select
+    Next varKey
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RestoreRootInteraction
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Restore launcher interaction only while its exact root is retained.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RestoreRootInteraction(ByVal strToken As String, ByVal intMode As eInteractionMode)
+    If Not RootLeaseIsActive(strToken) Then Exit Sub
+    Scope.InteractionMode = intMode
+    UpdateRegistry
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : EnsureRootEmitter
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Recreate callback registration only for the matching resumed owner.
+'---------------------------------------------------------------------------------------
+'
+Private Sub EnsureRootEmitter()
+    If Not IsSessionSingleton Then Exit Sub
+    If Not m_RootEmitter Is Nothing Then Exit Sub
+    Set m_RootEmitter = MCP
+    m_RootEmitter.RegisterCallback m_Root.CallbackInfo
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RestorePersistedRootForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Restore owned registry state on a private disposable probe instance.
+'---------------------------------------------------------------------------------------
+'
+Friend Function RestorePersistedRootForTest() As Boolean
+    RestorePersistedRootForTest = RestoreFromRegistry()
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordPolicyComparisonRefusal
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Retain specific comparison diagnostics across generic transfer summaries.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordPolicyComparisonRefusal(ByVal dRefusal As Dictionary)
+    Dim varKey As Variant
+    Set m_PolicyComparisonRefusal = New Dictionary
+    For Each varKey In dRefusal.Keys
+        m_PolicyComparisonRefusal.Add varKey, dRefusal(varKey)
+    Next varKey
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PolicyComparisonRefusal
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Expose the owned comparison refusal for synchronous final results.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get PolicyComparisonRefusal() As Dictionary
+    Set PolicyComparisonRefusal = m_PolicyComparisonRefusal
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TransferOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Expose the current owned transfer outcome to final-result assembly.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get TransferOutcome() As Dictionary
+    Set TransferOutcome = m_TransferOutcome
+End Property
+
+' A launched helper can still act after a handoff or quit failure. Heartbeat expiry
+' cannot prove otherwise. Recovery must explicitly complete this same owned root.
+
+'---------------------------------------------------------------------------------------
+' Procedure : RetainRebuildHandoff
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Prevent heartbeat expiry from releasing a launched helper reservation.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RetainRebuildHandoff(ByVal strToken As String)
+    If Not RootLeaseIsActive(strToken) Then Exit Sub
+    m_Root.RebuildHandoffHold = True
+    UpdateRegistry
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RebuildHandoffHeld
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Report a root retained pending explicit rebuild recovery.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get RebuildHandoffHeld() As Boolean
+    RebuildHandoffHeld = m_Root.RebuildHandoffHold
+End Property

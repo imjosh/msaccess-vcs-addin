@@ -187,11 +187,24 @@ Public Property Get LastResultsPath() As String
 End Property
 
 
-' A runner failure belongs to the run, rather than to an individual test.
+'---------------------------------------------------------------------------------------
+' Procedure : RunError
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Expose a failure affecting the whole test run.
+'---------------------------------------------------------------------------------------
+'
 Public Property Get RunError() As String
     RunError = this.RunError
 End Property
 
+'---------------------------------------------------------------------------------------
+' Procedure : RunErrorPattern
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Expose the machine-readable classification of a run failure.
+'---------------------------------------------------------------------------------------
+'
 Public Property Get RunErrorPattern() As String
     RunErrorPattern = this.RunErrorPattern
 End Property
@@ -682,6 +695,41 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : CompileFailureForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Inject a one-use compile refusal for disposable runner tests.
+'---------------------------------------------------------------------------------------
+'
+Friend Property Let CompileFailureForTest(ByVal blnFail As Boolean)
+    m_blnCompileFailureForTest = blnFail
+End Property
+
+'---------------------------------------------------------------------------------------
+' Procedure : ResultsFileForTest
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Override the next results destination for disposable runner tests.
+'---------------------------------------------------------------------------------------
+'
+Friend Property Let ResultsFileForTest(ByVal strPath As String)
+    m_strResultsFileForTest = strPath
+End Property
+
+'---------------------------------------------------------------------------------------
+' Procedure : CompileCheckFailed
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Consume the test seam and inspect the native compilation state.
+'---------------------------------------------------------------------------------------
+'
+Private Function CompileCheckFailed() As Boolean
+    CompileCheckFailed = m_blnCompileFailureForTest Or Not Application.IsCompiled
+    m_blnCompileFailureForTest = False
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : InvokeGlobalTestSetup
 ' Author    : Adam Waller
 ' Date      : 6/2/2026
@@ -689,20 +737,6 @@ End Function
 '           : No-op when the procedure is absent. Hook errors are logged and non-fatal.
 '---------------------------------------------------------------------------------------
 '
-Friend Property Let CompileFailureForTest(ByVal blnFail As Boolean)
-    m_blnCompileFailureForTest = blnFail
-End Property
-
-Friend Property Let ResultsFileForTest(ByVal strPath As String)
-    m_strResultsFileForTest = strPath
-End Property
-
-Private Function CompileCheckFailed() As Boolean
-    CompileCheckFailed = m_blnCompileFailureForTest Or Not Application.IsCompiled
-    m_blnCompileFailureForTest = False
-End Function
-
-
 Public Sub InvokeGlobalTestSetup()
     InvokeOptionalGlobalHook GlobalTestSetupProc
 End Sub
