@@ -14,7 +14,9 @@ Option Private Module
 
 
 Public Sub TestParseDecisionPolicyNames()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim intPolicy As eDecisionPolicy
 
     TestAssert ParseDecisionPolicy("block", intPolicy), "block is a policy"
@@ -30,11 +32,21 @@ Public Sub TestParseDecisionPolicyNames()
     TestAssert Not ParseDecisionPolicy("accept_all", intPolicy), "unknown policy is rejected"
     TestAssert Not ParseDecisionPolicy("", intPolicy), "empty policy is rejected"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestParseDecisionPolicyNames " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestPolicyNamesRoundTripThroughTheTable()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim intPolicy As eDecisionPolicy
     Dim varName As Variant
 
@@ -48,11 +60,21 @@ Public Sub TestPolicyNamesRoundTripThroughTheTable()
     TestAssert ConflictResolutionName(edpPreferSource) = "import_source", "prefer_source reports the import transfer"
     TestAssert ConflictResolutionName(edpSkip) = "keep_database", "other policies keep the database object"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestPolicyNamesRoundTripThroughTheTable " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestDecisionWireValuesAreUnchanged()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     ' Pinned to literals on purpose: these strings are the wire contract.
     TestAssert DECISION_REQUIRED = "decision_required", "decision_required"
     TestAssert ERR_DECISION_REQUIRED = "decision_required", "the error pattern shares it"
@@ -62,11 +84,21 @@ Public Sub TestDecisionWireValuesAreUnchanged()
     TestAssert DECISION_BLOCKED = "blocked", "blocked"
     TestAssert DECISION_KEEP_DATABASE = "keep_database", "keep_database"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestDecisionWireValuesAreUnchanged " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestNewDecisionCarriesEveryField()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cRecord As clsDecisionRecord
 
     Set cRecord = NewDecision("applied", "Title", "Message", "keep_database", "detail")
@@ -77,11 +109,21 @@ Public Sub TestNewDecisionCarriesEveryField()
     TestAssert cRecord.Detail = "detail", "the detail is carried"
     TestAssert NewDecision("acknowledged", "T", "M", "acknowledged").Detail = vbNullString, "the detail is optional"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestNewDecisionCarriesEveryField " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestOkOnlyPromptIsAcknowledged()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOutcome As clsPromptOutcome
 
     Set cOutcome = ResolveNonInteractivePrompt(vbOKOnly + vbInformation, edpBlock)
@@ -89,11 +131,21 @@ Public Sub TestOkOnlyPromptIsAcknowledged()
     TestAssert cOutcome.Result = vbOK, "OK-only returns OK"
     TestAssert cOutcome.Resolution = "acknowledged", "OK-only is acknowledged"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestOkOnlyPromptIsAcknowledged " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestBlockYesNoDoesNotApprove()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOutcome As clsPromptOutcome
 
     Set cOutcome = ResolveNonInteractivePrompt(vbYesNo + vbQuestion, edpBlock)
@@ -102,11 +154,21 @@ Public Sub TestBlockYesNoDoesNotApprove()
     TestAssert cOutcome.Result <> vbYes, "block does not approve"
     TestAssert cOutcome.Resolution = "decision_required", "resolution is decision_required"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestBlockYesNoDoesNotApprove " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestBlockOkCancelDoesNotApprove()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOutcome As clsPromptOutcome
 
     Set cOutcome = ResolveNonInteractivePrompt(vbOKCancel + vbExclamation, edpBlock)
@@ -114,11 +176,21 @@ Public Sub TestBlockOkCancelDoesNotApprove()
     TestAssert cOutcome.Result = vbCancel, "block returns Cancel"
     TestAssert cOutcome.Result <> vbOK, "block does not click OK"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestBlockOkCancelDoesNotApprove " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestDeclineYesNoIsApplied()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOutcome As clsPromptOutcome
 
     Set cOutcome = ResolveNonInteractivePrompt(vbYesNo, edpDecline)
@@ -126,44 +198,84 @@ Public Sub TestDeclineYesNoIsApplied()
     TestAssert cOutcome.Result = vbNo, "decline answers No"
     TestAssert cOutcome.Resolution = "declined", "resolution is declined"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestDeclineYesNoIsApplied " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestConflictPolicyDoesNotAnswerGenericPrompt()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOutcome As clsPromptOutcome
 
     Set cOutcome = ResolveNonInteractivePrompt(vbYesNo, edpPreferSource)
     TestAssert cOutcome.Blocked, "prefer_source does not answer a generic confirmation"
     TestAssert cOutcome.Result = vbNo, "generic confirmation stays unapproved"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestConflictPolicyDoesNotAnswerGenericPrompt " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestAbortRetryDeclineStops()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOutcome As clsPromptOutcome
 
     Set cOutcome = ResolveNonInteractivePrompt(vbAbortRetryIgnore, edpDecline)
     TestAssert Not cOutcome.Blocked, "decline covers Abort/Retry/Ignore"
     TestAssert cOutcome.Result = vbAbort, "decline aborts rather than retrying"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestAbortRetryDeclineStops " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestConflictActionForPolicy()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     TestAssert ConflictActionForPolicy(edpPreferSource) = ercOverwrite, "prefer_source overwrites from source"
     TestAssert ConflictActionForPolicy(edpPreferDatabase) = ercSkip, "prefer_database keeps the database object"
     TestAssert ConflictActionForPolicy(edpSkip) = ercSkip, "skip keeps the database object"
     TestAssert ConflictActionForPolicy(edpDecline) = ercSkip, "decline does not overwrite"
     TestAssert ConflictActionForPolicy(edpBlock) = ercNone, "block does not pick a resolution"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestConflictActionForPolicy " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRefusalJsonShape()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim dResult As Dictionary
 
     Set dResult = ParseJson(RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False))
@@ -175,11 +287,21 @@ Public Sub TestRefusalJsonShape()
     Set dResult = ParseJson(RefusalJson(vbNullString, "not started", False))
     TestAssert Not dResult.Exists("error_pattern"), "an empty pattern is left out"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestRefusalJsonShape " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestStartedJsonIsNotAFinalResult()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim dResult As Dictionary
 
     Set dResult = ParseJson(StartedJson())
@@ -188,11 +310,22 @@ Public Sub TestStartedJsonIsNotAFinalResult()
     TestAssert Not dResult.Exists("error_pattern"), "a start result has no error pattern"
     TestAssert Not dResult.Exists("decisions"), "a start result has no decisions"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestStartedJsonIsNotAFinalResult " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRuntimeErrorJsonEncodesAnyText()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
+    Dim blnBlockedSaved As Boolean
     Dim dResult As Dictionary
     Dim strText As String
     Dim blnBlocked As Boolean
@@ -200,6 +333,7 @@ Public Sub TestRuntimeErrorJsonEncodesAnyText()
     ' RuntimeErrorJson reads the session operation's blocked flag. Clear it for
     ' the call so the result does not depend on the host run, then restore it.
     blnBlocked = Operation.DecisionBlocked
+    blnBlockedSaved = True
     Operation.DecisionBlocked = False
     strText = "bad ""quote"" \ back" & vbCrLf & "tab" & vbTab & "bell" & Chr$(7)
     Set dResult = ParseJson(RuntimeErrorJson(strText, 5))
@@ -208,11 +342,23 @@ Public Sub TestRuntimeErrorJsonEncodesAnyText()
     TestAssert dResult("error") = strText, "the error text survives encoding"
     TestAssert dResult("errorNumber") = 5, "the error number is included"
 
+CleanUp:
+    On Error Resume Next
+    If blnBlockedSaved Then Operation.DecisionBlocked = blnBlocked
+    If Err.Number <> 0 Then TestAssert False, "TestRuntimeErrorJsonEncodesAnyText cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRuntimeErrorJsonEncodesAnyText " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestMCPCallBeforeRootKeepsLoggedErrorsOutOfBoxes()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     ' Log.Error skips its message box only in the gap between an MCP call
     ' registering its callback and its root beginning.
     TestAssert MCPCallBeforeRoot(True, False), "MCP registered, no root yet"
@@ -220,11 +366,21 @@ Public Sub TestMCPCallBeforeRootKeepsLoggedErrorsOutOfBoxes()
     TestAssert Not MCPCallBeforeRoot(False, False), "no MCP call: interactive rules apply"
     TestAssert Not MCPCallBeforeRoot(False, True), "a root without MCP is unchanged"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestMCPCallBeforeRootKeepsLoggedErrorsOutOfBoxes " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestMainFormWaitsOnlyForARootItCanCancel()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     ' Closing frmVCSMain asks to cancel only a root that closing can stop. A test
     ' run counts only while this project's runner is driving it.
     TestAssert MainFormWaitsForRoot(eosRunning, eotExport, False), "a running export waits"
@@ -235,11 +391,21 @@ Public Sub TestMainFormWaitsOnlyForARootItCanCancel()
     TestAssert Not MainFormWaitsForRoot(eosStaged, eotExport, False), "a paused root does not block the close"
     TestAssert Not MainFormWaitsForRoot(eosReady, eotTestRun, True), "no root, no wait"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestMainFormWaitsOnlyForARootItCanCancel " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestYesNoCancelReturnsCancelUnderEveryPolicyAndStyle()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim varPolicy As Variant
     Dim varButtons As Variant
     Dim cOutcome As clsPromptOutcome
@@ -258,11 +424,21 @@ Public Sub TestYesNoCancelReturnsCancelUnderEveryPolicyAndStyle()
         Next varButtons
     Next varPolicy
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestYesNoCancelReturnsCancelUnderEveryPolicyAndStyle " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestDirectionAwareConflictPolicyTable()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim varPolicy As Variant
     Dim lngIndex As Long
     Dim varPolicies As Variant
@@ -293,4 +469,13 @@ Public Sub TestDirectionAwareConflictPolicyTable()
     TestAssert ConflictResolutionName(edpPreferSource, eatExport) = "keep_source", "export preservation names source"
     TestAssert ConflictResolutionName(edpPreferDatabase, eatExport) = "export_database", "export transfer names database"
     TestAssert ConflictResolutionName(edpPreferDatabase, eatImport) = "keep_database", "import preservation names database"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestDirectionAwareConflictPolicyTable " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub

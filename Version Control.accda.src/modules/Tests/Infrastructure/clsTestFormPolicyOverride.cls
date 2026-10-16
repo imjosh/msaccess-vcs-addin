@@ -23,6 +23,11 @@ Option Explicit
 '@Tag("unit")
 
 
+Private m_frmSaved As Form_frmVCSMain
+Private m_intSavedPolicy As eDecisionPolicy
+Private m_blnPolicySaved As Boolean
+
+
 ' The form is left loaded and hidden, as Build and MergeBuild leave it. Closing it
 ' would be refused while the run hosting these tests holds a root.
 Private Function MainForm() As Form_frmVCSMain
@@ -30,6 +35,11 @@ Private Function MainForm() As Form_frmVCSMain
         DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     End If
     Set MainForm = Form_frmVCSMain
+    If Not m_blnPolicySaved Then
+        Set m_frmSaved = Form_frmVCSMain
+        m_intSavedPolicy = m_frmSaved.intDecisionPolicy
+        m_blnPolicySaved = True
+    End If
 End Function
 
 
@@ -47,7 +57,9 @@ End Sub
 
 
 Public Sub TestOverrideAppliesThenRestoresTheFoundValue()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim frm As Form_frmVCSMain
     Dim intFound As eDecisionPolicy
     Dim cOverride As clsFormPolicyOverride
@@ -65,11 +77,24 @@ Public Sub TestOverrideAppliesThenRestoresTheFoundValue()
     TestAssert frm.intDecisionPolicy = edpPreferSource, "a second restore does nothing"
     frm.intDecisionPolicy = intFound
 
+CleanUp:
+    On Error Resume Next
+    Set cOverride = Nothing
+    RestoreSavedFormPolicy
+    If Err.Number <> 0 Then TestAssert False, "TestOverrideAppliesThenRestoresTheFoundValue cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestOverrideAppliesThenRestoresTheFoundValue " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestOverrideRestoredWhenTheGuardIsReleased()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim frm As Form_frmVCSMain
     Dim intFound As eDecisionPolicy
     Dim cOverride As clsFormPolicyOverride
@@ -84,29 +109,62 @@ Public Sub TestOverrideRestoredWhenTheGuardIsReleased()
     TestAssert frm.intDecisionPolicy = edpAsk, "releasing the guard restores the policy"
     frm.intDecisionPolicy = intFound
 
+CleanUp:
+    On Error Resume Next
+    Set cOverride = Nothing
+    RestoreSavedFormPolicy
+    If Err.Number <> 0 Then TestAssert False, "TestOverrideRestoredWhenTheGuardIsReleased cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestOverrideRestoredWhenTheGuardIsReleased " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestOverrideRestoredWhenTheGuardedCallRaises()
-
+    On Error GoTo ErrHandler
     Dim frm As Form_frmVCSMain
-    Dim intFound As eDecisionPolicy
-
+    Dim lngExpectedErr As Long
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Set frm = MainForm
-    intFound = frm.intDecisionPolicy
     frm.intDecisionPolicy = edpAsk
 
-    LogUnhandledErrors
-    On Error GoTo ErrHandler
-
+    On Error GoTo ExpectedError
     RaiseWhileOverridden edpPreferSource
     TestAssert False, "the guarded call should have raised"
-    frm.intDecisionPolicy = intFound
-    Exit Sub
-
-ErrHandler:
-    TestAssert Err.Number = 11, "the error reached the caller"
+    GoTo CleanUp
+ExpectedError:
+    lngExpectedErr = Err.Number
+    Resume CheckExpectedError
+CheckExpectedError:
+    On Error GoTo ErrHandler
+    TestAssert lngExpectedErr = 11, "the error reached the caller"
     TestAssert frm.intDecisionPolicy = edpAsk, "the policy is back to what it was after the error"
-    frm.intDecisionPolicy = intFound
+CleanUp:
+    On Error Resume Next
+    RestoreSavedFormPolicy
+    If lngTestErr <> 0 Then TestAssert False, "TestOverrideRestoredWhenTheGuardedCallRaises " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
+End Sub
 
+Private Sub RestoreSavedFormPolicy()
+    On Error Resume Next
+    If m_blnPolicySaved Then
+        m_frmSaved.intDecisionPolicy = m_intSavedPolicy
+        If Err.Number <> 0 Then TestAssert False, "form policy cleanup: " & Err.Number & ": " & Err.Description
+    End If
+    m_blnPolicySaved = False
+    Set m_frmSaved = Nothing
+End Sub
+
+Private Sub Class_Terminate()
+    On Error Resume Next
+    RestoreSavedFormPolicy
 End Sub

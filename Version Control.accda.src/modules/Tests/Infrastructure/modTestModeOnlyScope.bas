@@ -1,6 +1,13 @@
 ﻿Attribute VB_Name = "modTestModeOnlyScope"
+'---------------------------------------------------------------------------------------
+' Module    : modTestModeOnlyScope
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Verify request-owned policy cleanup and report isolated runtime snapshots.
+'---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
+Option Private Module
 '@Folder("Tests.Infrastructure")
 
 ' Parameterized public probes run in the installed driver, outside the runner's

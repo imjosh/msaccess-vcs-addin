@@ -24,19 +24,67 @@ Private Const EXPORT_MESSAGE As String = "Export completed with errors. Check th
 Private Const MULTIPLE_MESSAGE As String = " (and {0} more errors in the log)"
 
 Public Sub TestLocalizedImportWithoutJournal()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 0, True
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedImportWithoutJournal " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedImportWithWarningOnly()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 0, False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedImportWithWarningOnly " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestSingleImportErrorIsPreserved()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 1, False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleImportErrorIsPreserved " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedImportCountsErrorAndCriticalEntries()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 3, False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedImportCountsErrorAndCriticalEntries " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Private Sub CheckImportResult(ByVal lngErrors As Long, ByVal blnNoJournal As Boolean)
@@ -121,23 +169,83 @@ End Sub
 
 
 Public Sub TestLocalizedExportFailure()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "error"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportFailure " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedCriticalExportFailureWithJournal()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "critical"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedCriticalExportFailureWithJournal " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedExportSuccess()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "success"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportSuccess " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedExportCancellation()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "cancel"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportCancellation " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedExportDecisionPrecedence()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "blocked"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportDecisionPrecedence " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Private Sub CheckExportResult(ByVal strScenario As String)

@@ -8,6 +8,12 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
 ' Synchronous final test-result persistence regressions.
+'---------------------------------------------------------------------------------------
+' Module    : clsTestResultsPersistence
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Verify synchronous test-result persistence diagnostics and retained assertions.
+'---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
 '@Folder("Tests.Infrastructure")

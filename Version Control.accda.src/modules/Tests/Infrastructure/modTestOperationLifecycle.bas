@@ -39,7 +39,9 @@ End Function
 
 
 Public Sub TestBlockedPromptSetsDecisionRequiredResult()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
 
@@ -59,11 +61,26 @@ Public Sub TestBlockedPromptSetsDecisionRequiredResult()
     cRoot.Complete eorFailed
     TestAssert cOp.Result = eorDecisionRequired, "Finish reports decision_required rather than the failure"
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBlockedPromptSetsDecisionRequiredResult cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBlockedPromptSetsDecisionRequiredResult " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestNestedScopeBlockSurvivesTheScopeClosing()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim lngToken As Long
@@ -79,6 +96,19 @@ Public Sub TestNestedScopeBlockSurvivesTheScopeClosing()
     TestAssert cOp.Result = eorDecisionRequired, "the block is still on the result"
     cRoot.Complete eorSuccess
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestNestedScopeBlockSurvivesTheScopeClosing cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestNestedScopeBlockSurvivesTheScopeClosing " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -270,7 +300,9 @@ End Function
 
 
 Public Sub TestBuildContinuationKeepsTheBuildResult()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
 
     ' The reproduction: Build rejected the target and imported nothing, but only
@@ -298,11 +330,25 @@ Public Sub TestBuildContinuationKeepsTheBuildResult()
     Set cOp = ContinueBuild(eorUnknown, eelNoError)
     TestAssert cOp.Result = eorFailed, "an unknown build result completes as failed"
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBuildContinuationKeepsTheBuildResult cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBuildContinuationKeepsTheBuildResult " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestBuildContinuationKeepsDecisionRequired()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim cResumed As clsRootOperationLease
@@ -326,11 +372,27 @@ Public Sub TestBuildContinuationKeepsDecisionRequired()
     Set cOp = ContinueBuild(eorDecisionRequired, eelNoError)
     TestAssert cOp.Result = eorDecisionRequired, "an explicit decision_required result is kept"
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cResumed Is Nothing Then cResumed.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBuildContinuationKeepsDecisionRequired cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBuildContinuationKeepsDecisionRequired " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestBuildContinuationKeepsLeaseAndPolicyAcrossStaging()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim cResumed As clsRootOperationLease
@@ -362,6 +424,20 @@ Public Sub TestBuildContinuationKeepsLeaseAndPolicyAcrossStaging()
     TestAssert cOp.InteractionMode = intModeBefore, "completion restores the interaction mode"
     TestAssert cOp.ResumeRoot(strToken) Is Nothing, "the completed root cannot be resumed"
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cResumed Is Nothing Then cResumed.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBuildContinuationKeepsLeaseAndPolicyAcrossStaging cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBuildContinuationKeepsLeaseAndPolicyAcrossStaging " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -513,6 +589,9 @@ End Sub
 
 
 Public Sub TestRegistryStateAdoptedOnlyByItsOwnProject()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strHwnd As String
     Dim strFresh As String
@@ -539,6 +618,19 @@ Public Sub TestRegistryStateAdoptedOnlyByItsOwnProject()
         "a timed-out heartbeat is not adopted"
     TestAssert Not cOp.CanAdoptRegistryState(strHwnd, vbNullString, CodeProject.FullName), _
         "a missing heartbeat is not adopted"
+
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRegistryStateAdoptedOnlyByItsOwnProject cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRegistryStateAdoptedOnlyByItsOwnProject " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 

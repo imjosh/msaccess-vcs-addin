@@ -112,6 +112,9 @@ End Function
 
 
 Public Sub TestSingleObjectContentHistoryRules()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cIndex As New clsVCSIndex
     TestAssert Not cIndex.SingleObjectContentConflict("same", "same", "", eatImport), "identical contents are safe without history"
     TestAssert Not cIndex.SingleObjectContentConflict("new source", "normalized database", "normalized database", eatImport), "ordinary source edit preserves unchanged normalized database baseline"
@@ -122,6 +125,15 @@ Public Sub TestSingleObjectContentHistoryRules()
     TestAssert cIndex.SingleObjectContentConflict("source", "database edit", "", eatExport), "old disabled-index history is conservative"
     TestAssert Not cIndex.SingleObjectContentConflict("source", "", "", eatImport, False), "new database object has no destination collision"
     TestAssert Not cIndex.SingleObjectContentConflict("", "database", "", eatExport, False), "new source file has no destination collision"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleObjectContentHistoryRules " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 

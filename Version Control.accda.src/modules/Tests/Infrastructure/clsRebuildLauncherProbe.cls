@@ -7,6 +7,12 @@ Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
+'---------------------------------------------------------------------------------------
+' Module    : clsRebuildLauncherProbe
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Own an inert hidden child process for rebuild handoff failure controls.
+'---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
 '@Folder("Tests.Infrastructure")
@@ -44,9 +50,9 @@ Public Function Launch(ByVal strStatusFile As String) As Boolean
     Launch = True
 End Function
 
-Public Function ConfirmExit() As Boolean
+Public Function ConfirmExit(ByVal lngTimeoutMilliseconds As Long) As Boolean
     If m_Handle = 0 Then Exit Function
-    ConfirmExit = (WaitForSingleObject(m_Handle, 5000) = WAIT_OBJECT_0)
+    ConfirmExit = (WaitForSingleObject(m_Handle, lngTimeoutMilliseconds) = WAIT_OBJECT_0)
 End Function
 
 Private Sub Class_Terminate()

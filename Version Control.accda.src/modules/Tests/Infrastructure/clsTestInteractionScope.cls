@@ -23,7 +23,9 @@ Option Explicit
 
 
 Public Sub TestNewScopeStartsNormalWithNoDecisions()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
 
     TestAssert cScope.InteractionMode = eimNormal, "a new scope is in normal mode"
@@ -33,11 +35,21 @@ Public Sub TestNewScopeStartsNormalWithNoDecisions()
     TestAssert ConvertToJson(cScope.Decisions) = "[]", "no decisions is an empty JSON array"
     TestAssert Not cScope.InNonInteractiveScope, "no scope is open"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestNewScopeStartsNormalWithNoDecisions " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestOpenAppliesAndCloseRestores()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -53,11 +65,21 @@ Public Sub TestOpenAppliesAndCloseRestores()
     TestAssert Not cScope.IsOpen(lngToken), "the scope is closed"
     TestAssert Not cScope.InNonInteractiveScope, "no noninteractive scope remains"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestOpenAppliesAndCloseRestores " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestCloseRestoresPriorSilentMode()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -66,11 +88,21 @@ Public Sub TestCloseRestoresPriorSilentMode()
     cScope.CloseScope lngToken
     TestAssert cScope.InteractionMode = eimSilent, "close returns to the silent mode that was set before"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestCloseRestoresPriorSilentMode " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestNestedScopesCloseInnerFirst()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngOuter As Long
     Dim lngInner As Long
@@ -87,11 +119,21 @@ Public Sub TestNestedScopesCloseInnerFirst()
     TestAssert cScope.InteractionMode = eimNormal, "closing the outer scope returns to normal"
     TestAssert cScope.DecisionPolicy = edpAsk, "closing the outer scope returns to the base policy"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestNestedScopesCloseInnerFirst " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestClosingOuterDiscardsInnerScopes()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngOuter As Long
     Dim lngInner As Long
@@ -107,11 +149,21 @@ Public Sub TestClosingOuterDiscardsInnerScopes()
     cScope.CloseScope lngInner
     TestAssert cScope.InteractionMode = eimNormal, "closing a discarded token does nothing"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestClosingOuterDiscardsInnerScopes " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestCloseTwiceDoesNotDisturbALaterScope()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngFirst As Long
     Dim lngSecond As Long
@@ -127,11 +179,21 @@ Public Sub TestCloseTwiceDoesNotDisturbALaterScope()
     cScope.CloseScope lngSecond
     TestAssert cScope.InteractionMode = eimNormal, "the later scope still closes by its own token"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestCloseTwiceDoesNotDisturbALaterScope " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestUnknownTokenIsANoOp()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -147,11 +209,21 @@ Public Sub TestUnknownTokenIsANoOp()
 
     cScope.CloseScope lngToken
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestUnknownTokenIsANoOp " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestReleaseClosesOnlyOperationOwnedScopes()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngCaller As Long
     Dim lngOwned As Long
@@ -171,11 +243,21 @@ Public Sub TestReleaseClosesOnlyOperationOwnedScopes()
     TestAssert cScope.InteractionMode = eimNormal, "the caller closes its own scope"
     TestAssert cScope.DecisionPolicy = edpAsk, "the caller's close restores the base state"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestReleaseClosesOnlyOperationOwnedScopes " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestReleaseKeepsCallerScopeOpenedInsideOwnedScope()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngOwned As Long
     Dim lngCaller As Long
@@ -192,21 +274,41 @@ Public Sub TestReleaseKeepsCallerScopeOpenedInsideOwnedScope()
     TestAssert cScope.InteractionMode = eimNormal, "closing the caller's scope lands on the state before the released scope"
     TestAssert cScope.DecisionPolicy = edpAsk, "the base policy is restored"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestReleaseKeepsCallerScopeOpenedInsideOwnedScope " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestReleaseWithNothingOwnedIsANoOp()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
 
     cScope.ReleaseOperationScopes
     TestAssert cScope.InteractionMode = eimNormal, "release with no scopes changes nothing"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestReleaseWithNothingOwnedIsANoOp " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSilentRequestOutsideNoninteractiveScope()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
 
     cScope.InteractionMode = eimSilent
@@ -214,11 +316,21 @@ Public Sub TestSilentRequestOutsideNoninteractiveScope()
     cScope.InteractionMode = eimNormal
     TestAssert cScope.InteractionMode = eimNormal, "normal applies outside a noninteractive scope"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestSilentRequestOutsideNoninteractiveScope " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSilentRequestDoesNotWeakenNoninteractiveScope()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -233,11 +345,21 @@ Public Sub TestSilentRequestDoesNotWeakenNoninteractiveScope()
     cScope.CloseScope lngToken
     TestAssert cScope.InteractionMode = eimNormal, "close restores the mode saved at open"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestSilentRequestDoesNotWeakenNoninteractiveScope " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSilentScopeInsideNoninteractiveScopeKeepsPolicy()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngOuter As Long
     Dim lngInner As Long
@@ -253,11 +375,21 @@ Public Sub TestSilentScopeInsideNoninteractiveScopeKeepsPolicy()
 
     cScope.CloseScope lngOuter
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestSilentScopeInsideNoninteractiveScopeKeepsPolicy " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestPolicyCannotBeChangedInsideNoninteractiveScope()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -269,11 +401,21 @@ Public Sub TestPolicyCannotBeChangedInsideNoninteractiveScope()
     cScope.DecisionPolicy = edpPreferSource
     TestAssert cScope.DecisionPolicy = edpPreferSource, "the policy can be set outside a noninteractive scope"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestPolicyCannotBeChangedInsideNoninteractiveScope " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestCloseRestoresErrorLevel()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -285,11 +427,21 @@ Public Sub TestCloseRestoresErrorLevel()
     cScope.CloseScope lngToken
     TestAssert cScope.ErrorLevel = eelWarning, "close restores the error level saved at open"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestCloseRestoresErrorLevel " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestNestedBlockedPromptDoesNotPoisonOuterScope()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngOuter As Long
     Dim lngInner As Long
@@ -308,11 +460,21 @@ Public Sub TestNestedBlockedPromptDoesNotPoisonOuterScope()
 
     cScope.CloseScope lngOuter
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestNestedBlockedPromptDoesNotPoisonOuterScope " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestOkOnlyIsAcknowledgedUnderEveryPolicy()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim varPolicies As Variant
     Dim varPolicy As Variant
     Dim cScope As New clsInteractionScope
@@ -329,11 +491,21 @@ Public Sub TestOkOnlyIsAcknowledgedUnderEveryPolicy()
         cScope.CloseScope lngToken
     Next varPolicy
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestOkOnlyIsAcknowledgedUnderEveryPolicy " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestEveryPolicyAgainstEveryConfirmationStyle()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     ' The expected answers are the policy table in docs/noninteractive-dialogs.md, written
     ' out as data rather than derived from the code under test. block, prefer_source,
     ' prefer_database and skip leave a confirmation as decision_required and blocked:
@@ -374,11 +546,21 @@ Public Sub TestEveryPolicyAgainstEveryConfirmationStyle()
         Next lngStyle
     Next lngPolicy
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestEveryPolicyAgainstEveryConfirmationStyle " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestConflictActionForEachPolicyAndRequestedAction()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
     Dim varRequested As Variant
@@ -411,11 +593,21 @@ Public Sub TestConflictActionForEachPolicyAndRequestedAction()
         cScope.CloseScope lngToken
     Next varRequested
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestConflictActionForEachPolicyAndRequestedAction " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestDecisionRequiredIsRecordedAndBlocks()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
     Dim colDecisions As Collection
@@ -438,11 +630,21 @@ Public Sub TestDecisionRequiredIsRecordedAndBlocks()
     TestAssert Not cScope.Blocked, "closing the scope clears the block"
     TestAssert cScope.DecisionCount = 0, "closing the scope restores the outer journal"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestDecisionRequiredIsRecordedAndBlocks " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestOtherDecisionKindsDoNotBlock()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
 
@@ -456,11 +658,21 @@ Public Sub TestOtherDecisionKindsDoNotBlock()
 
     cScope.CloseScope lngToken
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestOtherDecisionKindsDoNotBlock " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestDecisionsJsonIsValidForControlCharacters()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
     Dim strTitle As String
@@ -488,11 +700,21 @@ Public Sub TestDecisionsJsonIsValidForControlCharacters()
     TestAssert colDecisions(1)("message") = strMessage, "control characters round-trip"
     TestAssert colDecisions(1)("detail") = strMessage, "detail round-trips"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestDecisionsJsonIsValidForControlCharacters " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestPromptDecisionTextRoundTripsThroughJson()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
     Dim colDecisions As Collection
@@ -509,11 +731,21 @@ Public Sub TestPromptDecisionTextRoundTripsThroughJson()
     TestAssert colDecisions(1)("title") = "Confirm" & vbLf, "a blocked prompt's title round-trips"
     TestAssert colDecisions(1)("kind") = "decision_required", "the prompt is recorded as decision_required"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestPromptDecisionTextRoundTripsThroughJson " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestScopesDoNotTouchTheLiveOperation()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cScope As New clsInteractionScope
     Dim lngToken As Long
     Dim eimBefore As eInteractionMode
@@ -536,6 +768,14 @@ Public Sub TestScopesDoNotTouchTheLiveOperation()
     TestAssert Operation.DecisionBlocked = blnBlockedBefore, "the live blocked flag is unchanged"
     TestAssert Operation.ErrorLevel = eelBefore, "the live error level is unchanged"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestScopesDoNotTouchTheLiveOperation " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 

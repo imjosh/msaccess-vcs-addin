@@ -1,10 +1,20 @@
 ﻿Attribute VB_Name = "modTestRequestPolicy"
+'---------------------------------------------------------------------------------------
+' Module    : modTestRequestPolicy
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Verify request identity, timer ownership, and actual form preflight in disposable hosts.
+'---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
+Option Private Module
 '@Folder("Tests.Infrastructure")
 '@Tag("unit")
 
 Public Sub TestPublicIdSurvivesCompletionAndIsSeparateFromToken()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As New clsOperation
     Dim cRoot As clsRootOperationLease
     Dim strId As String
@@ -18,9 +28,26 @@ Public Sub TestPublicIdSurvivesCompletionAndIsSeparateFromToken()
     TestAssert cOp.LastCompletion("operation_id") = strId, "final result retains the same public ID"
     TestAssert cOp.LastCompletion("decision_policy") = "skip", "completion preserves the effective request policy"
     TestAssert cOp.LastCompletion("initiating_source") = "api", "completion preserves initiating source"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestPublicIdSurvivesCompletionAndIsSeparateFromToken cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestPublicIdSurvivesCompletionAndIsSeparateFromToken " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestRequestSourceCannotReplaceRootSource()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As New clsOperation
     Dim cRoot As clsRootOperationLease
     Dim strId As String
@@ -32,9 +59,26 @@ Public Sub TestRequestSourceCannotReplaceRootSource()
     TestAssert cOp.AutomationSource, "source-sensitive behavior uses captured source"
     TestAssert cOp.PublicId = strId, "source refusal preserves public identity"
     cRoot.Complete eorSuccess
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRequestSourceCannotReplaceRootSource cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRequestSourceCannotReplaceRootSource " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestPublicIdsNeverReuseAcceptedCallerIdentity()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cFirst As clsOperationRequest
     Dim cDuplicate As clsOperationRequest
     Dim strCallback As String
@@ -46,9 +90,21 @@ Public Sub TestPublicIdsNeverReuseAcceptedCallerIdentity()
     Set cDuplicate = CreateOperationRequest(eosMCPTool, strCallback)
     strRefusal = ClaimOperationRequest(cDuplicate)
     TestAssert InStr(strRefusal, "operation_id_reused") > 0, "a new request cannot reuse an admitted identity"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestPublicIdsNeverReuseAcceptedCallerIdentity " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestTypedArgumentsRoundTripThroughQueuedJson()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim colArgs As New Collection
     Dim colRestored As Collection
     colArgs.Add ""
@@ -59,9 +115,21 @@ Public Sub TestTypedArgumentsRoundTripThroughQueuedJson()
     TestAssert VarType(colRestored(2)) = vbBoolean, "booleans keep their type"
     TestAssert colRestored(1) = "", "an empty argument keeps its position"
     TestAssert colRestored(3) = "block|with-pipe", "pipes are ordinary argument content"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestTypedArgumentsRoundTripThroughQueuedJson " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestCompletionKeepsFinalErrorLevelAfterScopeRelease()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As New clsOperation
     Dim cRoot As clsRootOperationLease
     Set cRoot = cOp.TryBeginRoot(eotExport, edpBlock)
@@ -70,9 +138,26 @@ Public Sub TestCompletionKeepsFinalErrorLevelAfterScopeRelease()
     TestAssert cOp.ErrorLevel = eelNoError, "scope restoration releases temporary state"
     TestAssert cOp.LastCompletion("error_level") = eelError, "final diagnostics survive restoration"
     TestAssert Not cOp.LastCompletion("success"), "the final result remains unsuccessful"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestCompletionKeepsFinalErrorLevelAfterScopeRelease cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestCompletionKeepsFinalErrorLevelAfterScopeRelease " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestExpiryCompletesOnlyItsOwnRequest()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As New clsOperation
     Dim cRoot As clsRootOperationLease
     Dim strId As String
@@ -85,6 +170,20 @@ Public Sub TestExpiryCompletesOnlyItsOwnRequest()
     TestAssert cOp.InteractionMode = eimNormal, "expiry releases the request policy mode"
     cRoot.Complete eorSuccess
     TestAssert cOp.Result = eorTimeout, "a stale lease cannot replace the expired result"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestExpiryCompletesOnlyItsOwnRequest cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestExpiryCompletesOnlyItsOwnRequest " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCallbackInfo As String) As String
@@ -287,7 +386,7 @@ Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCa
                 d("held_root_restored") = cRecreated.RestorePersistedRootForTest()
                 d("restored_handoff_hold") = cRecreated.RebuildHandoffHeld
                 d("restored_active_after_due_heartbeat") = cRecreated.IsActive
-                blnFixtureExit = cLauncher.ConfirmExit()
+                blnFixtureExit = cLauncher.ConfirmExit(5000)
                 d("fixture_helper_original_handle_exit") = blnFixtureExit
                 If blnFixtureExit Then
                     ' Only this inert fixture can establish that its helper can no
@@ -381,7 +480,6 @@ Public Function RequestPolicyF4Probe(ByVal strCase As String, ByVal strCallbackI
     Dim cRoot As clsRootOperationLease
     Dim cEmitter As clsMCP
     Dim intPolicy As eDecisionPolicy
-    Dim strRefusal As String
     Dim strToken As String
     Dim strError As String
     Dim lngError As Long
@@ -404,8 +502,9 @@ Public Function RequestPolicyF4Probe(ByVal strCase As String, ByVal strCallbackI
         RequestPolicyF4Probe = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
         Exit Function
     End If
-    strRefusal = ParsePolicyOrRefuse(strPolicy, intPolicy)
-    If Len(strRefusal) > 0 Then Err.Raise vbObjectError + 2470, "RequestPolicyF4Probe", strRefusal
+    If Not ParseDecisionPolicy(strPolicy, intPolicy) Then
+        Err.Raise vbObjectError + 2470, "RequestPolicyF4Probe", InvalidPolicyMessage()
+    End If
     If strCase = "previous_journal" Then
         Set cRequest = CreateOperationRequest(eosMCPTool, strCallbackInfo)
         Set IncomingOperationRequest = cRequest

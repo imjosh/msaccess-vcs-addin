@@ -60,7 +60,9 @@ End Function
 
 
 Public Sub TestBeginWithPolicyRefusedWhileRunning()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim intPolicy As eDecisionPolicy
@@ -95,11 +97,26 @@ Public Sub TestBeginWithPolicyRefusedWhileRunning()
     cRoot.Complete eorSuccess
     TestAssert cOp.Status = eosReady, "the first root still completes"
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBeginWithPolicyRefusedWhileRunning cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBeginWithPolicyRefusedWhileRunning " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRefusedNestedBeginPreservesSynchronousRoot()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strToken As String
     Dim intMode As eInteractionMode
@@ -140,11 +157,25 @@ Public Sub TestRefusedNestedBeginPreservesSynchronousRoot()
     cOp.Finish eorSuccess
     TestAssert Not cOp.LastCompletion Is dDone, "the later root completes on its own"
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRefusedNestedBeginPreservesSynchronousRoot cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRefusedNestedBeginPreservesSynchronousRoot " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestPolicyRequestRefusedWhileRunning()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim strJson As String
@@ -169,11 +200,26 @@ Public Sub TestPolicyRequestRefusedWhileRunning()
 
     cRoot.Complete eorSuccess
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestPolicyRequestRefusedWhileRunning cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestPolicyRequestRefusedWhileRunning " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestPolicyRequestAcceptedWhenReady()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
 
     Set cOp = New clsOperation
@@ -181,19 +227,44 @@ Public Sub TestPolicyRequestAcceptedWhenReady()
     TestAssert cOp.Status = eosReady, "a new operation is ready"
     TestAssert Len(PolicyRequestRefusal(cOp)) = 0, "a ready operation is not refused"
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestPolicyRequestAcceptedWhenReady cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestPolicyRequestAcceptedWhenReady " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestClearOperationPolicyIsHarmlessWhileRunning()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     TestAssert InStr(VCS.ClearOperationPolicy, """success"":true") > 0, "clearing a policy that was never set succeeds"
     TestAssert InStr(VCS.ClearOperationPolicy, """success"":true") > 0, "clearing twice succeeds"
     TestAssert LiveStateUnchanged, "clearing an unset policy leaves the running operation alone"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestClearOperationPolicyIsHarmlessWhileRunning " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRequestPolicyEndsAtFinish()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Set cOp = NewUnattendedOperation
@@ -206,11 +277,27 @@ Dim cOp As clsOperation
     Set cRoot = cOp.TryBeginRoot(eotOther)
     TestAssert cOp.DecisionPolicy = edpAsk, "a later request has no remembered policy"
     cRoot.Complete eorSuccess
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRequestPolicyEndsAtFinish cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRequestPolicyEndsAtFinish " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestClearSessionPolicyClosesItAndASecondClearIsANoOp()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim intMode As eInteractionMode
     Dim intPolicy As eDecisionPolicy
@@ -230,20 +317,51 @@ Public Sub TestClearSessionPolicyClosesItAndASecondClearIsANoOp()
     TestAssert cOp.DecisionPolicy = edpDecline, "a second clear changes nothing"
     cOp.CloseInteractionScope lngOther
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestClearSessionPolicyClosesItAndASecondClearIsANoOp cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestClearSessionPolicyClosesItAndASecondClearIsANoOp " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestPersistentPolicyActivationIsRetired()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Set cOp = NewUnattendedOperation
     TestAssert InStr(SetSessionPolicy(cOp, "block"), "policy_activation_retired") > 0, "activation is explicitly retired"
     TestAssert InStr(SetSessionPolicy(cOp, "decline"), "policy_activation_retired") > 0, "a second activation is also refused"
     TestAssert cOp.InteractionMode = eimNormal, "retired activation changes no mode"
     TestAssert cOp.DecisionPolicy = edpAsk, "retired activation remembers no policy"
+
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestPersistentPolicyActivationIsRetired cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestPersistentPolicyActivationIsRetired " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRetiredActivationPreservesActivePolicy()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Set cOp = NewUnattendedOperation
@@ -252,11 +370,27 @@ Dim cOp As clsOperation
     TestAssert cOp.DecisionPolicy = edpBlock, "the active request keeps its policy"
     TestAssert cOp.Decisions.Count = 0, "a refusal does not append to its journal"
     cRoot.Complete eorSuccess
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRetiredActivationPreservesActivePolicy cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRetiredActivationPreservesActivePolicy " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestInvalidTestRunPolicyRefusedBeforeLoadingOptions()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cSaved As clsOptions
     Dim intStatus As eOperationState
     Dim blnLoaded As Boolean
@@ -277,11 +411,21 @@ Public Sub TestInvalidTestRunPolicyRefusedBeforeLoadingOptions()
     TestAssert Operation.Status = intStatus, "the refusal leaves the operation's status alone"
     TestAssert LiveStateUnchanged(), "the refusal leaves the interaction state alone"
 
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestInvalidTestRunPolicyRefusedBeforeLoadingOptions " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestEachExplicitRequestStartsUnblocked()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
 
@@ -301,10 +445,26 @@ Public Sub TestEachExplicitRequestStartsUnblocked()
     TestAssert cOp.Result = eorSuccess, "the next operation can succeed"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestEachExplicitRequestStartsUnblocked cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestEachExplicitRequestStartsUnblocked " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRequestPolicyHasNoSessionFallback()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Set cOp = NewUnattendedOperation
@@ -312,11 +472,27 @@ Dim cOp As clsOperation
     TestAssert cOp.DecisionPolicy = edpBlock, "the request policy applies"
     cRoot.Complete eorSuccess
     TestAssert cOp.InteractionMode = eimNormal And cOp.DecisionPolicy = edpAsk, "completion releases owned policy state"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRequestPolicyHasNoSessionFallback cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRequestPolicyHasNoSessionFallback " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRefusedSingleObjectImportFailsUnderRequestPolicy()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim colErrors As Collection
     Dim dEntry As Dictionary
@@ -343,11 +519,25 @@ Public Sub TestRefusedSingleObjectImportFailsUnderRequestPolicy()
     TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRefusedSingleObjectImportFailsUnderRequestPolicy cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRefusedSingleObjectImportFailsUnderRequestPolicy " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSingleObjectErrorFinishesItsOperation()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strJson As String
 
@@ -369,11 +559,25 @@ Public Sub TestSingleObjectErrorFinishesItsOperation()
     cOp.Finish eorSuccess
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestSingleObjectErrorFinishesItsOperation cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleObjectErrorFinishesItsOperation " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestBlockedPromptInSingleObjectImportIsDecisionRequired()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strJson As String
 
@@ -392,11 +596,25 @@ Public Sub TestBlockedPromptInSingleObjectImportIsDecisionRequired()
     TestAssert InStr(strJson, "Merge_1.log") > 0, "the result names the log"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBlockedPromptInSingleObjectImportIsDecisionRequired cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBlockedPromptInSingleObjectImportIsDecisionRequired " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestBlockedPromptInSingleObjectExportIsDecisionRequired()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strJson As String
 
@@ -412,11 +630,25 @@ Public Sub TestBlockedPromptInSingleObjectExportIsDecisionRequired()
     TestAssert InStr(strJson, "Export_1.log") > 0, "the result names the log"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestBlockedPromptInSingleObjectExportIsDecisionRequired cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestBlockedPromptInSingleObjectExportIsDecisionRequired " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSingleObjectExportWithoutPromptSucceeds()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strJson As String
 
@@ -429,11 +661,25 @@ Public Sub TestSingleObjectExportWithoutPromptSucceeds()
     TestAssert InStr(strJson, "Export_1.log") > 0, "the result names the log"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestSingleObjectExportWithoutPromptSucceeds cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleObjectExportWithoutPromptSucceeds " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim strJson As String
 
@@ -450,6 +696,18 @@ Public Sub TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired()
     TestAssert InStr(strJson, """errorNumber"":91") > 0, "the result carries the error number"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleObjectErrorAfterBlockedPromptIsDecisionRequired " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -515,7 +773,9 @@ End Sub
 
 
 Public Sub TestAnsweredPromptsAreInSingleObjectImportResult()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim colErrors As Collection
     Dim dEntry As Dictionary
@@ -551,11 +811,25 @@ Public Sub TestAnsweredPromptsAreInSingleObjectImportResult()
         ' So does a cancel.
     Next varScenario
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestAnsweredPromptsAreInSingleObjectImportResult cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestAnsweredPromptsAreInSingleObjectImportResult " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestAnsweredPromptsAreInSingleObjectExportResult()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim dFailed As Dictionary
     Dim varScenario As Variant
@@ -585,11 +859,25 @@ Public Sub TestAnsweredPromptsAreInSingleObjectExportResult()
         ClearSessionPolicy cOp
     Next varScenario
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestAnsweredPromptsAreInSingleObjectExportResult cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestAnsweredPromptsAreInSingleObjectExportResult " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestAnsweredPromptsAreInScopedSyncResult()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim dResult As Dictionary
     Dim varScenario As Variant
@@ -625,11 +913,25 @@ Public Sub TestAnsweredPromptsAreInScopedSyncResult()
         ClearSessionPolicy cOp
     Next varScenario
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestAnsweredPromptsAreInScopedSyncResult cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestAnsweredPromptsAreInScopedSyncResult " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestScopedDecisionRequiredKeepsLogPath()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim dResult As Dictionary
 
@@ -645,11 +947,25 @@ Public Sub TestScopedDecisionRequiredKeepsLogPath()
     TestAssert dResult("decisions").Count = 2, "the journal holds the acknowledged and the blocked prompt"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestScopedDecisionRequiredKeepsLogPath cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestScopedDecisionRequiredKeepsLogPath " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSingleObjectErrorAfterAnsweredPromptKeepsJournal()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim dResult As Dictionary
     Dim varScenario As Variant
@@ -667,11 +983,25 @@ Public Sub TestSingleObjectErrorAfterAnsweredPromptKeepsJournal()
         ClearSessionPolicy cOp
     Next varScenario
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestSingleObjectErrorAfterAnsweredPromptKeepsJournal cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleObjectErrorAfterAnsweredPromptKeepsJournal " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestTestRunResultCarriesAnsweredPrompts()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim varScenario As Variant
     Dim strResolution As String
@@ -692,11 +1022,25 @@ Public Sub TestTestRunResultCarriesAnsweredPrompts()
         ClearSessionPolicy cOp
     Next varScenario
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestTestRunResultCarriesAnsweredPrompts cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestTestRunResultCarriesAnsweredPrompts " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestEmptyJournalLeavesResultShapeUnchanged()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim dResult As Dictionary
     Dim strRun As String
@@ -727,11 +1071,25 @@ Public Sub TestEmptyJournalLeavesResultShapeUnchanged()
     cOp.Finish eorSuccess
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestEmptyJournalLeavesResultShapeUnchanged cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestEmptyJournalLeavesResultShapeUnchanged " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim strJson As String
@@ -745,11 +1103,26 @@ Public Sub TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone()
     TestAssert InStr(strJson, "logPath") = 0, "no log is named when none was written"
     cRoot.Complete eorSuccess
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleObjectErrorBeforeBeginLeavesRunningRootAlone " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestApiErrorAfterOwnFinishDoesNotFinishAgain()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim dDone As Dictionary
     Dim strJson As String
@@ -770,19 +1143,50 @@ Public Sub TestApiErrorAfterOwnFinishDoesNotFinishAgain()
     TestAssert InStr(strJson, """errorNumber"":6") > 0, "the result carries the error number"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestApiErrorAfterOwnFinishDoesNotFinishAgain cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestApiErrorAfterOwnFinishDoesNotFinishAgain " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRetiredSetterAndHarmlessCleanup()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Set cOp = NewUnattendedOperation
     TestAssert InStr(SetSessionPolicy(cOp, "block"), "policy_activation_retired") > 0, "setter calls must migrate"
     TestAssert InStr(ClearSessionPolicy(cOp), "true") > 0, "legacy cleanup succeeds harmlessly"
     TestAssert cOp.DecisionPolicy = edpAsk, "neither call leaves a policy"
+
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRetiredSetterAndHarmlessCleanup cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRetiredSetterAndHarmlessCleanup " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRequestPoliciesBelongToTheirOperations()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cFirst As clsOperation
     Dim cSecond As clsOperation
     Dim cFirstRoot As clsRootOperationLease
@@ -795,11 +1199,31 @@ Dim cFirst As clsOperation
     TestAssert cSecond.DecisionPolicy = edpDecline, "another owner retains its policy"
     TestAssert cFirst.PublicId <> cSecond.PublicId, "public IDs are unique across roots"
     cSecondRoot.Complete eorSuccess
+
+CleanUp:
+    On Error Resume Next
+    If Not cFirstRoot Is Nothing Then cFirstRoot.Complete eorFailed
+    If Not cSecondRoot Is Nothing Then cSecondRoot.Complete eorFailed
+    If Not cFirst Is Nothing Then
+        If cFirst.IsActive Then cFirst.Finish eorFailed
+    End If
+    If Not cSecond Is Nothing Then
+        If cSecond.IsActive Then cSecond.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRequestPoliciesBelongToTheirOperations cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRequestPoliciesBelongToTheirOperations " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRuntimeErrorRidesOnTerminalCallback()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim dDone As Dictionary
@@ -817,11 +1241,26 @@ Public Sub TestRuntimeErrorRidesOnTerminalCallback()
     TestAssert dDone("errorNumber") = 11, "the callback carries the error number"
     TestAssert Not dDone.Exists("decision_required"), "no prompt was blocked"
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRuntimeErrorRidesOnTerminalCallback cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRuntimeErrorRidesOnTerminalCallback " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRuntimeErrorAfterBlockedPromptRidesOnDecisionCallback()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim dDone As Dictionary
@@ -841,11 +1280,26 @@ Public Sub TestRuntimeErrorAfterBlockedPromptRidesOnDecisionCallback()
     TestAssert dDone("errorNumber") = 91, "the callback carries the error number"
     ClearSessionPolicy cOp
 
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRuntimeErrorAfterBlockedPromptRidesOnDecisionCallback cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRuntimeErrorAfterBlockedPromptRidesOnDecisionCallback " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestRuntimeErrorBelongsToItsRoot()
-
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     Dim cOp As clsOperation
     Dim cFirst As clsRootOperationLease
     Dim cSecond As clsRootOperationLease
@@ -863,10 +1317,27 @@ Public Sub TestRuntimeErrorBelongsToItsRoot()
     TestAssert Not cOp.LastCompletion.Exists("runtime_error"), "no runtime_error on the next root"
     TestAssert Not cOp.LastCompletion.Exists("errorNumber"), "no error number on the next root"
 
+CleanUp:
+    On Error Resume Next
+    If Not cFirst Is Nothing Then cFirst.Complete eorFailed
+    If Not cSecond Is Nothing Then cSecond.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestRuntimeErrorBelongsToItsRoot cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestRuntimeErrorBelongsToItsRoot " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestInteractionModeSelectionReportsEffectiveMode()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Dim dResult As Dictionary
     Dim intMode As Long
@@ -880,6 +1351,19 @@ Dim cOp As clsOperation
         TestAssert dResult("success"), "legacy idle mode remains available"
         TestAssert dResult("effective_mode") = intMode, "effective mode is truthful"
     Next intMode
+
+CleanUp:
+    On Error Resume Next
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestInteractionModeSelectionReportsEffectiveMode cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestInteractionModeSelectionReportsEffectiveMode " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -927,6 +1411,9 @@ End Sub
 
 
 Public Sub TestInteractiveSelectionAfterFailedPolicyCleanup()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim dResult As Dictionary
@@ -938,10 +1425,27 @@ Dim cOp As clsOperation
     TestAssert dResult("success"), "failure requires no client cleanup call"
     TestAssert cOp.DecisionPolicy = edpAsk, "failure releases the request policy"
     TestAssert cOp.Result = eorFailed, "mode selection preserves the failed result"
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestInteractiveSelectionAfterFailedPolicyCleanup cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestInteractiveSelectionAfterFailedPolicyCleanup " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestSilentSelectionInsidePolicyScopeIsRefused()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
 Dim cOp As clsOperation
     Dim cRoot As clsRootOperationLease
     Dim dResult As Dictionary
@@ -954,6 +1458,20 @@ Dim cOp As clsOperation
     TestAssert Not dResult("success"), "mode-only activation is retired even when a root is noninteractive"
     TestAssert cOp.DecisionPolicy = edpDecline, "the owner retains its policy"
     cRoot.Complete eorSuccess
+
+CleanUp:
+    On Error Resume Next
+    If Not cRoot Is Nothing Then cRoot.Complete eorFailed
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If Err.Number <> 0 Then TestAssert False, "TestSilentSelectionInsidePolicyScopeIsRefused cleanup: " & Err.Number & ": " & Err.Description
+    If lngTestErr <> 0 Then TestAssert False, "TestSilentSelectionInsidePolicyScopeIsRefused " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
