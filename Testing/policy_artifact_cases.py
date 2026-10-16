@@ -20,6 +20,45 @@ def digest_tree(folder):
             for p in folder.rglob('*') if p.is_file()}
 
 
+
+def bitmap_pixels(data):
+    """Decode the fixture's uncompressed RGB pixels independently of BMP headers."""
+    require(data[:2] == b'BM', 'Picture proof must be a BMP')
+    offset = int.from_bytes(data[10:14], 'little')
+    width = int.from_bytes(data[18:22], 'little', signed=True)
+    height = int.from_bytes(data[22:26], 'little', signed=True)
+    bits = int.from_bytes(data[28:30], 'little')
+    compression = int.from_bytes(data[30:34], 'little')
+    require(width > 0 and height and bits == 24 and compression == 0,
+            'Picture fixture proof requires an uncompressed 24-bit RGB BMP')
+    stride = ((width * 3 + 3) // 4) * 4
+    require(offset + stride * abs(height) <= len(data), 'Truncated picture fixture')
+    rows = [data[offset + y * stride:offset + y * stride + width * 3]
+            for y in range(abs(height))]
+    if height > 0:
+        rows.reverse()
+    rgb = bytes(channel for row in rows for x in range(0, len(row), 3)
+                for channel in (row[x + 2], row[x + 1], row[x]))
+    return (width, abs(height)), rgb
+
+
+def bitmap_evidence(path, reference=None):
+    data = path.read_bytes()
+    dimensions, pixels = bitmap_pixels(data)
+    result = {'path': str(path), 'bytes': len(data),
+              'sha256': hashlib.sha256(data).hexdigest(), 'dimensions': list(dimensions),
+              'rgb_sha256': hashlib.sha256(pixels).hexdigest()}
+    if reference is not None:
+        original = reference.read_bytes()
+        original_dimensions, original_pixels = bitmap_pixels(original)
+        require(dimensions == original_dimensions, 'Picture normalization changed dimensions')
+        result.update(changed_bytes=sum(a != b for a, b in zip(original, data))
+                      + abs(len(original) - len(data)),
+                      changed_rgb_pixels=sum(original_pixels[i:i + 3] != pixels[i:i + 3]
+                                             for i in range(0, len(pixels), 3)))
+    return result
+
+
 def bitmap_variant(data, step):
     value = bytearray(data)
     require(value[:2] == b'BM', 'Native fixture must be a BMP')
@@ -43,7 +82,7 @@ def menu_fixture(cases, name):
     return menu, images
 
 
-def set_native_command_bar_picture(cases, name, picture, item):
+def set_native_command_bar_picture(cases, name, picture, source_picture, item):
     helper = Path(__file__).with_name('Fixtures') / 'modules/vcs_policy_artifact_fixture.bas'
     import_folder = cases.folder / (cases.host.stem + '-picture-fixture-import')
     import_folder.mkdir(exist_ok=False)
@@ -73,6 +112,26 @@ def set_native_command_bar_picture(cases, name, picture, item):
     cases.save()
     require(item['native_picture_helper']['saved_vbcomponent_type'] == 1, 'Saving changed the native picture fixture identity')
     module = project = None
+    # Independently normalize both requested variants without writing to source.
+    # Exact assigned-proof equality remains mandatory after native assignment.
+    canonical = {}
+    for variant, raw in [('database', picture), ('source', source_picture)]:
+        normalized = cases.folder / (cases.host.stem + '-canonical-' + variant + '.bmp')
+        result = cases.app.Run('F1CanonicalizePicture', str(cases.host), str(raw), str(normalized))
+        result = result[0] if isinstance(result, tuple) else result
+        diagnostic = cases.app.Run('F1PictureFixtureLastError')
+        diagnostic = diagnostic[0] if isinstance(diagnostic, tuple) else diagnostic
+        details = {'fixture_result': result, 'fixture_error': diagnostic,
+                   'raw': bitmap_evidence(raw), 'canonical_path': str(normalized)}
+        item.setdefault('native_picture_canonicalization', {})[variant] = details
+        cases.save()
+        require(result is True and not diagnostic, f'Native picture normalization failed: {details}')
+        details['canonical'] = bitmap_evidence(normalized, raw)
+        canonical[variant] = normalized
+        cases.save()
+    require(bitmap_pixels(canonical['database'].read_bytes()) !=
+            bitmap_pixels(canonical['source'].read_bytes()),
+            'Requested picture variants became pixel-identical during native normalization')
     proof = cases.folder / (cases.host.stem + '-assigned-picture.bmp')
     result = cases.app.Run('F1SetCommandBarPicture', str(cases.host), name, str(picture), str(proof))
     result = result[0] if isinstance(result, tuple) else result
@@ -82,11 +141,15 @@ def set_native_command_bar_picture(cases, name, picture, item):
                                           'proof': str(proof)}
     cases.save()
     require(result is True and not diagnostic, f'Native picture fixture failed: {item["native_picture_assignment"]}')
-    expected = hashlib.sha256(picture.read_bytes()).hexdigest()
+    expected = hashlib.sha256(canonical['database'].read_bytes()).hexdigest()
     actual = hashlib.sha256(proof.read_bytes()).hexdigest()
-    item['native_picture_assignment'].update(expected_sha256=expected, actual_sha256=actual)
+    item['native_picture_assignment'].update(expected_sha256=expected, actual_sha256=actual,
+                                               actual=bitmap_evidence(proof, canonical['database']))
     cases.save()
-    require(actual == expected, 'Access-local fixture did not assign the requested actual picture')
+    require(actual == expected, 'Access-local fixture did not assign the normalized requested actual picture')
+    require(digest_tree(source_picture.parent) == item['source_image_directory_before_fixture'],
+            'Native fixture normalization changed canonical source images')
+    return canonical
 
 
 def command_bars(cases, transports):
@@ -113,7 +176,8 @@ def command_bars(cases, transports):
                 source_before = digest_tree(menu.parent)
                 # Load/assign IPictureDisp inside Access; out-of-process assignment
                 # cannot reliably marshal Office Picture properties.
-                set_native_command_bar_picture(cases, name, db_picture, item)
+                item['source_image_directory_before_fixture'] = digest_tree(images)
+                canonical = set_native_command_bar_picture(cases, name, db_picture, picture, item)
                 history_before = cases.history()
                 result = cases.call(transport, direction.title() + 'Object', 'command_bar', name, policy)
                 item.update(seed_import=imported, seed_export=seeded, result=result,
@@ -129,9 +193,13 @@ def command_bars(cases, transports):
                 # A deliberate database export makes the actual native picture observable.
                 observed = cases.call('external', 'ExportObject', 'command_bar', name, 'prefer_database')
                 cases.outcome(observed, transferred=True)
-                expected = bitmap_variant(baseline, 0x80 if direction == 'import' and winning else 0x40)
+                expected_variant = 'source' if direction == 'import' and winning else 'database'
+                expected = canonical[expected_variant].read_bytes()
+                item['observed_picture'] = bitmap_evidence(picture, canonical[expected_variant])
+                item['expected_picture_variant'] = expected_variant
                 item['observed_picture_sha256'] = hashlib.sha256(picture.read_bytes()).hexdigest()
                 item['expected_picture_sha256'] = hashlib.sha256(expected).hexdigest()
+                cases.save()
                 require(item['observed_picture_sha256'] == item['expected_picture_sha256'], 'Native menu contains the wrong picture')
                 cases.reopen()
                 item['reopened_history'] = cases.history()

@@ -23,6 +23,28 @@ from concurrent.futures import ThreadPoolExecutor
 
 EXIT_WAIT_MS = 60000
 INVENTORY_SETTLE_MS = 30000
+ACCESS_MODULE_OBJECT = 5  # Access acModule
+
+PROBE_BRIDGE_SOURCE = """Attribute VB_Name = "modRequestPolicyBridge"
+Option Compare Database
+Option Explicit
+
+' Disposable-host diagnostic bridge. Deliberately public to compare Automation
+' invocation with the same installed helper called from inside the Access host.
+' This thin wrapper propagates errors and returns the original result unchanged.
+Public Function RequestPolicyFixtureBridge(ByVal strTarget As String, _
+    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant) As Variant
+    If Not IsMissing(varArg3) Then
+        RequestPolicyFixtureBridge = Application.Run(strTarget, varArg1, varArg2, varArg3)
+    ElseIf Not IsMissing(varArg2) Then
+        RequestPolicyFixtureBridge = Application.Run(strTarget, varArg1, varArg2)
+    ElseIf Not IsMissing(varArg1) Then
+        RequestPolicyFixtureBridge = Application.Run(strTarget, varArg1)
+    Else
+        RequestPolicyFixtureBridge = Application.Run(strTarget)
+    End If
+End Function
+"""
 
 
 def require(condition, message):
@@ -34,7 +56,7 @@ def decode(value):
     return json.loads(value[0] if isinstance(value, tuple) else value)
 
 
-def run(evidence, label, case_set="all"):
+def run(evidence, label, case_set="all", probe_bridge=False):
     import pythoncom
     import win32api
     import win32com.client
@@ -49,9 +71,20 @@ def run(evidence, label, case_set="all"):
     folder = evidence / (label + "-host")
     folder.mkdir(exist_ok=False)
     record = {"cases": {}, "checks": {}, "case_set": case_set,
-              "diagnostic_only": case_set != "all"}
+              "diagnostic_only": case_set != "all" or probe_bridge,
+              "probe_transport": "fixture_bridge" if probe_bridge else "direct"}
     app = endpoint = handle = None
     pid = stamp = None
+    library = str(Path(os.environ["APPDATA"]) / "MSAccessVCS" / "Version Control")
+    bridge_target = str((folder / "fixture.accdb").with_suffix("")) + ".RequestPolicyFixtureBridge"
+    bridge_ready = False
+
+    def call_probe(method, *arguments):
+        if probe_bridge:
+            require(bridge_ready, "The disposable probe bridge was not installed")
+            return app.Run(bridge_target, library + "." + method, *arguments)
+        return app.Run(library + "." + method, *arguments)
+
     pythoncom.CoInitialize()
     try:
         endpoint = common.Endpoint()
@@ -65,7 +98,16 @@ def run(evidence, label, case_set="all"):
         app.Visible = True
         app.UserControl = True
         record["user_control"] = bool(app.UserControl)
-        library = str(Path(os.environ["APPDATA"]) / "MSAccessVCS" / "Version Control")
+        if probe_bridge:
+            require(Path(app.CurrentProject.FullName).resolve() == (folder / "fixture.accdb").resolve(),
+                    "The disposable bridge host changed")
+            bridge_file = folder / "modRequestPolicyBridge.bas"
+            bridge_bytes = b"\xef\xbb\xbf" + PROBE_BRIDGE_SOURCE.replace("\n", "\r\n").encode("utf-8")
+            bridge_file.write_bytes(bridge_bytes)
+            app.LoadFromText(ACCESS_MODULE_OBJECT, "modRequestPolicyBridge", str(bridge_file))
+            bridge_ready = True
+            record["probe_bridge"] = {"module": "modRequestPolicyBridge", "entrypoint": bridge_target,
+                                      "source_file": str(bridge_file), "sha256": hashlib.sha256(bridge_bytes).hexdigest()}
         app.Run(library + ".Preload")
 
         def save():
@@ -75,7 +117,7 @@ def run(evidence, label, case_set="all"):
         def probe(case):
             identity = "request-policy-" + uuid.uuid4().hex
             start = len(endpoint.callbacks)
-            result = decode(app.Run(library + ".RequestPolicyProbe", case, endpoint.info(identity)))
+            result = decode(call_probe("RequestPolicyProbe", case, endpoint.info(identity)))
             until = time.monotonic() + 0.2
             while time.monotonic() < until:
                 pythoncom.PumpWaitingMessages()
@@ -91,7 +133,7 @@ def run(evidence, label, case_set="all"):
         def f4_probe(case, policy="block"):
             identity = "f4-policy-" + uuid.uuid4().hex
             start = len(endpoint.callbacks)
-            result = decode(app.Run(library + ".RequestPolicyF4Probe", case, endpoint.info(identity), policy))
+            result = decode(call_probe("RequestPolicyF4Probe", case, endpoint.info(identity), policy))
             until = time.monotonic() + 0.2
             while time.monotonic() < until:
                 pythoncom.PumpWaitingMessages()
@@ -326,7 +368,7 @@ def run(evidence, label, case_set="all"):
             ribbon = probe("ribbon_queue_failure")
             require(ribbon["accepted"] is False and ribbon["active"] is False and ribbon["pending"] is False, ribbon)
             require(ribbon["completion"].get("errorNumber") == -2147219094, ribbon)
-            statements = decode(app.Run(library + ".RequestPolicyStatementProbe"))
+            statements = decode(call_probe("RequestPolicyStatementProbe"))
             record["statement_calls"] = statements
             require(statements["direct"]["success"] and statements["api"]["success"] and not statements["active"], statements)
             require(not statements["pending"], statements)
@@ -481,7 +523,7 @@ def run(evidence, label, case_set="all"):
                         cleanup_error("addin_form_close", exc)
                     try:
                         cleanup_checkpoint("addin_form_inspection_started")
-                        after_form_close = decode(app.Run(cleanup_library + ".RequestPolicyF4Probe", "inspect", ""))
+                        after_form_close = decode(call_probe("RequestPolicyF4Probe", "inspect", ""))
                         record["addin_after_form_close"] = after_form_close
                         cleanup_checkpoint("addin_form_inspection_returned")
                         require(after_form_close.get("active") is False
@@ -497,6 +539,35 @@ def run(evidence, label, case_set="all"):
                 except Exception as exc:
                     record["close_current_database_error"] = repr(exc)
                     cleanup_error("database_close", exc)
+                # Capture scalar diagnostics only, and release every inspection
+                # proxy before Quit so the observation cannot retain the host.
+                vbe = projects = project = None
+                cleanup_checkpoint("vba_inspection_started")
+                vba_state = {"projects": []}
+                record["vba_before_quit"] = vba_state
+                try:
+                    vbe = app.VBE
+                    try:
+                        vba_state["mode"] = int(vbe.Mode)
+                    except Exception as exc:
+                        vba_state["mode_error"] = repr(exc)
+                    projects = vbe.VBProjects
+                    for project_index in range(1, int(projects.Count) + 1):
+                        project = projects.Item(project_index)
+                        project_state = {}
+                        for property_name in ("Name", "FileName", "Mode"):
+                            try:
+                                value = getattr(project, property_name)
+                                project_state[property_name.lower()] = int(value) if property_name == "Mode" else str(value)
+                            except Exception as exc:
+                                project_state[property_name.lower() + "_error"] = repr(exc)
+                        vba_state["projects"].append(project_state)
+                        project = None
+                except Exception as exc:
+                    vba_state["inspection_error"] = repr(exc)
+                finally:
+                    value = project = projects = vbe = None
+                cleanup_checkpoint("vba_inspection_finished")
                 # A close failure must not skip Quit on this identified process.
                 try:
                     require(pid_from_access_app(app) == pid and process_create_time(pid) == stamp,
@@ -580,7 +651,7 @@ def run(evidence, label, case_set="all"):
         record["cleanup_errors"] = cleanup_errors
         record["checks_completed"] = bool(record.get("checks_completed"))
         record["selected_checks_verified"] = bool(record["checks_completed"] and closure_confirmed and not cleanup_errors)
-        record["verified"] = bool(record["selected_checks_verified"] and case_set == "all")
+        record["verified"] = bool(record["selected_checks_verified"] and case_set == "all" and not probe_bridge)
         try:
             (evidence / (label + ".json")).write_text(
                 json.dumps(record, indent=2, default=str), encoding="utf-8")
@@ -598,6 +669,8 @@ if __name__ == "__main__":
     parser.add_argument("--client-source", type=Path, required=True)
     parser.add_argument("--case-set", choices=("all", "preflight", "ownership"), default="all",
                         help="Select a diagnostic probe group; only all can qualify the complete contract")
+    parser.add_argument("--probe-bridge", action="store_true",
+                        help="Diagnose probe invocation through a public disposable-host module; cannot fully qualify")
     args = parser.parse_args()
     require(__debug__ and sys.flags.optimize == 0, "Run this driver without Python optimization")
     require(Path(args.label).name == args.label, "The label must be a filename")
@@ -606,4 +679,4 @@ if __name__ == "__main__":
             "Evidence must be outside the source checkout")
     evidence.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(args.client_source.resolve()))
-    run(evidence, args.label, args.case_set)
+    run(evidence, args.label, args.case_set, args.probe_bridge)
