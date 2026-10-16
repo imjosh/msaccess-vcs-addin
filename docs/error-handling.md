@@ -55,6 +55,21 @@ identity-store failures return an explicit refusal and release their mutex.
 These helpers document that boundary in their source. Once a request owns the
 operation, use the normal structured pattern above.
 
+### Hosted test-run flag callback exception
+
+The private `clsTestRunner.SetHostedTestRunFlag` callback also uses
+`InitializeRequestErrors`. Acquisition can precede the hosted break guard, and
+release can run after its root ends while another runner owns the active
+operation. A dormant `False` call returns before any error handling. Inherited
+errors stay local, so this callback cannot enter `Stop` or write to the other
+runner's shared `Log`.
+
+Callback failures return `False`. Failed acquisition becomes `RunError`, and
+`RunSelected` returns before it changes error trapping or suppression. Failed
+release retains ownership and the captured file-qualified target for a destructor
+retry against the same project. This exception covers only that private ownership
+callback. Operation code still uses the normal structured pattern above.
+
 ---
 
 ## Reading `LogUnhandledErrors` entries in a log

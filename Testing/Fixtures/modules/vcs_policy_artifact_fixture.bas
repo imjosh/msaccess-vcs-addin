@@ -116,7 +116,7 @@ Public Function F1CanonicalizeButtonPicture(ByVal strExpectedHost As String, _
     End If
     ' Copy the tested control to an owned temporary popup. Both variants get
     ' their own copy; no proof reads back the subsequently tested assignment.
-    Set objProbeBar = Application.CommandBars.Add(strProbeName, 5, False, True)
+    Set objProbeBar = Application.CommandBars.Add(strProbeName, msoBarPopup, False, True)
     Set objProbeButton = Application.CommandBars(strMenuName).Controls(1).Copy(objProbeBar)
     Set objPicture = stdole.LoadPicture(strPictureFile)
     objProbeButton.Picture = objPicture
