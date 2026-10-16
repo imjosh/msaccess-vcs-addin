@@ -326,8 +326,8 @@ def run(evidence, label, case_set="all", probe_bridge=False):
         rows = database = None
         try:
             database = app.CurrentDb()
-            rows = database.OpenRecordset("SELECT FixtureValue FROM qryF3RequestFixture")
-            query_value = rows.Fields(0).Value
+            rows = database.OpenRecordset("qryF3RequestFixture")
+            query_value = rows.Fields("FixtureValue").Value
             require(query_value == 1, {"rebuilt_fixture_query_value": query_value})
             record["fixture_query_value_after_build"] = query_value
         finally:
