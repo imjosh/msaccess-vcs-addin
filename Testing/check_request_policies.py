@@ -60,6 +60,8 @@ def run(evidence, label):
         record.update(pid=pid, process_create_time=stamp)
         app.NewCurrentDatabase(str(folder / "fixture.accdb"))
         app.Visible = True
+        app.UserControl = True
+        record["user_control"] = bool(app.UserControl)
         library = str(Path(os.environ["APPDATA"]) / "MSAccessVCS" / "Version Control")
         app.Run(library + ".Preload")
 
@@ -479,6 +481,7 @@ def run(evidence, label):
                     record["quit_error"] = repr(exc)
                     cleanup_error("quit", exc)
         cleanup_checkpoint("application_release_started")
+        database = forms = None
         app = None
         cleanup_checkpoint("application_released")
         cleanup_checkpoint("gc_started")
@@ -487,6 +490,13 @@ def run(evidence, label):
         except Exception as exc:
             cleanup_error("gc", exc)
         cleanup_checkpoint("gc_finished")
+        cleanup_checkpoint("com_uninitialize_started")
+        try:
+            pythoncom.CoUninitialize()
+            record["com_uninitialized"] = True
+        except Exception as exc:
+            cleanup_error("com_uninitialize", exc)
+        cleanup_checkpoint("com_uninitialize_finished")
         exited = False
         wait_ms = EXIT_WAIT_MS if quit_attempted else 0
         record["exit_wait_ms"] = wait_ms
@@ -539,10 +549,6 @@ def run(evidence, label):
                 endpoint.close()
             except Exception as exc:
                 cleanup_error("callback_endpoint", exc)
-        try:
-            pythoncom.CoUninitialize()
-        except Exception as exc:
-            cleanup_error("com_uninitialize", exc)
         record["cleanup_errors"] = cleanup_errors
         record["checks_completed"] = bool(record.get("verified"))
         record["verified"] = bool(record.get("verified") and closure_confirmed and not cleanup_errors)
