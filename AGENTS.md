@@ -106,9 +106,9 @@ budgets, own gate. Read [docs/agent-docs-maintenance.md](docs/agent-docs-mainten
 
 ## Active cross-repo work
 
-`feat/noninteractive-dialogs` is tracked in the parent folder shared with `msaccess-vcs-mcp`:
-`../issues/INDEX.md` and `../specs/dialog-handling-hardening.md`. Pick a `todo` issue whose
-blockers are `done`, and update its status in both the issue file and the index.
+For cross-repo task selection, read `../issues/INDEX.md` and follow its current work order,
+then the selected issue and `../specs/ordinary-use-readiness.md`. Update issue and index
+status together. Historical shutdown handoffs do not override accepted scheduling.
 
 ## Resources
 
