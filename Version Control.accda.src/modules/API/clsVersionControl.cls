@@ -4158,21 +4158,43 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
 End Function
 
 
- ' X17: even raw target calls enter through the accepted command dispatcher.
 Public Function CallVBA(ByVal strFunction As String, ByVal strArguments As String) As Variant
+    Dim varValue As Variant, lngNumber As Long, strMessage As String
+    If TryCallVBA(strFunction, strArguments, varValue, lngNumber, strMessage) Then
+        CallVBA = varValue
+    Else
+        CallVBA = AsyncRequestFailure(vbNullString, strMessage, lngNumber:=lngNumber)
+    End If
+End Function
+
+Public Function CallVBAResult(ByVal strFunction As String, ByVal strArguments As String) As Variant
+    Dim varValue As Variant, lngNumber As Long, strMessage As String
+    If TryCallVBA(strFunction, strArguments, varValue, lngNumber, strMessage) Then
+        CallVBAResult = Array("msaccess-vcs.call-vba-result/1", "returned", varValue)
+    Else
+        CallVBAResult = Array("msaccess-vcs.call-vba-result/1", "failed", lngNumber, strMessage)
+    End If
+End Function
+
+Private Function TryCallVBA(ByVal strFunction As String, ByVal strArguments As String, _
+    ByRef varValue As Variant, ByRef lngNumber As Long, ByRef strMessage As String) As Boolean
     Dim arguments As Collection
     If DebugMode(True) Then On Error GoTo 0 Else On Error GoTo Failed
     Set arguments = ParseJson(strArguments)
     Select Case arguments.Count
-        Case 0: CallVBA = Application.Run(strFunction)
-        Case 1: CallVBA = Application.Run(strFunction, arguments(1))
-        Case 2: CallVBA = Application.Run(strFunction, arguments(1), arguments(2))
-        Case 3: CallVBA = Application.Run(strFunction, arguments(1), arguments(2), arguments(3))
-        Case Else: CallVBA = AsyncRequestFailure(vbNullString, T("At most three arguments are supported."))
+        Case 0: varValue = Application.Run(strFunction)
+        Case 1: varValue = Application.Run(strFunction, arguments(1))
+        Case 2: varValue = Application.Run(strFunction, arguments(1), arguments(2))
+        Case 3: varValue = Application.Run(strFunction, arguments(1), arguments(2), arguments(3))
+        Case Else
+            strMessage = T("At most three arguments are supported.")
+            Exit Function
     End Select
+    TryCallVBA = True
     Exit Function
 Failed:
-    CallVBA = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
+    lngNumber = Err.Number
+    strMessage = Err.Description
 End Function
 
 '---------------------------------------------------------------------------------------
