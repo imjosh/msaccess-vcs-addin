@@ -116,6 +116,7 @@ Public Sub DispatchFailureStaysInsideTheCallback()
     Dim eimPrior As eInteractionMode
     Dim eelPrior As eErrorLevel
     Dim lngJournal As Long
+    Dim colNew As Collection
     On Error GoTo Failed
     blnOrigBreak = Options.BreakOnError
     eimPrior = Operation.InteractionMode
@@ -126,9 +127,9 @@ Public Sub DispatchFailureStaysInsideTheCallback()
     Log.Add "  [DispatchFailureStaysInsideTheCallback] The timer warning logged by this test is expected.", False
     ' The injected failure is a Run target that cannot be resolved, which fails in the
     ' callback's own dispatch. An error raised inside a resolved Run target is not used:
-    ' natively, VBA presents it as an unhandled error in the target (a modal dialog under
-    ' the test runner) and never returns it to the callback.
-    If Not ArmProbe("count", ARM_SECONDS, MissingCommand) Then GoTo Restore
+    ' in a native run, VBA presented it as an unhandled error in the target (a modal
+    ' dialog under the test runner) and did not return it to the callback.
+    If Not ArmProbe("missing", ARM_SECONDS, MissingCommand) Then GoTo Restore
     Sleep DUE_MS
     lngJournal = Log.ErrorJournalCount
     ' An error escaping here would reach Failed and fail this test.
@@ -136,6 +137,13 @@ Public Sub DispatchFailureStaysInsideTheCallback()
     TestAssert m_lngRuns = 0, "the unresolved request ran " & m_lngRuns & " times"
     TestAssert Not TimerIsPending
     TestAssert Log.ErrorJournalCount = lngJournal + 1, "the failure was not recorded once"
+    ' The recorded failure must be this dispatch, not some earlier step of the request.
+    Set colNew = Log.GetErrorJournalSince(lngJournal)
+    If colNew.Count = 1 Then
+        TestAssert InStr(1, colNew(1)("message"), ".A49UnresolvedTimerTarget", vbTextCompare) > 0, _
+            "the recorded failure was not the unresolved dispatch: " & colNew(1)("message")
+        Log.Add "  [DispatchFailureStaysInsideTheCallback] Recorded error " & colNew(1)("errNumber") & ".", False
+    End If
     DisarmProbe
     GoTo Restore
 Failed:
