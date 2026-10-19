@@ -3,8 +3,10 @@
 ' Module    : modTestCancelRequest
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : Tests for the MCP cancel checkpoint (clsOperation.CheckCancelRequest) and
-'           : the poll behind it (clsMCP.CheckCancelled).
+' Purpose   : Tests for the MCP cancel checkpoint (clsOperation.CheckCancelRequest),
+'           : the poll behind it (clsMCP.CheckCancelled), the request owner every
+'           : route shares (clsOperation.RequestCancel) and the dismiss-cancel
+'           : validation table (modDialogInspect.CancelRequestRefusal).
 '           : Like modTestOperationLifecycle, these run inside a test-run root, so roots
 '           : are driven on private clsOperation instances. A private instance never
 '           : asks MCP and routes a request only to its own error level, so nothing here
@@ -215,6 +217,116 @@ Public Sub TestCancelCheckPollsOnlyARunningRoot()
     TestAssert cOp.CheckCancelRequest, "the resumed root polls"
     cResumed.Complete eorFailed
     TestAssert cOp.Result = eorCanceled, "the resumed merge finishes cancelled"
+
+End Sub
+
+
+Public Sub TestRequestCancelOnlyTakesARunningRoot()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+    Dim cResumed As clsRootOperationLease
+    Dim cPause As clsOperationPause
+    Dim strToken As String
+    Dim eelBefore As eErrorLevel
+
+    ' No root: refused, and nothing changes. (Without a root the level read is the
+    ' shared scope's, so compare it with itself rather than with a fixed value.)
+    Set cOp = NewOperation
+    eelBefore = cOp.ErrorLevel
+    TestAssert Not cOp.RequestCancel, "no root takes no request"
+    TestAssert Not cOp.CancelRequested, "a refused request is not recorded"
+    TestAssert cOp.ErrorLevel = eelBefore, "a refused request leaves the level alone"
+
+    ' A running root records it once and routes it to the level its loops stop on.
+    Set cRoot = cOp.TryBeginRoot(eotExport)
+    TestAssert cOp.RequestCancel, "a running root takes the request"
+    TestAssert cOp.CancelRequested, "the request is recorded"
+    TestAssert cOp.ErrorLevel = eelCritical, "the request is the critical level loops stop on"
+    cOp.ErrorLevel = eelNoError
+    TestAssert cOp.RequestCancel, "a second request reports the recorded one"
+    TestAssert cOp.ErrorLevel = eelNoError, "a second request is not routed again"
+    TestAssert cOp.Status = eosRunning, "a request does not finish the root"
+    cRoot.Complete eorFailed
+    TestAssert cOp.Result = eorCanceled, "the root finishes cancelled"
+
+    ' A finished root takes none, and the next root starts without it.
+    TestAssert Not cOp.RequestCancel, "a finished root takes no request"
+    Set cRoot = cOp.TryBeginRoot(eotExport)
+    TestAssert Not cOp.CancelRequested, "a new root starts without the old request"
+    cRoot.Complete eorSuccess
+    TestAssert cOp.Result = eorSuccess, "the new root finishes as asked"
+
+    ' A paused root is in foreign code: refused until it resumes.
+    Set cRoot = cOp.TryBeginRoot(eotExport)
+    Set cPause = cOp.TryPause()
+    TestAssert Not cOp.RequestCancel, "a paused root takes no request"
+    TestAssert Not cOp.CancelRequested, "the paused root records nothing"
+    cPause.ResumePause
+    TestAssert cOp.RequestCancel, "the resumed root takes it"
+    cRoot.Complete eorFailed
+    TestAssert cOp.Result = eorCanceled, "the export finishes cancelled"
+
+    ' A staged root waits for its continuation: refused until resumed.
+    Set cOp = NewOperation
+    Set cRoot = cOp.TryBeginRoot(eotMerge)
+    strToken = cRoot.DetachForContinuation()
+    TestAssert Not cOp.RequestCancel, "a staged root takes no request"
+    TestAssert cOp.ErrorLevel = eelNoError, "the staged root's level is left alone"
+    Set cResumed = cOp.ResumeRoot(strToken)
+    TestAssert cOp.RequestCancel, "the resumed root takes it"
+    cResumed.Complete eorFailed
+    TestAssert cOp.Result = eorCanceled, "the merge finishes cancelled"
+
+End Sub
+
+
+Public Sub TestRequestCancelYieldsToDecisionsAndRuntimeErrors()
+
+    Dim cOp As clsOperation
+    Dim cRoot As clsRootOperationLease
+
+    Set cOp = NewOperation
+    Set cRoot = cOp.TryBeginRoot(eotMerge, edpBlock)
+    cOp.ResolvePrompt vbYesNo, "Confirm", "Proceed?"
+    TestAssert cOp.RequestCancel, "the request is taken"
+    cRoot.Complete eorFailed
+    TestAssert cOp.Result = eorDecisionRequired, "decision_required wins over the request"
+
+    Set cOp = NewOperation
+    Set cRoot = cOp.TryBeginRoot(eotExport)
+    TestAssert cOp.RequestCancel, "the request is taken"
+    cOp.RecordRootRuntimeError cOp.CurrentRootToken, "Type mismatch", 13
+    TestAssert cOp.HasRootRuntimeError, "the runtime error is kept"
+    cRoot.Complete eorFailed
+    TestAssert cOp.Result = eorFailed, "a runtime error still fails the root"
+
+    ' A private test-run root routes nothing; its runner reports the run.
+    Set cOp = NewOperation
+    Set cRoot = cOp.TryBeginRoot(eotTestRun)
+    TestAssert cOp.RequestCancel, "a test run takes the request"
+    TestAssert cOp.ErrorLevel < eelCritical, "a test run is not stopped through the error level"
+    cRoot.Complete eorSuccess
+    TestAssert cOp.Result = eorSuccess, "a test run keeps the result its runner reports"
+
+End Sub
+
+
+Public Sub TestDismissCancelRefusalTable()
+
+    ' Arguments: supplied ID, active operation's public ID, active, ID required.
+    TestAssert CancelRequestRefusal("", "", False, False) = "no_running_operation", "nothing active, trusted"
+    TestAssert CancelRequestRefusal("op-1", "op-1", False, True) = "no_running_operation", "nothing active, matching ID"
+    TestAssert CancelRequestRefusal("", "op-1", True, True) = "operation_id_required", "API call without an ID"
+    TestAssert CancelRequestRefusal("", "", True, True) = "operation_id_required", "API call, operation without an ID"
+    TestAssert CancelRequestRefusal("", "op-1", True, False) = "", "trusted VBA may omit the ID"
+    TestAssert CancelRequestRefusal("", "", True, False) = "", "trusted VBA, operation without an ID"
+    TestAssert CancelRequestRefusal("op-1", "op-1", True, True) = "", "matching ID"
+    TestAssert CancelRequestRefusal("op-1", "op-1", True, False) = "", "matching ID from trusted VBA"
+    TestAssert CancelRequestRefusal("op-0", "op-1", True, True) = "operation_id_mismatch", "stale or foreign ID"
+    TestAssert CancelRequestRefusal("OP-1", "op-1", True, True) = "operation_id_mismatch", "IDs compare exactly"
+    TestAssert CancelRequestRefusal("op-1", "", True, True) = "operation_id_mismatch", "an operation without an ID matches none"
+    TestAssert CancelRequestRefusal("op-1", "", True, False) = "operation_id_mismatch", "even from trusted VBA"
 
 End Sub
 

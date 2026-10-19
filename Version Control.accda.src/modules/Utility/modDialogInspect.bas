@@ -23,6 +23,10 @@ Private Const ERR_NOT_ADDIN_FORM As String = "not_addin_form"
 Private Const ERR_UNSUPPORTED_ACTION As String = "unsupported_action"
 Private Const ERR_OPERATION_IN_PROGRESS As String = "operation_in_progress"
 Private Const ERR_NOT_OPEN As String = "not_open"
+Private Const ERR_NO_RUNNING_OPERATION As String = "no_running_operation"
+Private Const ERR_OPERATION_ID_REQUIRED As String = "operation_id_required"
+Private Const ERR_OPERATION_ID_MISMATCH As String = "operation_id_mismatch"
+Private Const ERR_OPERATION_NOT_RUNNING As String = "operation_not_running"
 
 
 '---------------------------------------------------------------------------------------
@@ -74,11 +78,16 @@ End Function
 ' Author    : Josh
 ' Date      : 09/29/2026
 ' Purpose   : Close a finished add-in form, or request cancellation of a running
-'           : operation. Cancel sets the cancel flag or critical error level and does
-'           : not call Finish; the running operation stops at its next check.
+'           : operation. Cancel goes through Operation.RequestCancel and does not
+'           : call Finish; the running operation stops at its next check, and its own
+'           : result reports whether it was cancelled. A call that came through the
+'           : API dispatcher must name the running operation by its public ID (the
+'           : MCP operation ID); trusted VBA in this session may omit it. A refused
+'           : cancel changes nothing.
 '---------------------------------------------------------------------------------------
 '
-Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = ACTION_CLOSE) As String
+Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = ACTION_CLOSE, _
+    Optional ByVal strOperationId As String = vbNullString) As String
 
     Dim strAct As String
     Dim blnRunning As Boolean
@@ -106,19 +115,15 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
 
     blnRunning = Operation.IsActive()
 
-    If strAct = ACTION_CLOSE And blnRunning Then
+    ' A pending timer request is work about to start: close waits for it too.
+    If strAct = ACTION_CLOSE And (blnRunning Or TimerIsPending) Then
         DismissAddinDialog = DismissRefusal(dRoot, ERR_OPERATION_IN_PROGRESS, _
             T("This window belongs to a running operation. Close is only for a finished results window. Pass action=cancel to interrupt the operation."), True)
         Exit Function
     End If
 
-    If strAct = ACTION_CANCEL And blnRunning Then
-        RequestCancel
-        dRoot.Add "success", True
-        dRoot.Add "interrupted", True
-        dRoot.Add "closed", False
-        dRoot.Add "message", T("Cancellation requested. The operation stops at its next check and Finish reports cancelled.")
-        DismissAddinDialog = ConvertToJson(dRoot)
+    If strAct = ACTION_CANCEL Then
+        DismissAddinDialog = RequestOperationCancel(dRoot, strOperationId)
         Exit Function
     End If
 
@@ -165,22 +170,108 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : RequestCancel
+' Procedure : RequestOperationCancel
 ' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Ask the running operation to stop at its next check.
+' Date      : 10/19/2026
+' Purpose   : The cancel action. Validates the request against the running operation,
+'           : then hands it to Operation.RequestCancel. Acceptance is only a request:
+'           : nothing is finished or closed here.
 '---------------------------------------------------------------------------------------
 '
-Private Sub RequestCancel()
+Private Function RequestOperationCancel(ByVal dRoot As Dictionary, ByVal strOperationId As String) As String
 
-    If TestRunner.State = etrsRunning Then
-        TestRunner.Cancel
-    Else
-        Operation.ErrorLevel = eelCritical
-        Operation.Result = eorCanceled
+    Dim strActiveId As String
+    Dim strPattern As String
+
+    strActiveId = ActiveOperationPublicId()
+    strPattern = CancelRequestRefusal(strOperationId, strActiveId, Operation.IsActive(), APIDispatchBusy())
+    If Len(strPattern) = 0 Then
+        ' A staged or paused root cannot take a request now.
+        If Not Operation.RequestCancel("modDialogInspect.DismissAddinDialog") Then strPattern = ERR_OPERATION_NOT_RUNNING
     End If
 
-End Sub
+    If Len(strPattern) > 0 Then
+        dRoot.Add "requested", False
+        RequestOperationCancel = DismissRefusal(dRoot, strPattern, CancelRefusalMessage(strPattern), True)
+        Exit Function
+    End If
+
+    dRoot.Add "success", True
+    dRoot.Add "requested", True
+    dRoot.Add "interrupted", True
+    dRoot.Add "closed", False
+    If Len(strActiveId) > 0 Then dRoot.Add "operation_id", strActiveId
+    dRoot.Add "message", T("Cancellation requested. This is only a request: the operation stops at its next check, and its own result reports whether it was cancelled.")
+    RequestOperationCancel = ConvertToJson(dRoot)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CancelRequestRefusal
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : The refusal pattern for a cancel request, or an empty string when it may
+'           : go ahead. With no active operation there is nothing to cancel. An ID,
+'           : when given, must be the active operation's public ID; an operation with
+'           : no public ID matches none, so a stale or foreign ID is refused. The ID
+'           : may be omitted only when blnIdRequired is False (trusted VBA). Pure, so
+'           : the table can be tested without a running operation.
+'---------------------------------------------------------------------------------------
+'
+Public Function CancelRequestRefusal(ByVal strOperationId As String, ByVal strActiveId As String, _
+    ByVal blnActive As Boolean, ByVal blnIdRequired As Boolean) As String
+
+    If Not blnActive Then
+        CancelRequestRefusal = ERR_NO_RUNNING_OPERATION
+    ElseIf Len(strOperationId) = 0 Then
+        If blnIdRequired Then CancelRequestRefusal = ERR_OPERATION_ID_REQUIRED
+    ElseIf Len(strActiveId) = 0 Then
+        CancelRequestRefusal = ERR_OPERATION_ID_MISMATCH
+    ElseIf StrComp(strOperationId, strActiveId, vbBinaryCompare) <> 0 Then
+        CancelRequestRefusal = ERR_OPERATION_ID_MISMATCH
+    End If
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ActiveOperationPublicId
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : The public ID of the session's active operation: the MCP operation ID
+'           : registered for it, while that operation has not reported its outcome.
+'           : Empty for an operation MCP did not start, so no ID can name it.
+'---------------------------------------------------------------------------------------
+'
+Private Function ActiveOperationPublicId() As String
+    If Not Operation.IsActive() Then Exit Function
+    If Operation.Source <> eosMCPTool Then Exit Function
+    If Not MCP.IsActive Then Exit Function
+    If MCP.TerminalPosted Then Exit Function
+    ActiveOperationPublicId = MCP.OperationId
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CancelRefusalMessage
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : The message for a refused cancel request.
+'---------------------------------------------------------------------------------------
+'
+Private Function CancelRefusalMessage(ByVal strPattern As String) As String
+    Select Case strPattern
+        Case ERR_NO_RUNNING_OPERATION
+            CancelRefusalMessage = T("No operation is running, so there is nothing to cancel. Nothing was changed.")
+        Case ERR_OPERATION_ID_REQUIRED
+            CancelRefusalMessage = T("Pass the running operation's ID to cancel it through the API. Nothing was changed.")
+        Case ERR_OPERATION_ID_MISMATCH
+            CancelRefusalMessage = T("That ID does not name the running operation. Nothing was changed.")
+        Case ERR_OPERATION_NOT_RUNNING
+            CancelRefusalMessage = T("The operation is paused or between steps and cannot take a request now. Nothing was changed.")
+    End Select
+End Function
 
 
 '---------------------------------------------------------------------------------------

@@ -269,6 +269,109 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : ScopedSyncRequestCancelCheck
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : A50: ImportByType / ExportByType when the running root accepts a cancel
+'           : request (as closing the main form or a dismiss cancel makes one). Needs a
+'           : free session operation, like ScopedSyncCancelCheck, and the same host.
+'           : Also checks that a blocked decision and a runtime error still win, and
+'           : that the next root starts without the request. Returns "OK", or the failed checks one per
+'           : line. This drives the seam in place of the work: it shows the wrap-up,
+'           : not that any public route delivers the request.
+'---------------------------------------------------------------------------------------
+'
+Public Function ScopedSyncRequestCancelCheck(Optional blnExport As Boolean = False) As String
+    Dim cVcs As clsVersionControl
+    Dim dResult As Dictionary
+    Dim strFailed As String
+    Dim lngErr As Long
+    Dim strErr As String
+
+    On Error GoTo ErrHandler
+    If Operation.Status = eosRunning Then
+        ScopedSyncRequestCancelCheck = "Not run: an operation is already running."
+        Exit Function
+    End If
+    VCS.SetOperationPolicy "block"
+    Set cVcs = New clsVersionControl
+    cVcs.RequestCancelAfterBegin = True
+    If blnExport Then
+        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+    Else
+        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    End If
+    Check strFailed, Not CBool(dResult("success")), "request fails the call"
+    Check strFailed, dResult.Exists("cancelled"), "request carries cancelled"
+    If dResult.Exists("cancelled") Then
+        Check strFailed, CBool(dResult("cancelled")), "cancelled is true"
+    End If
+    Check strFailed, dResult.Exists("error"), "request carries an error"
+    If dResult.Exists("error") Then
+        Check strFailed, CStr(dResult("error")) = "Operation was canceled.", "request reports a cancel"
+    End If
+    Check strFailed, dResult.Exists("logPath"), "request names its log"
+    Check strFailed, Operation.Result = eorCanceled, "root finishes as cancelled"
+    Check strFailed, Operation.Status <> eosRunning, "request releases the root"
+
+    ' A blocked decision keeps precedence over the request.
+    Set cVcs = New clsVersionControl
+    cVcs.BlockAfterBegin = True
+    cVcs.RequestCancelAfterBegin = True
+    If blnExport Then
+        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+    Else
+        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    End If
+    Check strFailed, dResult.Exists("decision_required"), "decision wins over the request"
+    Check strFailed, Not dResult.Exists("cancelled"), "decision has no cancelled field"
+    Check strFailed, Operation.Result = eorDecisionRequired, "root finishes as decision required"
+
+    ' A runtime error after the request is a failure, not a cancel.
+    Set cVcs = New clsVersionControl
+    cVcs.RequestCancelAfterBegin = True
+    cVcs.FaultAfterBegin = 5
+    If blnExport Then
+        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+    Else
+        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    End If
+    Check strFailed, Not CBool(dResult("success")), "error after request fails the call"
+    Check strFailed, Not dResult.Exists("cancelled"), "error after request has no cancelled field"
+    If dResult.Exists("errorNumber") Then
+        Check strFailed, CLng(dResult("errorNumber")) = 5, "error after request keeps its number"
+    Else
+        Check strFailed, False, "error after request carries errorNumber"
+    End If
+    Check strFailed, Operation.Result = eorFailed, "error after request finishes as failed"
+
+    ' The next root inherits nothing.
+    Set cVcs = New clsVersionControl
+    cVcs.FaultAfterBegin = 5
+    If blnExport Then
+        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+    Else
+        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    End If
+    Check strFailed, Not Operation.CancelRequested, "the next root starts without the request"
+    Check strFailed, Not dResult.Exists("cancelled"), "the next root's error has no cancelled field"
+    Check strFailed, Operation.Result = eorFailed, "the next root's error finishes as failed"
+
+CleanUp:
+    On Error Resume Next
+    VCS.ClearOperationPolicy
+    If lngErr <> 0 Then strFailed = strFailed & "ERROR: " & lngErr & ": " & strErr
+    If Len(strFailed) = 0 Then strFailed = "OK"
+    ScopedSyncRequestCancelCheck = strFailed
+    Exit Function
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : ScopedSyncNativeCloseCheck
 ' Author    : Josh
 ' Date      : 10/07/2026

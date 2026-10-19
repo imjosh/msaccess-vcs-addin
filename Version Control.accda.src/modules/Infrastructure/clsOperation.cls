@@ -413,12 +413,40 @@ Public Function CheckCancelRequest() As Boolean
     If m_Root.State <> eosRunning Then Exit Function
     If Not CancelPolled() Then Exit Function
 
+    CheckCancelRequest = RequestCancel("clsOperation.CheckCancelRequest")
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RequestCancel
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : The one owner of a cancel request for this root, whatever route it came
+'           : by: the MCP poll, closing the main form, or a dismiss cancel. Records
+'           : the request and routes it into the signal the loops stop on (see
+'           : CheckCancelRequest). Only a running root accepts one. With no root, a
+'           : finished one, or a staged or paused one, nothing changes and the result
+'           : is False. A request already recorded returns True and is not routed
+'           : again. A request is not a result: Finish reports the root cancelled
+'           : unless a blocked decision or a runtime error takes precedence.
+'---------------------------------------------------------------------------------------
+'
+Public Function RequestCancel(Optional ByVal strSource As String = "clsOperation.RequestCancel") As Boolean
+
+    If m_Root.Completed Then Exit Function
+    If m_Root.CancelRequested Then
+        RequestCancel = True
+        Exit Function
+    End If
+    If m_Root.State <> eosRunning Then Exit Function
+
     m_Root.CancelRequested = True
-    CheckCancelRequest = True
+    RequestCancel = True
     If m_Root.OperationType = eotTestRun Then
         If IsSessionSingleton Then TestRunner.Cancel
     ElseIf IsSessionSingleton Then
-        Log.Error eelCritical, T("Canceled Operation"), "clsOperation.CheckCancelRequest"
+        Log.Error eelCritical, T("Canceled Operation"), strSource
     Else
         ' A private instance must not write to the running operation's log.
         Me.ErrorLevel = eelCritical
@@ -451,12 +479,27 @@ End Property
 ' Procedure : CancelRequested
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : True once CheckCancelRequest has seen an MCP cancel request for this
-'           : root. Kept after Finish until the next root begins.
+' Purpose   : True once RequestCancel has accepted a cancel request for this root,
+'           : from the MCP poll, the main form or a dismiss cancel. Kept after Finish
+'           : until the next root begins.
 '---------------------------------------------------------------------------------------
 '
 Public Property Get CancelRequested() As Boolean
     CancelRequested = m_Root.CancelRequested
+End Property
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : HasRootRuntimeError
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : True once RecordRootRuntimeError has kept an error for this root. A
+'           : wrap-up that reports its own result reads it, so a runtime error keeps
+'           : precedence over a cancel request as it does in Finish.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get HasRootRuntimeError() As Boolean
+    HasRootRuntimeError = (Len(m_Root.RuntimeError) > 0)
 End Property
 
 

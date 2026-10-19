@@ -455,6 +455,12 @@ Public Function API(strMethod As String, _
         Select Case strMethod
             Case "GetOption", "GetLogContent", "GetExportFolder", "GetProjectName", "IsVBACompiled", "IsDatabaseOpen"
                 ' Read without changing the active owner's source or policy.
+            Case "ListAddinDialogs", "DismissAddinDialog"
+                ' Listing reads. Dismiss validates its own action: close refuses while
+                ' work is active, and cancel must name the active operation's ID (A50).
+                ' The reentrant refusal above comes first, so through API() this is
+                ' reached only beside a pending timer or a build/merge continuation
+                ' (see docs/noninteractive-dialogs.md).
             Case Else
                 API = RefuseReentrantCall(strMethod, "API", rrNested)
                 RestoreErrorBreaks

@@ -734,8 +734,12 @@ Private Sub Form_Unload(Cancel As Integer)
             ' Operation.Finish after the loop exits cleanly with results intact.
             TestRunner.Cancel
         Else
+            ' The root records the request, so its wrap-up reports a cancel rather
+            ' than a plain failure (A50). It logs the critical level the loops stop on.
             m_blnCancelRequested = True
-            Log.Error eelCritical, T("Canceled Operation"), Me.Name & ".Form_Unload"
+            If Not Operation.RequestCancel(Me.Name & ".Form_Unload") Then
+                Log.Error eelCritical, T("Canceled Operation"), Me.Name & ".Form_Unload"
+            End If
         End If
     End If
 

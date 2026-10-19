@@ -464,7 +464,8 @@ Public Function CompatibilityCommandRefusal(ByVal method As String) As String
     If Len(m_strPolicyOwner) = 0 Then Exit Function
     If m_strPolicyOwner = CurrentCaller Then Exit Function
     Select Case method
-        Case "GetOption", "GetLogContent", "GetExportFolder", "GetProjectName", "IsVBACompiled", "IsDatabaseOpen"
+        Case "GetOption", "GetLogContent", "GetExportFolder", "GetProjectName", "IsVBACompiled", "IsDatabaseOpen", _
+            "ListAddinDialogs"
             Exit Function
     End Select
     CompatibilityCommandRefusal = SessionFailure("interaction_policy_owned_by_another_caller")

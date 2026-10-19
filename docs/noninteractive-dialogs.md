@@ -364,15 +364,43 @@ buttons, such as the cancel confirmation, is `unknown` and is only reported.
 `ListAddinDialogs` and `DismissAddinDialog` (module `modDialogInspect`,
 exposed as `VCS.ListAddinDialogs` and `VCS.DismissAddinDialog`) enumerate
 open `frmVCS*` forms when Access is responsive. Refusals use the patterns
-`not_addin_form`, `unsupported_action`, `operation_in_progress`, and
-`not_open`.
+`not_addin_form`, `unsupported_action`, `operation_in_progress`, `not_open`,
+`no_running_operation`, `operation_id_required`, `operation_id_mismatch`,
+and `operation_not_running`. A refused request changes nothing.
 
 - `action=close` closes a finished window and refuses while an operation is
   running.
-- `action=cancel` sets the test-runner cancel flag, or the operation error
-  level, and does not call `Finish` itself. The running operation stops at
-  its next check. `interrupted` is true. That is not the same as closing a
-  finished results window.
+- `action=cancel` takes an optional third argument, the running operation's
+  public ID: the MCP operation ID registered for it, until its outcome is
+  reported. A call through the API dispatcher must pass it; trusted VBA in the
+  session may omit it. An ID that does not name the running operation (stale,
+  foreign, or for an operation MCP did not start) is refused. With no running
+  operation, cancel is refused and closes nothing. An accepted cancel goes
+  through `Operation.RequestCancel`, the same owner as the MCP poll and closing
+  `frmVCSMain`: the test runner's cancel flag for a test run, otherwise a
+  critical "Canceled Operation". A staged or paused root cannot take one
+  (`operation_not_running`). The result has `requested: true`,
+  `interrupted: true`, `closed: false` and the `operation_id`. It is only a
+  request: `Finish` is not called, the operation stops at its next check, and
+  its own result reports `cancelled`, unless a blocked decision
+  (`decision_required`) or a runtime error (failure) takes precedence. The
+  next operation starts without it. `operation_id` is included only when the
+  operation has one.
+- While work is active or a timer request is pending, the API admits
+  `ListAddinDialogs` and `DismissAddinDialog` alongside the reads; `close`
+  still refuses then. An API call that is still running holds the dispatcher,
+  and every later API call is refused as reentrant until it returns. That
+  includes the asynchronous `Export`, `FullExport`, `ExportVBA` and
+  `RunFilteredTests`, which the timer runs inside the dispatcher. So the API
+  cancel route reaches only a build or merge continuation that the timer runs
+  outside it. For the rest, use the MCP poll (`vcs_cancel_operation`) or the
+  Win32 dialog route. Under another caller's operation policy, only
+  `ListAddinDialogs` is admitted.
+- `ImportByType` and `ExportByType` report a request their root accepted as
+  `error: "Operation was canceled."` with `cancelled: true`, and a runtime
+  error after it as an ordinary failure. Such a request comes from trusted VBA
+  or from closing the main form. Whether the main form is open during a scoped
+  call has not been measured. They still have no MCP poll checkpoint.
 
 `DoCmd.SetWarnings` is not used to hide these dialogs.
 

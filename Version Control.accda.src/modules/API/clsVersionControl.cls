@@ -25,6 +25,7 @@ Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 Private m_lngFaultAfterBegin As Long
 Private m_blnCancelAfterBegin As Boolean
 Private m_blnBlockAfterBegin As Boolean
+Private m_blnRequestCancelAfterBegin As Boolean
 
 
 '---------------------------------------------------------------------------------------
@@ -1560,8 +1561,10 @@ End Function
 ' Purpose   : Shared ErrHandler for ImportObject, ExportObject, ImportByType and
 '           : ExportByType. blnBegun is True only once the call's own Begin succeeded.
 '           : Then the error goes into that operation's log, the log is saved while the
-'           : Log singleton still holds it, and the operation is finished. Before that,
-'           : any running root is another caller's, so nothing of it is touched.
+'           : Log singleton still holds it, the error is recorded on the root (so it
+'           : outranks a cancel request in Finish, A50), and the operation is finished.
+'           : Before that, any running root is another caller's, so nothing of it is
+'           : touched.
 '---------------------------------------------------------------------------------------
 '
 Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Boolean) As String
@@ -1588,6 +1591,7 @@ Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Bool
         End If
         strLogPath = Log.SavedLogFilePath
         Set cOp = Operation
+        cOp.RecordRootRuntimeError cOp.CurrentRootToken, strDescription, lngNumber
     End If
 
     ApiOperationErrHandler = FailSingleObjectOperation(cOp, strLogPath, lngNumber, strDescription)
@@ -1659,11 +1663,12 @@ Public Function ExportByType(ByVal varTypes As Variant, _
     blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Export")
+    If m_blnRequestCancelAfterBegin Then Operation.RequestCancel "clsVersionControl.RequestCancelAfterBegin"
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
     If m_blnBlockAfterBegin Then Operation.DecisionBlocked = True
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
-    Else
+    ElseIf Not m_blnRequestCancelAfterBegin Then
         modExport.ExportScoped colContainers, blnFullExport
     End If
     ExportByType = FinishScopedSync(dResult, colContainers, True)
@@ -1741,11 +1746,12 @@ Public Function ImportByType(ByVal varTypes As Variant, _
     blnBegun = True
 
     BeginScopedSyncLog T("Beginning Category Import")
+    If m_blnRequestCancelAfterBegin Then Operation.RequestCancel "clsVersionControl.RequestCancelAfterBegin"
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
     If m_blnBlockAfterBegin Then Operation.DecisionBlocked = True
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
-    Else
+    ElseIf Not m_blnRequestCancelAfterBegin Then
         modBuild.MergeScoped colContainers, blnFullImport
     End If
     ImportByType = FinishScopedSync(dResult, colContainers, False)
@@ -1784,6 +1790,14 @@ End Property
 ' outcome (for example a canceled native close) meets decision-required precedence.
 Friend Property Let BlockAfterBegin(ByVal blnBlock As Boolean)
     m_blnBlockAfterBegin = blnBlock
+End Property
+
+
+' Test seam: a cancel request accepted by the running root (as closing the main form
+' or a dismiss cancel makes one) in place of the scoped work. It is made before
+' FaultAfterBegin raises, so a runtime error can follow the request.
+Friend Property Let RequestCancelAfterBegin(ByVal blnRequest As Boolean)
+    m_blnRequestCancelAfterBegin = blnRequest
 End Property
 
 
@@ -1835,6 +1849,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Dim blnCanceled As Boolean
     Dim blnCritical As Boolean
     Dim blnUserCanceled As Boolean
+    Dim blnRequested As Boolean
     Dim intResult As eOperationResult
     Dim strColor As String
     Dim strLogPath As String
@@ -1842,8 +1857,11 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     ' A canceled conflict dialog and a canceled native save/discard prompt on a close
     ' (A36) are both a confirmed user cancel; a failed close is not.
     blnUserCanceled = VCSIndex.Conflicts.UserCanceled Or Operation.NativeCloseCanceled
+    ' A cancel request the root accepted (closing the main form, or a dismiss cancel)
+    ' is a cancel too, unless a runtime error ended the root (A50).
+    blnRequested = Operation.CancelRequested And Not Operation.HasRootRuntimeError
     blnCritical = (Operation.ErrorLevel = eelCritical)
-    blnCanceled = blnCritical Or blnUserCanceled
+    blnCanceled = blnCritical Or blnUserCanceled Or blnRequested
 
     If blnCanceled Then
         strColor = "Red"
@@ -1876,7 +1894,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     If Operation.DecisionBlocked Then
         ' A prompt no policy answered is not a plain failure or cancel.
         intResult = eorDecisionRequired
-    ElseIf blnUserCanceled Then
+    ElseIf blnUserCanceled Or blnRequested Then
         intResult = eorCanceled
     ElseIf blnCritical Or Operation.ErrorLevel >= eelError Then
         intResult = eorFailed
@@ -1889,7 +1907,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     If Not dResult.Exists("success") Then
         dResult.Add "success", (intResult = eorSuccess)
         If intResult <> eorSuccess Then
-            dResult.Add "error", IIf(blnUserCanceled, _
+            dResult.Add "error", IIf(blnUserCanceled Or blnRequested, _
                 "Operation was canceled.", _
                 "Operation completed with errors. Check the log for details.")
         End If
@@ -4149,12 +4167,14 @@ End Function
 ' Procedure : DismissAddinDialog
 ' Author    : Josh
 ' Date      : 09/29/2026
-' Purpose   : Close a finished add-in form, or cancel a running operation.
-'           : action is "close" or "cancel".
+' Purpose   : Close a finished add-in form, or request cancellation of a running
+'           : operation. action is "close" or "cancel". Through the API, a cancel
+'           : names the running operation by its public ID (the MCP operation ID).
 '---------------------------------------------------------------------------------------
 '
-Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close") As String
-    DismissAddinDialog = modDialogInspect.DismissAddinDialog(strName, strAction)
+Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = "close", _
+    Optional ByVal strOperationId As String = vbNullString) As String
+    DismissAddinDialog = modDialogInspect.DismissAddinDialog(strName, strAction, strOperationId)
 End Function
 
 
