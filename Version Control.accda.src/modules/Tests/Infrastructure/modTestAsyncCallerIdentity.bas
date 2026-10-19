@@ -25,7 +25,7 @@ End Function
 
 
 ' Both launches happen on one VBA stack, before Access can deliver the pending timer.
-' Explicit dispatch uses the real timer entry point and removes timing from the test.
+' Explicit dispatch uses the timer's dispatch seam and removes timing from the test.
 Public Function ProbePendingAsyncCallers(ByVal strOwnerCallback As String, _
     ByVal strRefusedCallback As String, ByVal strRefusedExportFolder As String) As String
 
@@ -42,7 +42,7 @@ Public Function ProbePendingAsyncCallers(ByVal strOwnerCallback As String, _
     dResult.Add "refused_start", APIAsync(strRefusedCallback, "BuildAs", strRefusedExportFolder, strRefusedExportFolder & ".accdb", strSessionEnvelope:=CurrentCompatibilityEnvelope())
     ' Dispatch belongs to its own session scope, after both launches unwind.
     LeaveCompatibilitySession
-    If TimerIsPending Then WinAPITimerCallback
+    If TimerIsPending Then RunPendingTimerRequest
 
 CleanUp:
     On Error Resume Next
@@ -140,7 +140,7 @@ Public Function ProbeRunningAsyncCaller(ByVal blnUnused As Boolean) As String
             ' Keep the API root busy while the timer validates its own envelope.
             strEnvelope = CurrentCompatibilityEnvelope()
             LeaveCompatibilitySession
-            WinAPITimerCallback
+            RunPendingTimerRequest
             strErr = EnterCompatibilitySession(strEnvelope)
             If Len(strErr) > 0 Then dResult.Add "probe_error", strErr
         End If
@@ -150,7 +150,7 @@ Public Function ProbeRunningAsyncCaller(ByVal blnUnused As Boolean) As String
             strSessionEnvelope:=CurrentCompatibilityEnvelope()))
         dResult.Add "launch", dLaunch
         ' The old implementation admits this timer, then overwrites MCP before API refuses.
-        If dLaunch.Exists("async") Then WinAPITimerCallback
+        If dLaunch.Exists("async") Then RunPendingTimerRequest
     End If
     dResult.Add "after", RunningCallerSnapshot()
     MCP.SkipCancelThrottleForTest
@@ -268,7 +268,7 @@ Public Function ProbeDeferredBusyRoot(ByVal strOwnerCallback As String, _
     Log.SaveFile strLogPath
     dResult.Add "before", RunningCallerSnapshot()
     LeaveCompatibilitySession
-    If TimerIsPending Then WinAPITimerCallback
+    If TimerIsPending Then RunPendingTimerRequest
     dResult.Add "timer_pending_after", TimerIsPending
     dResult.Add "after", RunningCallerSnapshot()
     MCP.SkipCancelThrottleForTest

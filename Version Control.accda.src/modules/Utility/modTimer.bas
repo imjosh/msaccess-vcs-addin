@@ -13,20 +13,142 @@ Option Explicit
 ' Windows API calls for Timer functionality
 Private Declare PtrSafe Function ApiSetTimer Lib "user32" Alias "SetTimer" (ByVal hwnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr
 Private Declare PtrSafe Function ApiKillTimer Lib "user32" Alias "KillTimer" (ByVal hwnd As LongPtr, ByVal nIDEvent As LongPtr) As Long
+Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
 
+Private Const WM_TIMER As Long = &H113
+' Allowance for GetTickCount granularity when judging whether an event is early.
+Private Const TIMER_EARLY_MS As Long = 50
 Private Const REG_TIMER_OP_TOKEN As String = "OpToken"
+Private Const REG_TIMER_ARMED_TICK As String = "ArmedTick"
+Private Const REG_TIMER_ARMED_INTERVAL As String = "ArmedInterval"
 
 Private m_lngTimerID As LongPtr
+Private m_lngArmedTick As Long
+Private m_lngArmedInterval As Long
+Private m_strRunningCommand As String
 
 
 '---------------------------------------------------------------------------------------
 ' Procedure : WinAPITimerCallback
 ' Author    : Adam Waller
 ' Date      : 2/25/2022
-' Purpose   : Generic callback function to handle timer requests to resume operations.
+' Purpose   : TIMERPROC for the armed request (HWND, UINT, UINT_PTR, DWORD).
+'           : The event is checked before anything is consumed. KillTimer does not
+'           : remove a WM_TIMER that is already queued, and a thread timer's ID can be
+'           : handed out again once it is killed, so an old event can carry the ID of
+'           : the request armed after it. The armed timer cannot fire before its
+'           : interval has passed, so an event for the armed ID that arrives sooner is
+'           : the old timer's and is ignored. Ignoring a real event costs nothing: the
+'           : armed timer is periodic and fires again. dwTime is not used: Windows
+'           : documents it only as the tick count, not as when the event was generated.
+'           : An old event that arrives a full interval after the re-arm cannot be told
+'           : apart, and an interval at or below TIMER_EARLY_MS gets no such check.
+'           : An event for any other ID is ignored, never killed: by the time an old
+'           : event arrives, its ID may belong to another component's timer.
+'           : Nothing may raise out of a Windows callback, so a failure in the request
+'           : is recorded here as a warning instead: the request's own operation reports
+'           : its outcome, and an error level here would count against whatever runs next.
 '---------------------------------------------------------------------------------------
 '
-Public Sub WinAPITimerCallback()
+Public Sub WinAPITimerCallback(ByVal hwnd As LongPtr, ByVal uMsg As Long, _
+    ByVal idEvent As LongPtr, ByVal dwTime As Long)
+
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strCommand As String
+
+    On Error GoTo ErrHandler
+    m_strRunningCommand = vbNullString
+    If IsArmedEvent(uMsg, idEvent) Then RunPendingTimerRequest
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    strCommand = m_strRunningCommand
+    m_strRunningCommand = vbNullString
+    On Error Resume Next
+    Debug.Print "Timer callback error " & lngErr & ": " & strErr
+    Log.Error eelWarning, "Timer request " & strCommand & " failed: Error " & lngErr & " - " & strErr, _
+        "modTimer.WinAPITimerCallback"
+    Err.Clear
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : IsArmedEvent
+' Purpose   : True only for a timer message for the armed ID, once its interval is due.
+'---------------------------------------------------------------------------------------
+'
+Private Function IsArmedEvent(ByVal uMsg As Long, ByVal idEvent As LongPtr) As Boolean
+    If uMsg <> WM_TIMER Or idEvent = 0 Then Exit Function
+    If idEvent <> ArmedTimerID Then Exit Function
+    IsArmedEvent = ArmedIntervalElapsed
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ArmedTimerID, ArmedIntervalElapsed
+' Purpose   : The armed request's identity and due time. Module state does not survive
+'           : a VBA project reset (MergeReset), so the saved copy stands in after one.
+'           : A request saved without its arm tick (armed by older code) is taken as due.
+'---------------------------------------------------------------------------------------
+'
+Private Function ArmedTimerID() As LongPtr
+    If m_lngTimerID <> 0 Then
+        ArmedTimerID = m_lngTimerID
+    Else
+        ArmedTimerID = GetSetting(PROJECT_NAME, "Timer", "TimerID", 0)
+    End If
+End Function
+
+Private Function ArmedIntervalElapsed() As Boolean
+    Dim strTick As String
+    Dim lngTick As Long
+    Dim lngInterval As Long
+    If m_lngTimerID <> 0 Then
+        lngTick = m_lngArmedTick
+        lngInterval = m_lngArmedInterval
+    Else
+        strTick = GetSetting(PROJECT_NAME, "Timer", REG_TIMER_ARMED_TICK)
+        If Len(strTick) = 0 Then
+            ArmedIntervalElapsed = True
+            Exit Function
+        End If
+        lngTick = CLng(Val(strTick))
+        lngInterval = CLng(Val(GetSetting(PROJECT_NAME, "Timer", REG_TIMER_ARMED_INTERVAL, "0")))
+    End If
+    ArmedIntervalElapsed = (TickDifference(GetTickCount, lngTick) >= lngInterval - TIMER_EARLY_MS)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TickDifference
+' Purpose   : Signed milliseconds from one GetTickCount value to another, across the
+'           : 49.7-day wrap. Both are unsigned DWORDs read into a signed Long.
+'---------------------------------------------------------------------------------------
+'
+Private Function TickDifference(ByVal lngLater As Long, ByVal lngEarlier As Long) As Double
+    Dim dblDiff As Double
+    dblDiff = UnsignedTick(lngLater) - UnsignedTick(lngEarlier)
+    If dblDiff >= 2147483648# Then dblDiff = dblDiff - 4294967296#
+    If dblDiff < -2147483648# Then dblDiff = dblDiff + 4294967296#
+    TickDifference = dblDiff
+End Function
+
+Private Function UnsignedTick(ByVal lngTick As Long) As Double
+    UnsignedTick = lngTick
+    If lngTick < 0 Then UnsignedTick = UnsignedTick + 4294967296#
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RunPendingTimerRequest
+' Purpose   : Consume and run the armed request. Called for a checked timer event, and
+'           : directly by tests that dispatch without waiting for message delivery.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RunPendingTimerRequest()
 
     Dim strParam1 As String
     Dim strParam2 As String
@@ -34,11 +156,15 @@ Public Sub WinAPITimerCallback()
     Dim strOpToken As String
     Dim intMergeFilter As eContainerFilter
 
+    ' Nothing armed, nothing to consume.
+    If ArmedTimerID = 0 Then Exit Sub
+
     ' First, make sure we kill the timer!
     KillTimer
 
     ' Read in parameter values
     strCommand = GetSetting(PROJECT_NAME, "Timer", "Operation")
+    m_strRunningCommand = strCommand
     strParam1 = GetSetting(PROJECT_NAME, "Timer", "Param1")
     strParam2 = GetSetting(PROJECT_NAME, "Timer", "Param2")
 
@@ -110,6 +236,7 @@ Public Sub WinAPITimerCallback()
             End If
 
     End Select
+    m_strRunningCommand = vbNullString
 
 End Sub
 
@@ -159,6 +286,7 @@ Public Function TrySetTimer(ByVal strOperation As String, _
     Dim lngErr As Long
     Dim strErr As String
     Dim strSource As String
+    Dim lngInterval As Long
 
     On Error GoTo ErrHandler
     If TimerIsPending Then Exit Function
@@ -170,7 +298,13 @@ Public Function TrySetTimer(ByVal strOperation As String, _
     SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
     SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, strOpToken
     SaveSetting PROJECT_NAME, "Timer", "Operation", strOperation
-    m_lngTimerID = ApiSetTimer(0, 0, 1000 * sngSeconds, AddressOf WinAPITimerCallback)
+    ' Record when the request is due before arming, so its first event is never early.
+    lngInterval = CLng(1000 * sngSeconds)
+    m_lngArmedTick = GetTickCount
+    m_lngArmedInterval = lngInterval
+    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_ARMED_TICK, m_lngArmedTick
+    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_ARMED_INTERVAL, lngInterval
+    m_lngTimerID = ApiSetTimer(0, 0, lngInterval, AddressOf WinAPITimerCallback)
     SaveSetting PROJECT_NAME, "Timer", "TimerID", m_lngTimerID
     TrySetTimer = TimerIsPending
     If Not TrySetTimer Then ClearTimerRequest
@@ -199,6 +333,8 @@ Private Sub ClearTimerRequest()
     SaveSetting PROJECT_NAME, "Timer", "Param2", vbNullString
     SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", vbNullString
     SaveSetting PROJECT_NAME, "Timer", REG_TIMER_OP_TOKEN, vbNullString
+    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_ARMED_TICK, vbNullString
+    SaveSetting PROJECT_NAME, "Timer", REG_TIMER_ARMED_INTERVAL, vbNullString
 End Sub
 
 
