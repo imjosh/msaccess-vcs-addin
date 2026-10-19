@@ -48,6 +48,8 @@ Private m_strRunningCommand As String
 '           : Nothing may raise out of a Windows callback, so a failure in the request
 '           : is recorded here as a warning instead: the request's own operation reports
 '           : its outcome, and an error level here would count against whatever runs next.
+'           : This covers failures in the callback's own frame and named requests; an
+'           : Application.Run target must trap its own errors (see RunPendingTimerRequest).
 '---------------------------------------------------------------------------------------
 '
 Public Sub WinAPITimerCallback(ByVal hwnd As LongPtr, ByVal uMsg As Long, _
@@ -226,7 +228,11 @@ Public Sub RunPendingTimerRequest()
             Application.Quit acQuitSaveAll
 
         Case Else
-            ' Use the Run command to execute the specified operation with supplied parameters
+            ' Use the Run command to execute the specified operation with supplied parameters.
+            ' A target that cannot be resolved fails here and is contained by the callback.
+            ' An error raised inside a resolved target is that target's own: natively, VBA
+            ' presents it as an unhandled error in the target and does not return it here,
+            ' so a Run target must trap its own errors.
             If strParam2 <> vbNullString Then
                 Application.Run strCommand, strParam1, strParam2
             ElseIf strParam1 <> vbNullString Then

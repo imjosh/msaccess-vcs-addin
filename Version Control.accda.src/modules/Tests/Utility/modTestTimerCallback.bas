@@ -32,7 +32,6 @@ Private m_lngRuns As Long
 ' not discover it as a test.
 Public Function TimerCallbackTarget(ByVal strMode As String) As Boolean
     m_lngRuns = m_lngRuns + 1
-    If strMode = "raise" Then Err.Raise 5, "TimerCallbackTarget", "A49 injected dispatch failure"
     TimerCallbackTarget = True
 End Function
 
@@ -125,12 +124,16 @@ Public Sub DispatchFailureStaysInsideTheCallback()
     Options.BreakOnError = False
     Operation.InteractionMode = eimSilent
     Log.Add "  [DispatchFailureStaysInsideTheCallback] The timer warning logged by this test is expected.", False
-    If Not ArmProbe("raise", ARM_SECONDS) Then GoTo Restore
+    ' The injected failure is a Run target that cannot be resolved, which fails in the
+    ' callback's own dispatch. An error raised inside a resolved Run target is not used:
+    ' natively, VBA presents it as an unhandled error in the target (a modal dialog under
+    ' the test runner) and never returns it to the callback.
+    If Not ArmProbe("count", ARM_SECONDS, MissingCommand) Then GoTo Restore
     Sleep DUE_MS
     lngJournal = Log.ErrorJournalCount
     ' An error escaping here would reach Failed and fail this test.
     WinAPITimerCallback 0, WM_TIMER, ArmedID, GetTickCount
-    TestAssert m_lngRuns = 1, "the failing request ran " & m_lngRuns & " times"
+    TestAssert m_lngRuns = 0, "the unresolved request ran " & m_lngRuns & " times"
     TestAssert Not TimerIsPending
     TestAssert Log.ErrorJournalCount = lngJournal + 1, "the failure was not recorded once"
     DisarmProbe
@@ -146,11 +149,13 @@ Restore:
 End Sub
 
 
-Private Function ArmProbe(ByVal strMode As String, ByVal sngSeconds As Single) As Boolean
+Private Function ArmProbe(ByVal strMode As String, ByVal sngSeconds As Single, _
+    Optional ByVal strCommand As String) As Boolean
     m_lngRuns = 0
     TestAssert Not TimerIsPending, "another timer request is pending"
     If TimerIsPending Then Exit Function
-    ArmProbe = TrySetTimer(ProbeCommand, strMode, sngSeconds:=sngSeconds)
+    If strCommand = vbNullString Then strCommand = ProbeCommand
+    ArmProbe = TrySetTimer(strCommand, strMode, sngSeconds:=sngSeconds)
     TestAssert ArmProbe, "the probe timer was not armed"
 End Function
 
@@ -180,4 +185,10 @@ Private Function ProbeCommand() As String
     Else
         ProbeCommand = "[" & CurrentVBProject.Name & "].TimerCallbackTarget"
     End If
+End Function
+
+
+' The probe command with a procedure name no project defines.
+Private Function MissingCommand() As String
+    MissingCommand = Replace(ProbeCommand, ".TimerCallbackTarget", ".A49UnresolvedTimerTarget")
 End Function
