@@ -15,6 +15,7 @@ Option Private Module
 
 
 Private Const TEST_QUERY As String = "vcs_test_qry_sql_override"
+Private Const TEST_ALT_QUERY As String = "vcs_test_qry_alt_export"
 
 
 '---------------------------------------------------------------------------------------
@@ -129,6 +130,95 @@ Public Sub TestLoadSingleObjectMissingSource()
     TestAssert Not SourceFileIsMissing(strFile), "existing file is not missing"
 
     If FSO.FolderExists(StripSlash(strFolder)) Then FSO.DeleteFolder StripSlash(strFolder), True
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TestLegacyQueryAlternateExportIncludesSql
+' Author    : Josh
+' Date      : 10/20/2026
+' Purpose   : A legacy alternate-path (temp) export writes the paired .sql, so a fresh
+'           : comparison export hashes the same complete content as a normal export.
+'           : Without it, a one-sided source edit after an export looked like an
+'           : independent database change and was blocked (native-03 P3, X22 S2).
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestLegacyQueryAlternateExportIncludesSql()
+
+    Dim cQuery As IDbComponent
+    Dim strFolder As String
+    Dim strPriorExport As String
+    Dim lngPriorFormat As Long
+    Dim blnPriorSaveSql As Boolean
+    Dim blnIndexDisabled As Boolean
+    Dim blnCaptured As Boolean
+    Dim strNormal As String
+    Dim strAlternate As String
+    Dim strBaseline As String
+    Dim eelSavedLevel As eErrorLevel
+    Dim lngErr As Long
+    Dim strErr As String
+
+    On Error GoTo ErrHandler
+    strPriorExport = Options.ExportFolder
+    lngPriorFormat = Options.ExportFormatVersion
+    blnPriorSaveSql = Options.SaveQuerySQL
+    blnIndexDisabled = VCSIndex.Disabled
+    eelSavedLevel = Operation.ErrorLevel
+    blnCaptured = True
+    VCSIndex.Disabled = True
+    Operation.ErrorLevel = eelNoError
+
+    strFolder = GetTempFolder("VCSLegacyAltQuery")
+    Options.ExportFolder = strFolder
+    Options.ExportFormatVersion = EFV_4_1_2
+    Options.SaveQuerySQL = True
+    DeleteObjectIfExists acQuery, TEST_ALT_QUERY
+    CurrentDb.CreateQueryDef TEST_ALT_QUERY, "SELECT 1 AS AltExport;"
+    ' The export reads SQL through the cached SharedDb handle.
+    SharedDb.QueryDefs.Refresh
+
+    Set cQuery = New clsDbQuery
+    Set cQuery.DbObject = CurrentData.AllQueries(TEST_ALT_QUERY)
+    strNormal = cQuery.SourceFile
+    TestAssert LCase$(FSO.GetExtensionName(strNormal)) = "bas", "format 4.1.2 exports the legacy .bas"
+    cQuery.Export
+    strAlternate = strFolder & PathSep & "alt" & PathSep & "queries" & PathSep & FSO.GetFileName(strNormal)
+    cQuery.Export strAlternate
+
+    TestAssert FSO.FileExists(SwapExtension(strNormal, "sql")), "a normal legacy export writes the paired .sql"
+    TestAssert FSO.FileExists(SwapExtension(strAlternate, "sql")), "an alternate legacy export writes the paired .sql"
+    strBaseline = VCSIndex.SingleObjectComparisonHash(cQuery, strNormal)
+    TestAssert VCSIndex.SingleObjectComparisonHash(cQuery, strAlternate) = strBaseline, _
+        "a fresh comparison export matches the normal export's complete content"
+
+    WriteFile LegacyBasDefinition("SourceEdit"), strNormal
+    TestAssert Not VCSIndex.SingleObjectContentConflict(VCSIndex.SingleObjectComparisonHash(cQuery, strNormal), _
+        VCSIndex.SingleObjectComparisonHash(cQuery, strAlternate), strBaseline, eatImport), _
+        "a one-sided source edit after an export is not a conflict"
+
+CleanUp:
+    On Error Resume Next
+    If blnCaptured Then
+        Options.ExportFolder = strPriorExport
+        Options.ExportFormatVersion = lngPriorFormat
+        Options.SaveQuerySQL = blnPriorSaveSql
+        VCSIndex.Disabled = blnIndexDisabled
+        Operation.ErrorLevel = eelSavedLevel
+    End If
+    DeleteObjectIfExists acQuery, TEST_ALT_QUERY
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    End If
+    If lngErr <> 0 Then TestAssert False, _
+        "unexpected legacy alternate export error " & lngErr & ": " & strErr
+    Exit Sub
+
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
 
 End Sub
 
