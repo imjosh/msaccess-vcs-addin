@@ -590,6 +590,9 @@ CleanUp:
     Exit Sub
 Failed:
     strError = Err.Description
+    ' Clear before restoring: PostCallback runs LogUnhandledErrors, which must not
+    ' find this error once breaks are allowed again.
+    Err.Clear
     RestoreErrorBreaks
     If cEmitter.TerminalPosted Then Exit Sub
     If Not cOwnerEmitter Is Nothing Then

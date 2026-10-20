@@ -3464,13 +3464,15 @@ a table name, and rules out per-side resolution as the shape of this fix.
 - **Switch VBE error trapping to Break on Unhandled Errors during MCP calls** — rejected: when a break does occur, Break in Class Modules stops at the line that raised the error; Break on Unhandled Errors surfaces it in the parent handler, which is less useful for diagnosis. The scope cannot prevent VBA-native unhandled breaks anyway.
 - **In-memory nesting counter in `modErrorHandling`, honored by `LogUnhandledErrors` and `DebugMode` (chosen)** — `SuppressErrorBreaks` / `RestoreErrorBreaks` at MCP/API entry points. Cannot be serialized, survives options reload, nests correctly for `APIAsync` → `API` → `RunVBA`.
 
+**Amended (2026-10-20)**: The request entry points `API`, `APIAsync`, `APIMCP`, and `HandleAPIAsyncOperation` push right after `InitializeRequestErrors`, which clears an inherited error without breaking, so they do not call `LogUnhandledErrors` at entry. Their `Failed:` handlers capture and clear `Err`, pop, and then build or post the refusal.
+
 **Decision**: Add `SuppressErrorBreaks`, `RestoreErrorBreaks`, and `ErrorBreaksSuppressed` to `modErrorHandling`. Push at the first statement of `API`, `APIAsync`, `HandleAPIAsyncOperation`, and `RunVBA`; pop on every exit path including `ErrHandler`. When suppressed, log unhandled errors instead of `Stop`, and have `DebugMode` return `False`. Replace `clsTestRunner`'s `Options.BreakOnError` toggle with the same scope (avoids disk write-through during round-trip exports). Leave `Operation.Begin`'s Break in Class Modules trapping unchanged.
 
 **What this rules out**: Mutating `Options.BreakOnError` for automation scopes. Changing VBE trapping mode during MCP calls to reduce breaks at the cost of break location. If a pop is skipped by a hard crash, breaks stay suppressed until Access restarts — acceptable degraded state.
 
 **Relevant files**:
 - `Version Control.accda.src/modules/Infrastructure/modErrorHandling.bas` — suppression primitive
-- `Version Control.accda.src/modules/API/modAPI.bas` — `API`, `APIAsync` scopes
+- `Version Control.accda.src/modules/API/modAPI.bas` — `API`, `APIAsync`, `APIMCP` scopes
 - `Version Control.accda.src/modules/Utility/modTimer.bas` — async timer scope
 - `Version Control.accda.src/modules/API/clsVersionControl.cls` — `RunVBA` scope
 - `Version Control.accda.src/modules/Tests/clsTestRunner.cls` — uses suppression instead of option mutation

@@ -403,6 +403,7 @@ CleanUp:
     Exit Function
 Failed:
     strError = Err.Description
+    Err.Clear
     RestoreErrorBreaks
     API = RefusalJson("api_error", strError, False)
 End Function
@@ -489,6 +490,7 @@ CleanUp:
     Exit Function
 Failed:
     strError = Err.Description
+    Err.Clear
     RestoreErrorBreaks
     APIAsync = RefusalJson("api_error", strError, False)
 End Function
@@ -726,6 +728,7 @@ CleanUp:
     Exit Function
 Failed:
     strError = Err.Description
+    Err.Clear
     RestoreErrorBreaks
     APIMCP = RefusalJson("api_error", strError, False)
 End Function
