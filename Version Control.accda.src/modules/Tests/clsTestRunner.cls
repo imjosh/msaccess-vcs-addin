@@ -655,7 +655,11 @@ Private Function SetHostedTestRunFlag(blnActive As Boolean) As Boolean
             SetHostedTestRunFlag = True
             Exit Function
         End If
-        strTarget = BuildRunCmd("SetTestRunActive", True)
+        ' BuildRunCmd file-qualifies only the add-in's own project, where both loaded
+        ' projects are named MSAccessVCS. A user database is project-qualified: Run of
+        ' <folder>\<file base name>.Proc raised 2517 for a user .accdb whose project
+        ' name differs from its file name (native-03 P3b).
+        strTarget = BuildRunCmd("SetTestRunActive")
     Else
         strTarget = m_strHostedRunFlagTarget
     End If
@@ -1861,13 +1865,12 @@ End Function
 ' Date      : 5/7/2026
 ' Purpose   : Build a project-qualified Application.Run command for a procedure in
 '           : CurrentVBProject. Follows the RunSubInCurrentProject pattern from
-'           : modDatabase.bas. A stored ownership callback can request the full file
-'           : qualifier even when the target project has a different project name.
+'           : modDatabase.bas.
 '---------------------------------------------------------------------------------------
 '
-Private Function BuildRunCmd(strProcName As String, Optional ByVal blnFileQualified As Boolean = False) As String
+Private Function BuildRunCmd(strProcName As String) As String
 
-    If blnFileQualified Or CurrentVBProject.Name = PROJECT_NAME Then
+    If CurrentVBProject.Name = PROJECT_NAME Then
         With CurrentProject
             BuildRunCmd = .Path & PathSep & FSO.GetBaseName(.Name) & "." & strProcName
         End With
