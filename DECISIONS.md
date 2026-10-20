@@ -250,6 +250,8 @@ separate worker authorization and recovery remain outside this decision.
 
 ## 2026-09-30 — Policy set and clear are acknowledged by their return values
 
+**Superseded (2026-10-16)**: request-owned policies retire the setter. `SetOperationPolicy` now returns `policy_activation_retired`, and `ClearOperationPolicy` is a harmless success. The acknowledgment below applies only to older add-ins.
+
 **Trigger**: M40. The MCP server read any non-refusal `SetOperationPolicy` reply as success, including the `Empty` an older add-in returns on reentry.
 
 **Decision**: The add-in's contract is the acknowledgment: `SetOperationPolicy` returns `{"success":true,"policy":"<lower-cased name>"}`, and `ClearOperationPolicy` returns `{"success":true}`. Callers must require exactly that. No add-in code change; this is a capability check, not a version number (rebuilding does not increment the version). MCP reports anything else as `policy_unconfirmed`.
