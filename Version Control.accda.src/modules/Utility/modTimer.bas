@@ -546,6 +546,10 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
 
     ' Re-admission failures must not log into another operation.
     InitializeRequestErrors "HandleAPIAsyncOperation"
+    ' Automation must never stop at a debugger break: DebugMode and LogUnhandledErrors
+    ' honor this scope (DECISIONS.md, MCP/API error-break suppression). Every exit
+    ' below restores it.
+    SuppressErrorBreaks
     On Error GoTo Failed
     cRequest.FromJson strRequest
     cEmitter.RegisterCallback cRequest.CallbackInfo
@@ -558,14 +562,14 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
     If Len(strRefusal) > 0 Then
         Set dResult = ParseJson(strRefusal)
         cEmitter.PostCallback "error", -1, -1, CStr(dResult("error")), dResult
-        Exit Sub
+        GoTo CleanUp
     End If
     Set colArgs = ParseJson(strArgs)
     Set cOwnerEmitter = MCP
     varResult = DispatchOperationRequest(cRequest, strMethod, colArgs)
-    If cOwnerEmitter.TerminalPosted Then Exit Sub
+    If cOwnerEmitter.TerminalPosted Then GoTo CleanUp
     If Operation.IsActive Then
-        If Operation.PublicId = cRequest.PublicId Then Exit Sub
+        If Operation.PublicId = cRequest.PublicId Then GoTo CleanUp
     End If
     If VarType(varResult) = vbString And Len(CStr(varResult)) > 0 Then
         Set dResult = ParseJson(CStr(varResult))
@@ -581,9 +585,12 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
         If CBool(dResult("success")) Then strType = "complete"
     End If
     cEmitter.PostCallback strType, -1, -1, vbNullString, dResult
+CleanUp:
+    RestoreErrorBreaks
     Exit Sub
 Failed:
     strError = Err.Description
+    RestoreErrorBreaks
     If cEmitter.TerminalPosted Then Exit Sub
     If Not cOwnerEmitter Is Nothing Then
         If cOwnerEmitter.TerminalPosted Then Exit Sub

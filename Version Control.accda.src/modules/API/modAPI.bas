@@ -373,7 +373,12 @@ Public Function API(strMethod As String, _
     Dim colArgs As New Collection
     Dim cRequest As clsOperationRequest
     Dim strRunCmd As String
+    Dim strError As String
     InitializeRequestErrors "API"
+    ' Automation must never stop at a debugger break: DebugMode and LogUnhandledErrors
+    ' honor this scope (DECISIONS.md, MCP/API error-break suppression). Every exit
+    ' below restores it.
+    SuppressErrorBreaks
     On Error GoTo Failed
     If RunningOnLocal() And Not RedirectTargetIsSelf() Then
         strRunCmd = GetRunCmdAddInFullLibName & ".API"
@@ -386,16 +391,20 @@ Public Function API(strMethod As String, _
         Else
             API = Application.Run(strRunCmd, strMethod)
         End If
-        Exit Function
+        GoTo CleanUp
     End If
     If Not IsMissing(varArg1) Then colArgs.Add varArg1
     If Not IsMissing(varArg2) Then colArgs.Add varArg2
     If Not IsMissing(varArg3) Then colArgs.Add varArg3
     Set cRequest = CreateOperationRequest(eosExternalAPI)
     API = DispatchOperationRequest(cRequest, strMethod, colArgs)
+CleanUp:
+    RestoreErrorBreaks
     Exit Function
 Failed:
-    API = RefusalJson("api_error", Err.Description, False)
+    strError = Err.Description
+    RestoreErrorBreaks
+    API = RefusalJson("api_error", strError, False)
 End Function
 
 
@@ -418,7 +427,12 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     Dim strQueue As String
     Dim strRunCmd As String
     Dim lngTimeoutMs As Long
+    Dim strError As String
     InitializeRequestErrors "APIAsync"
+    ' Automation must never stop at a debugger break: DebugMode and LogUnhandledErrors
+    ' honor this scope (DECISIONS.md, MCP/API error-break suppression). Every exit
+    ' below restores it.
+    SuppressErrorBreaks
     On Error GoTo Failed
     If RunningOnLocal() And Not RedirectTargetIsSelf() Then
         strRunCmd = GetRunCmdAddInFullLibName & ".APIAsync"
@@ -431,7 +445,7 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
         Else
             APIAsync = Application.Run(strRunCmd, strCallbackInfo, strMethod)
         End If
-        Exit Function
+        GoTo CleanUp
     End If
     If Not IsMissing(varArg1) Then colArgs.Add varArg1
     If Not IsMissing(varArg2) Then colArgs.Add varArg2
@@ -439,24 +453,24 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     Set cRequest = CreateOperationRequest(IIf(Len(strCallbackInfo) > 0, eosMCPTool, eosExternalAPI), strCallbackInfo)
     If APIDispatchBusy Then
         APIAsync = RefusalJson("api_busy", T("Another API command is still running."), False)
-        Exit Function
+        GoTo CleanUp
     End If
     strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
     If Len(strRefusal) > 0 Then
         APIAsync = strRefusal
-        Exit Function
+        GoTo CleanUp
     End If
     Select Case LCase$(strMethod)
         Case "export", "fullexport", "exportvba", "build", "buildas", "mergebuild", "runfilteredtests", "exportbytype", "importbytype", "exportobject", "importobject"
             strRefusal = ClaimOperationRequest(cRequest)
             If Len(strRefusal) > 0 Then
                 APIAsync = strRefusal
-                Exit Function
+                GoTo CleanUp
             End If
             strQueue = SetTimer("APIAsyncOperation", strMethod, ConvertToJson(colArgs), , , strCallbackInfo, cRequest.ToJson)
             If Not TimerRequestSucceeded(strQueue) Then
                 APIAsync = strQueue
-                Exit Function
+                GoTo CleanUp
             End If
             lngTimeoutMs = 600000
             If LCase$(strMethod) = "export" Or LCase$(strMethod) = "mergebuild" Then lngTimeoutMs = 300000
@@ -470,9 +484,13 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
             dResult("result") = DispatchOperationRequest(cRequest, strMethod, colArgs)
     End Select
     APIAsync = ConvertToJson(dResult)
+CleanUp:
+    RestoreErrorBreaks
     Exit Function
 Failed:
-    APIAsync = RefusalJson("api_error", Err.Description, False)
+    strError = Err.Description
+    RestoreErrorBreaks
+    APIAsync = RefusalJson("api_error", strError, False)
 End Function
 
 
@@ -673,11 +691,16 @@ Public Function APIMCP(ByVal strOperationId As String, ByVal strMethod As String
     Dim cRequest As clsOperationRequest
     Dim colArgs As New Collection
     Dim strRunCmd As String
+    Dim strError As String
     InitializeRequestErrors "APIMCP"
+    ' Automation must never stop at a debugger break: DebugMode and LogUnhandledErrors
+    ' honor this scope (DECISIONS.md, MCP/API error-break suppression). Every exit
+    ' below restores it.
+    SuppressErrorBreaks
     On Error GoTo Failed
     If Len(strOperationId) = 0 Or Len(strOperationId) > 128 Or InStr(strOperationId, vbNullChar) > 0 Then
         APIMCP = RefusalJson("invalid_operation_id", T("Operation IDs must contain 1 to 128 characters and no null characters."), False)
-        Exit Function
+        GoTo CleanUp
     End If
     If RunningOnLocal() And Not RedirectTargetIsSelf() Then
         strRunCmd = GetRunCmdAddInFullLibName & ".APIMCP"
@@ -690,7 +713,7 @@ Public Function APIMCP(ByVal strOperationId As String, ByVal strMethod As String
         Else
             APIMCP = Application.Run(strRunCmd, strOperationId, strMethod)
         End If
-        Exit Function
+        GoTo CleanUp
     End If
     Set cRequest = CreateOperationRequest(eosMCPTool)
     cRequest.PublicId = strOperationId
@@ -698,9 +721,13 @@ Public Function APIMCP(ByVal strOperationId As String, ByVal strMethod As String
     If Not IsMissing(varArg2) Then colArgs.Add varArg2
     If Not IsMissing(varArg3) Then colArgs.Add varArg3
     APIMCP = DispatchOperationRequest(cRequest, strMethod, colArgs)
+CleanUp:
+    RestoreErrorBreaks
     Exit Function
 Failed:
-    APIMCP = RefusalJson("api_error", Err.Description, False)
+    strError = Err.Description
+    RestoreErrorBreaks
+    APIMCP = RefusalJson("api_error", strError, False)
 End Function
 
 

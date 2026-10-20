@@ -105,6 +105,30 @@ Public Sub TestTranslationLoadLanguageBalancesErrorBreaks()
 End Sub
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : TestAutomationEntryPointsBalanceErrorBreaks
+' Author    : Codex
+' Date      : 10/20/2026
+' Purpose   : APIMCP and the queued timer dispatch suppress debugger breaks while they
+'           : run and restore the exact depth on their refusal and failure exits.
+'---------------------------------------------------------------------------------------
+'
+Public Sub TestAutomationEntryPointsBalanceErrorBreaks()
+    Dim lngBefore As Long
+    Dim strResult As String
+
+    lngBefore = ErrorBreakSuppressionDepth
+    strResult = APIMCP(vbNullString, "GetVCSVersion")
+    TestAssert InStr(strResult, "invalid_operation_id") > 0, "APIMCP refuses an empty operation ID"
+    TestAssert ErrorBreakSuppressionDepth = lngBefore, _
+        "APIMCP restores the exact break-suppression depth on refusal"
+
+    HandleAPIAsyncOperation "Export", "[]", "not json"
+    TestAssert ErrorBreakSuppressionDepth = lngBefore, _
+        "HandleAPIAsyncOperation restores the exact break-suppression depth on failure"
+End Sub
+
+
 Public Sub TestEffectiveVbeErrorTrappingFloor1()
     TestAssert EffectiveVbeErrorTrapping(eetBreakOnAllErrors, eetBreakInClassModule) = eetBreakInClassModule, _
         "floor 1 raises 0 to 1"

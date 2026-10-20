@@ -69,8 +69,8 @@ reference through `SharedDb` in `modObjects` for the same reason.
 
 ## MCP/API calls never break into the debugger
 
-All MCP and external API entry points (`modAPI.API`, `modAPI.APIAsync`, and the
-async timer handler in `modTimer`) open an in-memory **error-break suppression**
+All MCP and external API entry points (`modAPI.API`, `modAPI.APIAsync`, `modAPI.APIMCP`,
+and the async timer handler in `modTimer`) open an in-memory **error-break suppression**
 scope via `SuppressErrorBreaks` in `modErrorHandling`. While that scope is active:
 
 - `LogUnhandledErrors` **never** executes its `Stop` statement, even when
