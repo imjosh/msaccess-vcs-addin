@@ -131,12 +131,9 @@ End Function
 ' Procedure : SetSessionPolicy
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : Open a caller-owned noninteractive scope on this operation and return the
-'           : JSON result for SetOperationPolicy. The operation holds the scope
-'           : between calls: one it already holds is replaced, not nested. Finish
-'           : leaves the scope open; only ClearSessionPolicy closes it. The
-'           : operation is passed in so the rule can be tested without touching the
-'           : session operation.
+' Purpose   : Refuse SetOperationPolicy with policy_activation_retired. A decision
+'           : policy is supplied on each operation request, and no session state
+'           : holds one between calls.
 '---------------------------------------------------------------------------------------
 '
 Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As String) As String
@@ -148,8 +145,8 @@ End Function
 ' Procedure : ClearSessionPolicy
 ' Author    : Josh
 ' Date      : 09/30/2026
-' Purpose   : Close the scope SetSessionPolicy opened and return the JSON result for
-'           : ClearOperationPolicy. Safe when no policy is set, and safe to call twice.
+' Purpose   : Acknowledge ClearOperationPolicy for older callers. No policy outlives
+'           : its request, so there is nothing to clear.
 '---------------------------------------------------------------------------------------
 '
 Public Function ClearSessionPolicy(ByVal cOp As clsOperation) As String

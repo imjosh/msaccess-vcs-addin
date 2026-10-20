@@ -182,6 +182,8 @@ Without a policy, the legacy helper-install preflight can still show a prompt.
 
 ## 2026-09-30 — Policy set and clear are acknowledged by their return values
 
+**Superseded (2026-10-16)**: request-owned policies retire the setter. `SetOperationPolicy` now returns `policy_activation_retired`, and `ClearOperationPolicy` is a harmless success. The acknowledgment below applies only to older add-ins.
+
 **Trigger**: The automation client read any non-refusal `SetOperationPolicy` reply as success, including the `Empty` an older add-in returns on reentry.
 
 **Decision**: The add-in's contract is the acknowledgment: `SetOperationPolicy` returns `{"success":true,"policy":"<lower-cased name>"}`, and `ClearOperationPolicy` returns `{"success":true}`. Callers must require exactly that. The acknowledgment confirms the requested state. A missing or malformed reply does not confirm acceptance.
