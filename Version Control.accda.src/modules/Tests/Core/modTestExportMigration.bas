@@ -26,7 +26,8 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     Dim cObject As IDbComponent
     Dim varKey As Variant
     Dim dObjects As Dictionary
-    Dim blnPolicy As Boolean
+    Dim strPolicy As String
+    Dim intPolicy As eDecisionPolicy
 
     On Error GoTo ErrHandler
     Set dReport = New Dictionary
@@ -55,9 +56,9 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     Options.ExportLayoutSvg = False
     Options.UseGitIntegration = False
     Options.SaveOptionsForProject
-    VCS.SetOperationPolicy "block"
-    blnPolicy = True
-    VCS.FullExport
+    intPolicy = Operation.DecisionPolicy
+    strPolicy = "block"
+    VCS.FullExport strPolicy
     Set dResult = Operation.LastCompletion
     Set dReport("baselineOutcome") = dResult
     CheckMigration colFailures, OutcomeSucceeded(dResult), "baseline full export succeeds"
@@ -85,10 +86,7 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
         Case "blocked", "skip"
             WriteFile "SELECT 2 AS [A37Value];", strQuery
             SetFileDate strQuery, DateAdd("s", 2, Now), True
-            If strCase = "skip" Then
-                VCS.ClearOperationPolicy
-                VCS.SetOperationPolicy "skip"
-            End If
+            If strCase = "skip" Then strPolicy = "skip"
         Case "scan_cancel", "global"
             Operation.SetCancelPollForTest 1
         Case "partial_cancel"
@@ -110,7 +108,7 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
             colFailures.Add "Unknown regression case"
             GoTo CleanUp
     End Select
-    If strCase = "filtered" Then VCS.ExportVBA Else VCS.FullExport
+    If strCase = "filtered" Then VCS.ExportVBA strPolicy Else VCS.FullExport strPolicy
     Operation.SetCancelPollForTest 0
     Set dResult = Operation.LastCompletion
     Set dReport("attemptOutcome") = dResult
@@ -163,7 +161,7 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     ' Resolve the external conflict by restoring the original source, then fast
     ' export through the same public entry point. Artifacts are the primary oracle.
     If strCase = "blocked" Or strCase = "skip" Then WriteFile strOriginalQuery, strQuery
-    VCS.Export
+    VCS.Export strPolicy
     Set dResult = Operation.LastCompletion
     Set dReport("retryOutcome") = dResult
     Set dAfter = MigrationSnapshot
@@ -175,12 +173,11 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     CheckMigration colFailures, FSO.FileExists(strFolder & "forms\frmA37First.svg"), "later fast export writes first SVG"
     CheckMigration colFailures, FSO.FileExists(strFolder & "forms\frmA37Second.svg"), "later fast export writes second SVG"
     CheckMigration colFailures, Operation.Status = eosReady, "root is released"
-    CheckMigration colFailures, Operation.DecisionPolicy <> edpAsk, "caller policy survives export"
+    CheckMigration colFailures, Operation.DecisionPolicy = intPolicy, "the request policy does not outlast the export"
 
 CleanUp:
     On Error Resume Next
     Operation.SetCancelPollForTest 0
-    If blnPolicy Then VCS.ClearOperationPolicy
     If IsLoaded(acForm, "frmVCSMain", False) Then DoCmd.Close acForm, "frmVCSMain", acSaveNo
     Set frmNew = Nothing
     If lngErr <> 0 Then colFailures.Add "ERROR " & lngErr & ": " & strErr

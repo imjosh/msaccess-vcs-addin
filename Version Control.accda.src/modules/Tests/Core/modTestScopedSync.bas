@@ -158,15 +158,14 @@ Public Function ScopedSyncOwnershipCheck() As String
         Exit Function
     End If
 
-    ' The session policy the MCP sets around each call. It acknowledges the logged
-    ' error's message box, and an owned error has to leave it in force.
+    ' The mode and policy outside any call. The call's own block policy acknowledges
+    ' the logged error's message box, and an owned error must not leave it behind.
     intMode = Operation.InteractionMode
     intPolicy = Operation.DecisionPolicy
 
     ' An error before the call's own Begin, while another caller holds the root.
     Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
     If cRoot Is Nothing Then
-        VCS.ClearOperationPolicy
         ScopedSyncOwnershipCheck = "Not run: the holding root was refused."
         Exit Function
     End If
@@ -193,10 +192,9 @@ Public Function ScopedSyncOwnershipCheck() As String
     Check strFailed, Operation.Status <> eosRunning, "the owned root is finished"
     Check strFailed, Operation.Result = eorFailed, "the owned root finishes as failed"
     Check strFailed, Operation.InteractionMode = intMode, "the session interaction mode is back"
-    Check strFailed, Operation.DecisionPolicy = intPolicy, "the session policy is back in force"
+    Check strFailed, Operation.DecisionPolicy = intPolicy, "the policy outside the call is back"
     Check strFailed, Operation.Begin(eotOther), "the next call can begin"
     Operation.Finish eorSuccess
-    VCS.ClearOperationPolicy
 
     If Len(strFailed) = 0 Then strFailed = "OK"
     ScopedSyncOwnershipCheck = strFailed
@@ -281,7 +279,6 @@ Public Function ScopedSyncCancelCheck(Optional blnExport As Boolean = False) As 
 
 CleanUp:
     On Error Resume Next
-    VCS.ClearOperationPolicy
     If lngErr <> 0 Then strFailed = strFailed & "ERROR: " & lngErr & ": " & strErr
     If Len(strFailed) = 0 Then strFailed = "OK"
     ScopedSyncCancelCheck = strFailed
@@ -318,13 +315,12 @@ Public Function ScopedSyncRequestCancelCheck(Optional blnExport As Boolean = Fal
         ScopedSyncRequestCancelCheck = "Not run: an operation is already running."
         Exit Function
     End If
-    VCS.SetOperationPolicy "block"
     Set cVcs = New clsVersionControl
     cVcs.RequestCancelAfterBegin = True
     If blnExport Then
-        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+        Set dResult = ParseJson(cVcs.ExportByType("queries", False, "block"))
     Else
-        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+        Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     End If
     Check strFailed, Not CBool(dResult("success")), "request fails the call"
     Check strFailed, dResult.Exists("cancelled"), "request carries cancelled"
@@ -344,9 +340,9 @@ Public Function ScopedSyncRequestCancelCheck(Optional blnExport As Boolean = Fal
     cVcs.BlockAfterBegin = True
     cVcs.RequestCancelAfterBegin = True
     If blnExport Then
-        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+        Set dResult = ParseJson(cVcs.ExportByType("queries", False, "block"))
     Else
-        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+        Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     End If
     Check strFailed, dResult.Exists("decision_required"), "decision wins over the request"
     Check strFailed, Not dResult.Exists("cancelled"), "decision has no cancelled field"
@@ -357,9 +353,9 @@ Public Function ScopedSyncRequestCancelCheck(Optional blnExport As Boolean = Fal
     cVcs.RequestCancelAfterBegin = True
     cVcs.FaultAfterBegin = 5
     If blnExport Then
-        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+        Set dResult = ParseJson(cVcs.ExportByType("queries", False, "block"))
     Else
-        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+        Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     End If
     Check strFailed, Not CBool(dResult("success")), "error after request fails the call"
     Check strFailed, Not dResult.Exists("cancelled"), "error after request has no cancelled field"
@@ -374,9 +370,9 @@ Public Function ScopedSyncRequestCancelCheck(Optional blnExport As Boolean = Fal
     Set cVcs = New clsVersionControl
     cVcs.FaultAfterBegin = 5
     If blnExport Then
-        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+        Set dResult = ParseJson(cVcs.ExportByType("queries", False, "block"))
     Else
-        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+        Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     End If
     Check strFailed, Not Operation.CancelRequested, "the next root starts without the request"
     Check strFailed, Not dResult.Exists("cancelled"), "the next root's error has no cancelled field"
@@ -384,7 +380,6 @@ Public Function ScopedSyncRequestCancelCheck(Optional blnExport As Boolean = Fal
 
 CleanUp:
     On Error Resume Next
-    VCS.ClearOperationPolicy
     If lngErr <> 0 Then strFailed = strFailed & "ERROR: " & lngErr & ": " & strErr
     If Len(strFailed) = 0 Then strFailed = "OK"
     ScopedSyncRequestCancelCheck = strFailed
@@ -429,7 +424,6 @@ Public Function ScopedSyncNativeCloseCheck(Optional blnExport As Boolean = False
     Dim strErr As String
     Dim intMode As eInteractionMode
     Dim intPolicy As eDecisionPolicy
-    Dim blnPolicySet As Boolean
 
     On Error GoTo ErrHandler
 
@@ -450,14 +444,12 @@ Public Function ScopedSyncNativeCloseCheck(Optional blnExport As Boolean = False
     Set frmNew = Nothing
     DoCmd.Rename PROBE_FORM, acForm, strTemp
 
-    VCS.SetOperationPolicy "block"
-    blnPolicySet = True
     intMode = Operation.InteractionMode
     intPolicy = Operation.DecisionPolicy
 
     ' Baseline export gives the form a source file to import from, or to lose.
     Set cVcs = New clsVersionControl
-    Set dResult = ParseJson(cVcs.ExportByType("forms", True))
+    Set dResult = ParseJson(cVcs.ExportByType("forms", True, "block"))
     Check strFailed, CBool(dResult("success")), "the baseline export succeeds"
     ' A form without a code module may export as .bas instead of .form.
     strSource = Options.GetExportFolder & "forms" & PathSep & PROBE_FORM & ".form"
@@ -540,7 +532,6 @@ CleanUp:
     DoCmd.DeleteObject acForm, PROBE_FORM
     DoCmd.DeleteObject acForm, strTemp
     Err.Clear
-    If blnPolicySet Then VCS.ClearOperationPolicy
     If lngErr <> 0 Then strFailed = strFailed & "ERROR: " & lngErr & ": " & strErr & vbCrLf
     If Len(ScopedSyncNativeCloseCheck) = 0 Then
         If Len(strFailed) = 0 Then strFailed = "OK"
@@ -561,15 +552,15 @@ Private Function RunNativeCloseCall(blnExport As Boolean, blnBlocked As Boolean)
     Set cVcs = New clsVersionControl
     cVcs.BlockAfterBegin = blnBlocked
     If blnExport Then
-        Set RunNativeCloseCall = ParseJson(cVcs.ExportByType("forms", True))
+        Set RunNativeCloseCall = ParseJson(cVcs.ExportByType("forms", True, "block"))
     Else
-        Set RunNativeCloseCall = ParseJson(cVcs.ImportByType("forms", True))
+        Set RunNativeCloseCall = ParseJson(cVcs.ImportByType("forms", True, "block"))
     End If
 End Function
 
 
 ' State every outcome of the call must leave: the root finished as expected, its owned
-' state is released, the session's mode and policy are back, and the form was left open.
+' state is released, the mode and policy outside the call are back, and the form was left open.
 Private Sub CheckNativeCloseState(ByRef strFailed As String, strCase As String, _
     eExpected As eOperationResult, strForm As String, intMode As eInteractionMode, _
     intPolicy As eDecisionPolicy)
@@ -578,7 +569,7 @@ Private Sub CheckNativeCloseState(ByRef strFailed As String, strCase As String, 
     Check strFailed, Operation.Status <> eosRunning, strCase & " releases the root"
     Check strFailed, Not Log.Active, strCase & " releases the log"
     Check strFailed, Operation.InteractionMode = intMode, strCase & " restores the interaction mode"
-    Check strFailed, Operation.DecisionPolicy = intPolicy, strCase & " restores the session policy"
+    Check strFailed, Operation.DecisionPolicy = intPolicy, strCase & " restores the policy outside the call"
     Check strFailed, IsLoaded(acForm, strForm), strCase & " leaves the affected form open"
 
 End Sub

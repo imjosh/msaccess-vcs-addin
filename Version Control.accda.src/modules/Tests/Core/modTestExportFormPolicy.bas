@@ -4,7 +4,7 @@
 ' Author    : Josh
 ' Date      : 09/30/2026
 ' Purpose   : Regression checks that Export, FullExport and ExportVBA keep the main form
-'           : hidden under a session decision policy, and still show it interactively.
+'           : hidden under a request decision policy, and still show it interactively.
 '---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
@@ -58,14 +58,13 @@ Public Function ExportFormPolicyCheck() As String
             End If
             Check strFailed, Operation.Status <> eosRunning, strCase & ": the operation finished"
             Check strFailed, Operation.InteractionMode = intMode, strCase & ": the session mode is kept"
-            Check strFailed, Operation.DecisionPolicy = intPolicy, strCase & ": the session policy is kept"
+            Check strFailed, Operation.DecisionPolicy = intPolicy, strCase & ": the policy outside the call is kept"
         Next intStart
     Next intEntry
     CloseMainForm
-    VCS.ClearOperationPolicy
 
     ' Interactive control: the same helper shows the form.
-    Check strFailed, Operation.InteractionMode = eimNormal, "the policy is cleared"
+    Check strFailed, Operation.InteractionMode = eimNormal, "no request policy outlasts its call"
     DoCmd.OpenForm "frmVCSMain", , , , , acHidden
     SetMainFormVisible Form_frmVCSMain
     Check strFailed, Form_frmVCSMain.Visible, "an interactive export shows the form"

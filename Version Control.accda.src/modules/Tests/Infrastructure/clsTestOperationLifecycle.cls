@@ -182,7 +182,7 @@ Public Sub TestPolicyRequestRefusedWhileRunning()
     Dim intModeBefore As eInteractionMode
     Dim intPolicyBefore As eDecisionPolicy
 
-    ' SetOperationPolicy asks PolicyRequestRefusal about the session operation. A private
+    ' PolicyRequestRefusal is asked about the session operation. A private
     ' instance stands in for it, so the running state is set up here and never depends on
     ' where the host run started.
     Set cOp = New clsOperation
