@@ -8,13 +8,15 @@ Public Const COMMAND_PROTOCOL As String = "msaccess-vcs.session/1"
 Public Const SERVER_MINIMUM As String = "0.3.0"
 Public Const SERVER_MAXIMUM As String = "0.4.0"
 Public Const SERVER_DEVELOPMENT As String = "0.3.0-dev.18"
+' Advertised beside the session protocol: request-scoped decision policies are
+' accepted as method arguments, and session-remembered policy is retired.
+Public Const REQUEST_POLICY_CONTRACT As String = "msaccess-vcs.request-policy/1"
 Private Const MAX_SESSIONS As Long = 128
 Private Const SESSION_IDLE_MINUTES As Long = 30
 Private m_strInstance As String
 Private m_strLoadedFile As String
 Private m_strLoadedSnapshot As String
 Private m_strEnvelope As String
-Private m_strPolicyOwner As String
 Private m_dSessions As Dictionary
 Private m_lngHandshakes As Long
 Private m_lngValidations As Long
@@ -119,6 +121,7 @@ Public Function APIIdentity() As String
     result.Add "loaded_path", CodeProject.FullName
     result.Add "installation_identity", m_strLoadedFile
     result.Add "protocol", COMMAND_PROTOCOL
+    result.Add "request_policy_contract", REQUEST_POLICY_CONTRACT
     result.Add "supported_server_range", SupportedServerRange
     APIIdentity = ConvertToJson(result)
     Exit Function
@@ -237,20 +240,17 @@ Public Function SessionFailure(ByVal reason As String, Optional ByVal version As
     SessionFailure = ConvertToJson(result)
 End Function
 
-Public Function CompatibilitySessionExpired(ByVal touched As Date, ByVal checkedAt As Date, _
-    Optional ByVal ownsPolicy As Boolean = False) As Boolean
-    ' Idle owner policies require explicit owner cleanup (developer decision).
-    CompatibilitySessionExpired = (Not ownsPolicy And checkedAt >= DateAdd("n", SESSION_IDLE_MINUTES, touched))
+Public Function CompatibilitySessionExpired(ByVal touched As Date, ByVal checkedAt As Date) As Boolean
+    ' No session owns policy state (request-policy/1), so every idle session expires.
+    CompatibilitySessionExpired = (checkedAt >= DateAdd("n", SESSION_IDLE_MINUTES, touched))
 End Function
 
 Private Sub PruneSessions()
     Dim key As Variant
     Dim entry As Dictionary
-    Dim ownsPolicy As Boolean
     For Each key In m_dSessions.Keys
         Set entry = m_dSessions(key)
-        ownsPolicy = (m_strPolicyOwner = entry("server_instance") & ":" & entry("connection_id"))
-        If CompatibilitySessionExpired(entry("touched"), Now, ownsPolicy) Then m_dSessions.Remove key
+        If CompatibilitySessionExpired(entry("touched"), Now) Then m_dSessions.Remove key
     Next
 End Sub
 
@@ -361,14 +361,6 @@ Public Function APIDisconnectSession(ByVal envelope As String) As String
     checked = APIValidateSession(envelope)
     If CBool(ParseJson(checked)("success")) Then
         Set incoming = ParseJson(envelope)
-        If m_strPolicyOwner = incoming("server_instance") & ":" & incoming("connection_id") Then
-            If Operation.IsActive Or TimerIsPending Then
-                APIDisconnectSession = SessionFailure("session_in_use")
-                Exit Function
-            End If
-            ClearSessionPolicy Operation
-            m_strPolicyOwner = vbNullString
-        End If
         m_dSessions.Remove incoming("session_id")
     End If
     APIDisconnectSession = checked
@@ -380,12 +372,6 @@ Public Function APIExecute(ByVal envelope As String, ByVal method As String, _
     On Error GoTo Failed
     refused = EnterCompatibilitySession(envelope)
     If Len(refused) > 0 Then APIExecute = refused: Exit Function
-    refused = CompatibilityCommandRefusal(method)
-    If Len(refused) > 0 Then
-        APIExecute = refused
-        LeaveCompatibilitySession
-        Exit Function
-    End If
     If Not IsMissing(arg3) Then
         APIExecute = API(method, arg1, arg2, arg3, strSessionEnvelope:=envelope)
     ElseIf Not IsMissing(arg2) Then
@@ -395,7 +381,6 @@ Public Function APIExecute(ByVal envelope As String, ByVal method As String, _
     Else
         APIExecute = API(method, strSessionEnvelope:=envelope)
     End If
-    RememberCompatibilityPolicy method, APIExecute
     LeaveCompatibilitySession
     Exit Function
 Failed:
@@ -403,8 +388,38 @@ Failed:
     APIExecute = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
 End Function
 
+' Synchronous MCP work under the caller's public operation ID. The session is validated
+' as for APIExecute; the request is dispatched in this library, which admitted the
+' session, so the development redirect in APIMCP is not taken.
+Public Function APIExecuteMCP(ByVal envelope As String, ByVal operationId As String, ByVal method As String, _
+    Optional arg1 As Variant, Optional arg2 As Variant, Optional arg3 As Variant) As Variant
+    Dim refused As String
+    Dim request As clsOperationRequest
+    Dim args As New Collection
+    On Error GoTo Failed
+    refused = EnterCompatibilitySession(envelope)
+    If Len(refused) > 0 Then APIExecuteMCP = refused: Exit Function
+    If Len(operationId) = 0 Or Len(operationId) > 128 Or InStr(operationId, vbNullChar) > 0 Then
+        APIExecuteMCP = RefusalJson("invalid_operation_id", T("Operation IDs must contain 1 to 128 characters and no null characters."), False)
+        GoTo Finished
+    End If
+    Set request = CreateOperationRequest(eosMCPTool)
+    request.PublicId = operationId
+    If Not IsMissing(arg1) Then args.Add arg1
+    If Not IsMissing(arg2) Then args.Add arg2
+    If Not IsMissing(arg3) Then args.Add arg3
+    CountCompatibilityDispatch
+    APIExecuteMCP = DispatchOperationRequest(request, method, args)
+Finished:
+    LeaveCompatibilitySession
+    Exit Function
+Failed:
+    LeaveCompatibilitySession
+    APIExecuteMCP = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
+End Function
+
 Public Function APIExecuteAsync(ByVal envelope As String, ByVal callback As String, ByVal method As String, _
-    Optional arg1 As Variant, Optional arg2 As Variant) As String
+    Optional arg1 As Variant, Optional arg2 As Variant, Optional arg3 As Variant) As String
     Dim refused As String
     On Error GoTo Failed
     refused = EnterCompatibilitySession(envelope)
@@ -412,13 +427,11 @@ Public Function APIExecuteAsync(ByVal envelope As String, ByVal callback As Stri
         APIExecuteAsync = PostCompatibilityRefusal(callback, refused)
         Exit Function
     End If
-    refused = CompatibilityCommandRefusal(method)
-    If Len(refused) > 0 Then
-        APIExecuteAsync = PostCompatibilityRefusal(callback, refused)
-        LeaveCompatibilitySession
-        Exit Function
-    End If
-    If Not IsMissing(arg2) Then
+    ' Position-2 policies (ImportObject, ExportObject, ImportByType, ExportByType) need
+    ' the third method argument.
+    If Not IsMissing(arg3) Then
+        APIExecuteAsync = APIAsync(callback, method, arg1, arg2, arg3, strSessionEnvelope:=envelope)
+    ElseIf Not IsMissing(arg2) Then
         APIExecuteAsync = APIAsync(callback, method, arg1, arg2, strSessionEnvelope:=envelope)
     ElseIf Not IsMissing(arg1) Then
         APIExecuteAsync = APIAsync(callback, method, arg1, strSessionEnvelope:=envelope)
@@ -453,31 +466,3 @@ Public Function WorkerCompatibilityArguments() As Variant
         CStr(entry("server_instance")), NewInstance(), NewInstance(), _
         CStr(CodeDb.Properties("AppVersion")))
 End Function
-
-Private Function CurrentCaller() As String
-    Dim request As Dictionary
-    Set request = ParseJson(m_strEnvelope)
-    CurrentCaller = request("server_instance") & ":" & request("connection_id")
-End Function
-
-Public Function CompatibilityCommandRefusal(ByVal method As String) As String
-    If Len(m_strPolicyOwner) = 0 Then Exit Function
-    If m_strPolicyOwner = CurrentCaller Then Exit Function
-    Select Case method
-        Case "GetOption", "GetLogContent", "GetExportFolder", "GetProjectName", "IsVBACompiled", "IsDatabaseOpen", _
-            "ListAddinDialogs"
-            Exit Function
-    End Select
-    CompatibilityCommandRefusal = SessionFailure("interaction_policy_owned_by_another_caller")
-End Function
-
-Public Sub RememberCompatibilityPolicy(ByVal method As String, ByVal returned As Variant)
-    Dim result As Dictionary
-    If method <> "SetOperationPolicy" And method <> "ClearOperationPolicy" Then Exit Sub
-    On Error GoTo Finished
-    Set result = ParseJson(CStr(returned))
-    If result("success") = True Then
-        If method = "SetOperationPolicy" Then m_strPolicyOwner = CurrentCaller Else m_strPolicyOwner = vbNullString
-    End If
-Finished:
-End Sub

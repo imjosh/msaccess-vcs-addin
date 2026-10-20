@@ -595,8 +595,7 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
         Exit Sub
     End If
     blnEntered = True
-    strRefusal = CompatibilityCommandRefusal(strMethod)
-    If Len(strRefusal) = 0 Then strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
+    strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
     If Len(strRefusal) = 0 And APIDispatchBusy Then strRefusal = RefusalJson("api_busy", T("Another API command is still running."), False)
     If Len(strRefusal) > 0 Then
         Set dResult = ParseJson(strRefusal)

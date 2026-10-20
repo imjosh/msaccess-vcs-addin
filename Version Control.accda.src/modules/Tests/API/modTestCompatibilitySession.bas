@@ -110,7 +110,7 @@ Private Function NewRequest(ByVal version As String) As Dictionary
     Set NewRequest = request
 End Function
 
-Public Sub ForeignSessionCannotClearCallerPolicy()
+Public Sub SessionPolicyActivationIsRetired()
     Dim priorSource As eOperationSource
     priorSource = Operation.Source
     Dim first As Dictionary, second As Dictionary, result As Dictionary
@@ -122,21 +122,22 @@ Public Sub ForeignSessionCannotClearCallerPolicy()
     TestAssert result("success") = True
     Set result = ParseJson(APIHandshake(ConvertToJson(second)))
     TestAssert result("success") = True
-    Set result = ParseJson(CStr(APIExecute(ConvertToJson(first), "SetOperationPolicy", "block")))
-    TestAssert result("success") = True
     before = OperationState
-    Set result = ParseJson(CStr(APIExecute(ConvertToJson(second), "ClearOperationPolicy")))
+    Set result = ParseJson(CStr(APIExecute(ConvertToJson(first), "SetOperationPolicy", "block")))
     TestAssert result("success") = False
-    TestAssert result("compatibility_reason") = "interaction_policy_owned_by_another_caller"
+    TestAssert result("error_pattern") = "policy_activation_retired"
     TestAssert OperationState = before
-    Set result = ParseJson(CStr(APIExecute(ConvertToJson(first), "ClearOperationPolicy")))
+    ' No caller owns policy state, so another session is not refused.
+    Set result = ParseJson(CStr(APIExecute(ConvertToJson(second), "ClearOperationPolicy")))
     TestAssert result("success") = True
+    TestAssert OperationState = before
+    TestAssert ParseJson(APIIdentity())("request_policy_contract") = REQUEST_POLICY_CONTRACT
     APIDisconnectSession ConvertToJson(first)
     APIDisconnectSession ConvertToJson(second)
     Operation.Source = priorSource
 End Sub
 
-Public Sub IdleExpiryHonorsExplicitPolicyOwner()
+Public Sub IdleSessionsExpire()
     Dim touched As Date
     Dim before As String
     touched = #1/1/2026 12:00:00 PM#
@@ -147,8 +148,6 @@ Public Sub IdleExpiryHonorsExplicitPolicyOwner()
     TestAssert CompatibilitySessionExpired(touched, DateAdd("n", 30, touched))
     TestAssert CompatibilitySessionExpired(touched, DateAdd("n", 300, touched))
     TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", -1, touched))
-    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", 30, touched), True)
-    TestAssert Not CompatibilitySessionExpired(touched, DateAdd("n", 300, touched), True)
     TestAssert OperationState = before
 End Sub
 
