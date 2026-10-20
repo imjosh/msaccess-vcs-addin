@@ -43,6 +43,33 @@ Under an MCP or external API call, `DebugMode` returns `False` and
 `LogUnhandledErrors` never breaks into the debugger. See
 [mcp-runvba.md](mcp-runvba.md) for why.
 
+### Request admission exception
+
+Request construction, identity claims, and queued refusals run before the caller
+owns an operation. They must not send an error to the shared `Log`, because that
+log can belong to another active request. `InitializeRequestErrors` captures
+inherited `Err` diagnostics with `Debug.Print` before clearing them, then calls
+`DebugMode(True)` with no pending error. The caller installs its local handler.
+Parsing failures propagate to the owning dispatcher;
+identity-store failures return an explicit refusal and release their mutex.
+These helpers document that boundary in their source. Once a request owns the
+operation, use the normal structured pattern above.
+
+### Hosted test-run flag callback exception
+
+The private `clsTestRunner.SetHostedTestRunFlag` callback also uses
+`InitializeRequestErrors`. Acquisition can precede the hosted break guard, and
+release can run after its root ends while another runner owns the active
+operation. A dormant `False` call returns before any error handling. Inherited
+errors stay local, so this callback cannot enter `Stop` or write to the other
+runner's shared `Log`.
+
+Callback failures return `False`. Failed acquisition becomes `RunError`, and
+`RunSelected` returns before it changes error trapping or suppression. Failed
+release retains ownership and the captured file-qualified target for a destructor
+retry against the same project. This exception covers only that private ownership
+callback. Operation code still uses the normal structured pattern above.
+
 ---
 
 ## Reading `LogUnhandledErrors` entries in a log

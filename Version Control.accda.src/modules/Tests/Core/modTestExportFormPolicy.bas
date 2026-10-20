@@ -40,10 +40,9 @@ Public Function ExportFormPolicyCheck() As String
         Exit Function
     End If
 
-    VCS.SetOperationPolicy "block"
     intMode = Operation.InteractionMode
     intPolicy = Operation.DecisionPolicy
-    Check strFailed, intMode = eimNonInteractive, "the session policy is noninteractive"
+    Check strFailed, intMode = eimNormal, "the idle mode is normal"
 
     For intEntry = 1 To 3
         For intStart = 0 To 1
@@ -80,9 +79,9 @@ End Function
 
 Private Sub RunEntry(intEntry As Long)
     Select Case intEntry
-        Case 1: VCS.Export
-        Case 2: VCS.FullExport
-        Case 3: VCS.ExportVBA
+        Case 1: VCS.Export "block"
+        Case 2: VCS.FullExport "block"
+        Case 3: VCS.ExportVBA "block"
     End Select
 End Sub
 

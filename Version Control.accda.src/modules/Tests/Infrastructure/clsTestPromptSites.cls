@@ -185,7 +185,7 @@ Public Sub TestMsgBox2CancelStyleReturnsNonDestructiveButton()
     OpenOwnedScope edpDecline
     TestAssert MsgBox2("Continue?", , , vbOKCancel) = vbCancel, "OK/Cancel is declined with Cancel"
     TestAssert MsgBox2("Retry?", , , vbAbortRetryIgnore) = vbAbort, "Abort/Retry/Ignore is declined with Abort"
-    TestAssert MsgBox2("Save?", , , vbYesNoCancel) = vbNo, "Yes/No/Cancel is declined with No"
+    TestAssert MsgBox2("Save?", , , vbYesNoCancel) = vbCancel, "Yes/No/Cancel is declined with Cancel"
     InjectFault "work"
     CloseOwnedScope
     TestAssert LiveStateUnchanged, "closing the scope restores the live state"
@@ -222,7 +222,7 @@ Public Sub TestConflictActionAppliesRequestedActionOnlyForPreferSource()
     CloseOwnedScope
 
     OpenOwnedScope edpSkip
-    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercOverwrite) = ercSkip, "skip is equivalent to prefer_database"
+    TestAssert ConflictActionForPolicy(Operation.DecisionPolicy, ercOverwrite) = ercSkip, "skip preserves the database during import"
     InjectFault "work"
     CloseOwnedScope
 
@@ -396,6 +396,139 @@ Public Sub TestExceptionalAndNormalExitsRestoreCallerState()
 CleanUp:
     On Error Resume Next
     Set cFixture = Nothing
+    FinishTest lngErr, strErr, strSource
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    strSource = Err.Source
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestRealYesNoCancelFlagsReturnCancelUnderEveryPolicy()
+    On Error GoTo ErrHandler
+
+    Dim varPolicy As Variant
+    Dim varButtons As Variant
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strSource As String
+
+    For Each varPolicy In Array(edpBlock, edpPreferSource, edpPreferDatabase, edpSkip, edpDecline)
+        For Each varButtons In Array(vbYesNoCancel + vbQuestion, _
+            vbYesNoCancel + vbQuestion + vbDefaultButton3)
+            OpenOwnedScope varPolicy
+            TestAssert Not PromptWouldDisplay(), "the noninteractive scope suppresses UI"
+            TestAssert MsgBox2("Continue?", , , CLng(varButtons)) = vbCancel, "real prompt flags return Cancel"
+            TestAssert Operation.DecisionBlocked = (varPolicy <> edpDecline), "decline alone resolves confirmation"
+            With Operation.Decisions.Item(Operation.Decisions.Count)
+                If varPolicy = edpDecline Then
+                    TestAssert .Item("resolution") = "declined", "decline journal resolution"
+                Else
+                    TestAssert .Item("resolution") = "decision_required", "blocked journal resolution"
+                End If
+            End With
+            CloseOwnedScope
+            TestAssert LiveStateUnchanged, "the prompt scope restores shared state"
+        Next varButtons
+    Next varPolicy
+
+CleanUp:
+    On Error Resume Next
+    FinishTest lngErr, strErr, strSource
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    strSource = Err.Source
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestMixedConflictListBlocksBeforeAssigningAnyResolution()
+    On Error GoTo ErrHandler
+    Dim cConflicts As New clsConflicts
+    Dim cComponent As IDbComponent
+    Dim dCategories As New Dictionary
+    Dim dCategory As New Dictionary
+    Dim dFiles As New Dictionary
+    Dim dDecision As Dictionary
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strSource As String
+
+    Set cComponent = New clsDbQuery
+    dFiles.Add "C:\fixture\qryOverwrite.sql", vbNullString
+    dFiles.Add "C:\fixture\qryDelete.sql", vbNullString
+    dCategory.Add "Class", cComponent
+    dCategory.Add "Files", dFiles
+    dCategories.Add cComponent.Category, dCategory
+    cConflicts.Initialize dCategories, eatImport
+    cConflicts.Add cComponent, "overwrite", 0, 0, ercOverwrite, "C:\fixture\qryOverwrite.sql"
+    cConflicts.Add cComponent, "delete", 0, 0, ercDelete, "C:\fixture\qryDelete.sql", _
+        strClassification:="edited_database_object_missing_source"
+    OpenOwnedScope edpPreferSource
+    cConflicts.ResolveOrPrompt
+    TestAssert Not cConflicts.ApproveResolutions, "an unauthorized deletion blocks the complete list"
+    TestAssert cConflicts.Item("overwrite").Resolution = ercNone, "the permitted overwrite has no partially assigned resolution"
+    TestAssert cConflicts.Item("delete").Resolution = ercNone, "the deletion has no assigned resolution"
+    TestAssert dFiles.Count = 2, "the pending transfer list remains intact"
+    Set dDecision = Operation.Decisions.Item(Operation.Decisions.Count)
+    TestAssert dDecision("kind") = "decision_required", "the blocked deletion is journaled"
+    TestAssert dDecision("requested_action") = "delete", "the journal identifies the requested action"
+    TestAssert dDecision("direction") = "import", "the journal identifies the direction"
+    TestAssert dDecision("tracked"), "the journal identifies tracked content"
+    TestAssert Not dDecision("noninteractive_authorization_available"), "no policy authorizes this deletion"
+    TestAssert Len(dDecision("recovery")) > 0, "the journal explains recovery"
+    CloseOwnedScope
+    TestAssert LiveStateUnchanged, "closing the conflict scope restores shared state"
+
+CleanUp:
+    On Error Resume Next
+    FinishTest lngErr, strErr, strSource
+    Exit Sub
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    strSource = Err.Source
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestExportPreservationJournalNamesSourceFile()
+    On Error GoTo ErrHandler
+    Dim cConflicts As New clsConflicts
+    Dim cComponent As IDbComponent
+    Dim dCategories As New Dictionary
+    Dim dCategory As New Dictionary
+    Dim dObjects As New Dictionary
+    Dim dDecision As Dictionary
+    Dim lngErr As Long
+    Dim strErr As String
+    Dim strSource As String
+
+    Set cComponent = New clsDbQuery
+    dObjects.Add "C:\fixture\qryKeep.sql", cComponent
+    dCategory.Add "Class", cComponent
+    dCategory.Add "Objects", dObjects
+    dCategories.Add cComponent.Category, dCategory
+    cConflicts.Initialize dCategories, eatExport
+    cConflicts.Add cComponent, "C:\fixture\qryKeep.sql", 0, 0, ercOverwrite, "C:\fixture\qryKeep.sql"
+    OpenOwnedScope edpPreferSource
+    cConflicts.ResolveOrPrompt
+    TestAssert cConflicts.ApproveResolutions, "prefer_source resolves an export by preservation"
+    cConflicts.Resolve
+    TestAssert dCategories.Count = 0, "the preserved file is removed from the export list"
+    Set dDecision = Operation.Decisions.Item(Operation.Decisions.Count)
+    TestAssert dDecision("resolution") = "keep_source", "the export journal names the preserved source"
+    TestAssert dDecision("direction") = "export", "the journal includes export direction"
+    TestAssert dDecision("policy") = "prefer_source", "the journal includes the active policy"
+    CloseOwnedScope
+    TestAssert LiveStateUnchanged, "closing the preserving scope restores shared state"
+
+CleanUp:
+    On Error Resume Next
     FinishTest lngErr, strErr, strSource
     Exit Sub
 ErrHandler:

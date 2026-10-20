@@ -45,12 +45,36 @@ End Sub
 
 
 Public Sub TestImportByTypeOverflowLeavesRunningRootAlone()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckOverflowBeforeBegin True
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestImportByTypeOverflowLeavesRunningRootAlone " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
 Public Sub TestExportByTypeOverflowLeavesRunningRootAlone()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckOverflowBeforeBegin False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestExportByTypeOverflowLeavesRunningRootAlone " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 
@@ -91,8 +115,12 @@ Private Sub CheckOverflowBeforeBegin(blnImport As Boolean)
 
     Set dResult = ParseJson(strJson)
     TestAssert Not CBool(dResult("success")), "an overflowing type fails"
-    TestAssert CStr(dResult("error")) = OverflowDescription, "the result carries the original error"
-    TestAssert CLng(dResult("errorNumber")) = 6, "the result carries the original error number"
+    If intStatus = eosRunning Or intStatus = eosStaged Then
+        TestAssert dResult("error_pattern") = ERR_OPERATION_ALREADY_RUNNING, "busy admission refuses before preparation"
+    Else
+        TestAssert CStr(dResult("error")) = OverflowDescription, "the result carries the original error"
+        TestAssert CLng(dResult("errorNumber")) = 6, "the result carries the original error number"
+    End If
     TestAssert Not dResult.Exists("cancelled"), "an error is not a cancel"
     TestAssert Operation.CurrentRootToken = strToken, "the running root is untouched"
     TestAssert Operation.Status = intStatus, "the running root is not finished"
@@ -132,12 +160,11 @@ Public Function ScopedSyncOwnershipCheck() As String
 
     ' The session policy the MCP sets around each call. It acknowledges the logged
     ' error's message box, and an owned error has to leave it in force.
-    VCS.SetOperationPolicy "block"
     intMode = Operation.InteractionMode
     intPolicy = Operation.DecisionPolicy
 
     ' An error before the call's own Begin, while another caller holds the root.
-    Set cRoot = Operation.TryBeginRoot(eotOther)
+    Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
     If cRoot Is Nothing Then
         VCS.ClearOperationPolicy
         ScopedSyncOwnershipCheck = "Not run: the holding root was refused."
@@ -158,7 +185,7 @@ Public Function ScopedSyncOwnershipCheck() As String
     ' only import can begin here; both share the error handler.
     Set cVcs = New clsVersionControl
     cVcs.FaultAfterBegin = 5
-    Set dResult = ParseJson(cVcs.ImportByType("queries"))
+    Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     Check strFailed, Not CBool(dResult("success")), "the owned error fails the call"
     Check strFailed, CLng(dResult("errorNumber")) = 5, "the owned error keeps its number"
     Check strFailed, CStr(dResult("error")) = ErrorDescription(5), "the owned error keeps its description"
@@ -179,8 +206,7 @@ End Function
 
 Private Sub CheckOverflowResult(dResult As Dictionary, strCall As String, ByRef strFailed As String)
     Check strFailed, Not CBool(dResult("success")), strCall & " fails on an overflowing type"
-    Check strFailed, CStr(dResult("error")) = OverflowDescription, strCall & " keeps the Overflow description"
-    Check strFailed, CLng(dResult("errorNumber")) = 6, strCall & " keeps error number 6"
+    Check strFailed, CStr(dResult("error_pattern")) = ERR_OPERATION_ALREADY_RUNNING, strCall & " refuses before preparing another operation"
 End Sub
 
 
@@ -223,13 +249,12 @@ Public Function ScopedSyncCancelCheck(Optional blnExport As Boolean = False) As 
         ScopedSyncCancelCheck = "Not run: an operation is already running."
         Exit Function
     End If
-    VCS.SetOperationPolicy "block"
     Set cVcs = New clsVersionControl
     cVcs.CancelAfterBegin = True
     If blnExport Then
-        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+        Set dResult = ParseJson(cVcs.ExportByType("queries", False, "block"))
     Else
-        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+        Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     End If
     Check strFailed, Not CBool(dResult("success")), "cancel fails the call"
     Check strFailed, dResult.Exists("cancelled"), "cancel carries cancelled"
@@ -245,9 +270,9 @@ Public Function ScopedSyncCancelCheck(Optional blnExport As Boolean = False) As 
     Set cVcs = New clsVersionControl
     cVcs.FaultAfterBegin = 5
     If blnExport Then
-        Set dResult = ParseJson(cVcs.ExportByType("queries"))
+        Set dResult = ParseJson(cVcs.ExportByType("queries", False, "block"))
     Else
-        Set dResult = ParseJson(cVcs.ImportByType("queries"))
+        Set dResult = ParseJson(cVcs.ImportByType("queries", False, "block"))
     End If
     Check strFailed, Not CBool(dResult("success")), "error fails the call"
     Check strFailed, Not dResult.Exists("cancelled"), "error has no cancelled field"

@@ -2,18 +2,29 @@
 
 > Release compatibility policy (owner decision, 2026-10-02): every add-in release changes its version. The supported release version defines the API contract; capability probing is not required to establish release compatibility. The spec assumes the server checks the installed add-in version and refuses unsupported releases before starting operations. The minimum supported release version must be stated when the release is assigned; do not infer it from a development rebuild. Per-call mode and policy acknowledgments still confirm the requested state and remain required. This policy supersedes earlier statements requiring capability checks instead of a version gate. It is a specification change, not evidence that version enforcement is already implemented.
 
-Interactive use is unchanged. A caller opts in by passing a decision policy
-or selecting noninteractive mode with `SetInteractionMode(2)`.
+Interactive use is unchanged. Pass a decision policy on the request that
+performs the work. Each admitted operation owns its policy, initiating source,
+public ID, callback, and journal through preparation, execution, and queued
+continuations.
 
 ```vba
-VCS.MergeBuild "block"
-VCS.RunFilteredTests "prefer_source"
+result = VCS.ImportObject("query", "qryOrders", "block")
+result = VCS.ExportObject("query", "qryOrders", "prefer_database")
+result = VCS.MergeBuild("block")
+result = VCS.RunFilteredTests("block")
 ```
 
-MCP passes the same strings from `vcs_import_objects` and `vcs_run_tests`,
-and sets a session policy around `vcs_import_object` and `vcs_export_object`
-(see Results). A policy passed to an entry point applies to that operation
-only. `Operation.Finish` restores the previous interaction mode after success,
+Completion, failure, cancellation, and ordinary-operation heartbeat expiry release
+owned interaction state. An unresolved launched rebuild keeps its reservation
+because expiry cannot prove that the helper stopped. A disconnected client can
+leave accepted work running under its original policy. Subsequent requests never
+inherit that policy.
+
+MCP forwards the policy string on each request from `vcs_import_objects`,
+`vcs_import_object`, `vcs_export_object` and `vcs_run_tests` once the admitted
+add-in advertises `request_policy_contract` (see [X17 session admission](#x17-session-admission)).
+A policy passed to an entry point applies to that operation only.
+`Operation.Finish` restores the previous interaction mode after success,
 failure, or cancellation. A request that cannot begin (unknown policy, another
 operation running) opens no scope and changes nothing.
 
@@ -24,16 +35,29 @@ interactive test console is the ribbon's.
 
 ## Policies
 
-| Name | Effect |
-| --- | --- |
-| `block` | OK-only prompts are logged and acknowledged. Any other prompt or merge conflict returns `decision_required` and is not approved. |
-| `decline` | Confirmations answer No, Cancel, or Abort. Conflicts keep the database object. |
-| `prefer_source` | Each conflict takes the action it asks for, and is overwritten from source when it asks for none. Other confirmations stay `decision_required`. |
-| `prefer_database` | Conflicts keep the database object. Same effect as `skip`. |
-| `skip` | Conflicts keep the database object and the source file is skipped. Same effect as `prefer_database`. |
+Preservation skips the conflicting transfer or deletion and leaves the item intact.
 
-Conflict policies never answer a generic confirmation such as "Overwrite?".
-Only `decline` does, and it answers No, Cancel, or Abort.
+| Conflict | `prefer_source` | `prefer_database` | `skip` or `decline` | `block` |
+| --- | --- | --- | --- | --- |
+| Import overwrites an edited database object | Import source | Preserve object | Preserve object | Require decision |
+| Export overwrites an edited source file | Preserve file | Export database version | Preserve file | Require decision |
+| Import deletes an edited database object with missing source | Require decision | Preserve object | Preserve object | Require decision |
+| Export deletes a tracked, changed orphan source file | Preserve file | Require decision | Preserve file | Require decision |
+| Export encounters a new, untracked source file | Preserve file | Preserve file | Preserve file | Preserve file |
+
+No noninteractive policy authorizes deletion of a conflicting edited object or
+tracked, changed orphan file. Review and resolve that conflict interactively.
+A preserving policy permits other work to continue when preservation is acceptable.
+Existing cleanup of unchanged indexed orphans remains available.
+
+The resolver evaluates the entire conflict list before applying resolutions. A
+blocked deletion prevents other conflict resolutions in that list. Scanning,
+temporary exports, and unchanged-orphan cleanup can already have occurred.
+
+OK-only prompts are acknowledged and logged. `decline` answers Cancel for
+Yes/No/Cancel, No for Yes/No, and Abort for Abort/Retry/Ignore. Other policies
+block generic confirmations and return `decision_required`. Preference policies
+authorize the transfers in the table, rather than arbitrary confirmation prompts.
 
 `eimSilent` is unchanged: it logs `MsgBox2` and returns the caller's default.
 Noninteractive mode does not use that default, because the default is
@@ -44,7 +68,66 @@ error level to critical, and makes `Finish` report `eorDecisionRequired`.
 The MCP callback is an error with `decision_required: true` and a `decisions`
 array. It is not `complete`.
 
+## Single-object transfers and synchronization history
+
+An explicit policy protects both core Access-object and separate component paths
+of `ImportObject` and `ExportObject`. Naming one object defines its scope.
+The policy still governs independent destination changes.
+
+The shared index compares actual source and database content. Identical content
+and a missing destination permit a transfer. A destination matching its recorded
+synchronization baseline permits the next source edit, import, and test cycle.
+Missing, stale, or unusable history cannot authorize overwriting divergent content.
+An object type without a comparable representation returns
+`policy_comparison_unsupported` rather than silently bypassing protection.
+
+Successful transfers persist the affected object's synchronization history.
+Skipped and blocked calls leave that object's history unchanged and do not
+synchronize unrelated objects. Index format 5 stores distinct source and database
+content baselines because an import can normalize source formatting. Formats 3
+and 4 remain readable. Their missing database baseline receives conservative
+handling until a successful explicit transfer establishes it. Older add-ins
+cannot read format 5, so a downgrade loses usable synchronization history.
+
+A preserving result reports `success:true,skipped:true,transferred:false` and a
+decision journal. A transfer reports `transferred:true,skipped:false`. Aggregate
+results include transfer and skip counts. Success alone does not prove transfer.
+Journal entries retain their original fields and add conflict context, including
+direction, requested action, classification, tracking, reason, and recovery.
+Resolution names include `import_source`, `export_database`, `keep_source`,
+`keep_database`, and `blocked`. Consumers preserve unfamiliar journal fields.
+
+After `decision_required`, inspect the affected changes and follow the user's
+existing authorization. Use `prefer_source` for an authorized import overwrite or
+`prefer_database` for an authorized export overwrite. Do not automatically retry
+with a preference policy just to obtain success. Ask for clarification when the
+user's instructions do not establish which changes to retain.
+
+## Legacy calls and retired activation
+
+Omitting the policy retains legacy behavior, including automatic conflict choices
+for automation. Source generally wins on import and the database on export.
+Legacy single-object automation retains the historical disabled-index path.
+Dropping a policy also removes its protections and is not conflict recovery.
+
+`SetOperationPolicy` returns `policy_activation_retired` without changing state.
+`ClearOperationPolicy` remains an idempotent harmless success.
+Standalone `SetInteractionMode(2)` returns a refusal with `requested_mode`,
+`effective_mode`, and `error_pattern`. Silent mode remains supported. It can
+return supplied prompt defaults, including Yes. An unrelated request cannot
+change an active operation's mode, source, policy, journal, callback, or timer.
+
+Older add-in and MCP pairs used setter/cleanup sequences and bypassed conflict
+detection for single-object automation even after acknowledging a policy.
+Those acknowledgments do not establish the request-owned protection described here.
+Use a matched consumer that forwards policy arguments on individual requests.
+
 ## Results
+
+Admitted results and inspection identify `operation_id`, `initiating_source`, and
+`decision_policy`. An absent policy is an empty string. See the
+[request identity, queue, and cancellation contract](automation-contract.md#queues-identity-and-cancellation)
+for identity lifetime, MCP entry points, refusal ownership, and cancellation targets.
 
 `MergeBuild` returns a start result, not an outcome:
 `{"success":true,"started":true,"operation_id":...}`. The merge continues on a
@@ -130,18 +213,10 @@ before registering the callback, covering a timer delivered during a later
 synchronous operation. Admission and dispatch errors also report to their own
 caller, with `errorNumber` and `runtime_error`, and leave admission available.
 
-`SetOperationPolicy` sets a session policy. It stays in force across
-operations until `ClearOperationPolicy`, or another `SetOperationPolicy`,
-replaces it; `Finish` does not close it. Each operation under it starts with
-no decisions and no blocked prompt. `SetOperationPolicy` refuses with
-`operation_already_running` while an operation runs. `ClearOperationPolicy`
-is always safe to call, including twice. The acknowledgment is part of the
-contract: `SetOperationPolicy` returns `{"success":true,"policy":"<lower-cased name>"}`
-and `ClearOperationPolicy` returns `{"success":true}`. MCP requires exactly
-these and reports anything else, such as the Empty an older add-in returns, as
-`policy_unconfirmed` without starting the operation (M40). Like
-`APICapabilities`, this is how a client checks the add-in build; the version
-number does not change on a rebuild.
+`SetOperationPolicy` no longer activates a policy for later work. It returns
+`policy_activation_retired` without changing state, and `ClearOperationPolicy`
+remains a harmless success (see
+[Legacy calls and retired activation](#legacy-calls-and-retired-activation)).
 
 `API` refuses a call that arrives while another API command is still running
 (a reentrant call). It returns a string starting `VCS_API_REFUSED: `, and
@@ -156,13 +231,8 @@ the call arrived back in the project that sent it, the pattern is
 and 2 (noninteractive). Every response includes `success`, `requested_mode`, and
 `effective_mode`; success means the requested mode is effective when the call
 returns. Selecting a mode starts no operation and posts no completion callback.
-
-An operation acquired after `SetInteractionMode(2)` opens its own interaction
-scope even when no policy frame exists. Its blocked flag and decision journal
-are isolated and released on completion, cancellation, or runtime error. The
-terminal result retains that operation's decisions; the next operation starts
-without them. Mode-only operations finish in normal mode. A caller-owned session
-policy stays noninteractive until explicitly cleared or replaced, as above.
+Mode 2 is retired as a standalone selection and returns `interaction_mode_refused`;
+a noninteractive operation takes its decision policy on the request instead.
 
 ```json
 {"success":true,"requested_mode":0,"effective_mode":0}
@@ -172,12 +242,9 @@ policy stays noninteractive until explicitly cleared or replaced, as above.
 An enclosing noninteractive scope prevents selecting normal or silent mode.
 A running or staged root also prevents relaxing its mode. These refusals preserve
 the scope, policy, decisions, blocked flag, error level, and root lease. The
-scope owner must clear its session policy with `ClearOperationPolicy` (or close
-its own scope token), and an active root must finish before a weaker mode can take
-effect. If caller cleanup failed and left a session policy open after a failed
-operation, an interactive selection returns this refusal; it never clears that
-policy implicitly. Requesting an already effective mode succeeds without
-changing the policy. An unknown mode returns `invalid_interaction_mode` and
+scope owner must close its own scope, and an active root must finish before a
+weaker mode can take effect. A selection never clears a policy implicitly.
+Requesting an already effective mode succeeds without changing the policy. An unknown mode returns `invalid_interaction_mode` and
 leaves the state intact.
 
 Callers that depend on confirmed interactive mode require an **A24 build or
@@ -189,15 +256,16 @@ that ignore the return value continue to work. Release compatibility is based
 on the supported release version. M32 owns consumption of the acknowledgment
 contract on the MCP side.
 
-`SetOperationPolicy` follows the same rule: callers dispatch only on
-`{success: true, policy: <the requested policy, lower-cased>}`, and
-`ClearOperationPolicy` counts as cleared only on `{success: true}`. An older
-add-in returns VBA `Empty` (for example while busy), which acknowledges neither;
-MCP reports that as `policy_unconfirmed` (M40). This acknowledgment confirms
-operation state independently of release compatibility.
+Older add-ins acknowledged `SetOperationPolicy` with
+`{success: true, policy: <the requested policy, lower-cased>}`, and MCP dispatched
+only on that acknowledgment (M40). A request-policy add-in refuses the setter, and
+MCP forwards the policy on the request instead. Against an add-in that does not
+advertise `request_policy_contract`, MCP refuses an explicit policy with
+`request_policy_unsupported` before starting anything.
 
-`ImportObject` and `ExportObject` take no policy argument; they run under
-the session policy. The MCP sets it around each call. `ImportObject` reads
+`ImportObject` and `ExportObject` take the policy as their third argument
+(see [Single-object transfers](#single-object-transfers-and-synchronization-history)).
+`ImportObject` reads
 its outcome before `Finish`, which restores the error level from before the
 operation, so a logged error (for example a refused add-in form merge)
 returns `success: false` with the first logged error in `error`. A prompt
@@ -247,6 +315,19 @@ acknowledged OK-only prompt, an applied conflict policy, or a declined
 prompt. An empty journal adds no key, so a run that met no prompt keeps its
 old shape. `decision_required` stays primary when a prompt was blocked, and a
 scoped `decision_required` result keeps `logPath`.
+
+## Workflow limits
+
+Noninteractive runs suppress the add-in's main form and optional migration offer.
+Required test-helper preparation still belongs to the operation. No policy
+approves the current-project full-build confirmation. Supply an explicit source
+folder to avoid that confirmation. Existing external API and MCP confirmation
+bypasses remain available.
+
+`BuildHeadless`, `MergeHeadless`, and `RebuildAddIn` retain fixed unattended
+workflows and refuse nonempty policy arguments. Rebuild reserves ownership and
+timer capacity before helper launch. Post-launch timer failure reports that the
+helper launched. Separate rebuild recovery remains outside this contract.
 
 ## Cancelling from MCP
 

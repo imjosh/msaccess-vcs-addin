@@ -847,6 +847,10 @@ Public Function AcceptBridgeRun(ByVal strFnName As String, ByVal strPayloadJson 
     Dim colKeys As Collection
     Dim varItem As Variant
 
+    If ManualCommandRefused Then
+        AcceptBridgeRun = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage(), False)
+        Exit Function
+    End If
     If TestRunner.State = etrsRunning Then
         Err.Raise vbObjectError + 515, FunctionName, T("Tests are already running")
     End If

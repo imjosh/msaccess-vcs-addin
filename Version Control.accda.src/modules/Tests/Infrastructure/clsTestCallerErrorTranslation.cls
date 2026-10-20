@@ -24,19 +24,67 @@ Private Const EXPORT_MESSAGE As String = "Export completed with errors. Check th
 Private Const MULTIPLE_MESSAGE As String = " (and {0} more errors in the log)"
 
 Public Sub TestLocalizedImportWithoutJournal()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 0, True
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedImportWithoutJournal " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedImportWithWarningOnly()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 0, False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedImportWithWarningOnly " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestSingleImportErrorIsPreserved()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 1, False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestSingleImportErrorIsPreserved " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedImportCountsErrorAndCriticalEntries()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckImportResult 3, False
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedImportCountsErrorAndCriticalEntries " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Private Sub CheckImportResult(ByVal lngErrors As Long, ByVal blnNoJournal As Boolean)
@@ -100,7 +148,7 @@ Private Sub CheckImportResult(ByVal lngErrors As Long, ByVal blnNoJournal As Boo
     TestAssert dResult("error") = strExpected, "decoded error matches the localized message"
     TestAssert Not CBool(dResult("success")), "an import with errors remains unsuccessful"
     TestAssert dResult("logPath") = "C:\source\Merge.log", "the log path is preserved"
-    TestAssert dResult.Count = 3, "the response fields remain compatible"
+    TestAssert dResult.Exists("operation_id") And dResult.Exists("error_level"), "the response retains final operation diagnostics"
     TestAssert cOp.Status = eosReady, "completion releases the import root"
 
 CleanUp:
@@ -121,23 +169,83 @@ End Sub
 
 
 Public Sub TestLocalizedExportFailure()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "error"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportFailure " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedCriticalExportFailureWithJournal()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "critical"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedCriticalExportFailureWithJournal " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedExportSuccess()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "success"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportSuccess " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedExportCancellation()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "cancel"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportCancellation " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Public Sub TestLocalizedExportDecisionPrecedence()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
     CheckExportResult "blocked"
+
+CleanUp:
+    On Error Resume Next
+    If lngTestErr <> 0 Then TestAssert False, "TestLocalizedExportDecisionPrecedence " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
 
 Private Sub CheckExportResult(ByVal strScenario As String)
@@ -202,14 +310,14 @@ Private Sub CheckExportResult(ByVal strScenario As String)
         Case "error", "critical"
             TestAssert dResult("error") = strTranslated, "the caller receives the French export error, including quotes and newline"
             TestAssert Not dResult.Exists("error_pattern"), "a plain failure adds no wire pattern"
-            TestAssert dResult.Count = IIf(strScenario = "error", 3, 4), "failure field set stays compatible"
+            TestAssert dResult.Exists("operation_id"), "failure retains the public operation ID"
         Case "success"
             TestAssert Not dResult.Exists("error"), "warning-only success carries no failure message"
-            TestAssert dResult.Count = 3, "success field set stays compatible"
+            TestAssert dResult.Exists("operation_id"), "success retains the public operation ID"
         Case "cancel"
             TestAssert dResult("cancelled") = True, "confirmed cancellation survives"
             TestAssert dResult("error") = "Native close cancelled", "the existing early failure is retained"
-            TestAssert dResult.Count = 5, "cancellation field set stays compatible"
+            TestAssert dResult.Exists("operation_id"), "cancellation retains the public operation ID"
         Case "blocked"
             TestAssert dResult("decision_required") = True, "the blocked decision remains primary"
             TestAssert dResult("error_pattern") = "decision_required", "the stable wire identifier remains English"

@@ -1,6 +1,13 @@
 ﻿Attribute VB_Name = "modTestBlockedCompile"
+'---------------------------------------------------------------------------------------
+' Module    : modTestBlockedCompile
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Probe blocked compile/persistence outcomes without replacing the active runner.
+'---------------------------------------------------------------------------------------
 Option Compare Database
 Option Explicit
+Option Private Module
 '@Folder("Tests.Infrastructure")
 
 Private m_Log As clsLog
