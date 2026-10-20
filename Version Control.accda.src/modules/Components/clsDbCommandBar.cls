@@ -50,7 +50,7 @@ Private Sub IDbComponent_Export(Optional strAlternatePath As String)
     Dim strContent As String
     strContent = GetSource
     WriteFile strContent, Nz2(strAlternatePath, IDbComponent_SourceFile)
-    SaveImages
+    SaveImages strAlternatePath
     VCSIndex.Update Me, IIf(strAlternatePath = vbNullString, eatExport, eatAltExport), GetStringHash(strContent, True)
 End Sub
 
@@ -62,17 +62,19 @@ End Sub
 ' Purpose   : Saves the images for the menu bar
 '---------------------------------------------------------------------------------------
 '
-Private Sub SaveImages()
+Private Sub SaveImages(Optional ByVal strAlternatePath As String)
 
     Dim varPic As Variant
     Dim strFolder As String
+    Dim strImagePath As String
 
     ' Make sure we actually have images to save
     If this.dImages Is Nothing Then Exit Sub
     If this.dImages.Count = 0 Then Exit Sub
 
     ' Verify the first path, to make sure the folder exists
-    VerifyPath CStr(this.dImages.Keys(0))
+    strImagePath = ComparisonImagePath(CStr(this.dImages.Keys(0)), strAlternatePath)
+    VerifyPath strImagePath
 
     ' Clear existing images in this bar's image folder before rewriting the current set.
     ' Image files (.bmp) are named after controls, not the command bar, so the generic
@@ -80,15 +82,16 @@ Private Sub SaveImages()
     ' removes them. Without this, a renamed icon -- e.g. a caption-less control whose
     ' image name switches from the runtime .Id to a content hash -- would leave the old
     ' .bmp files behind. All current images are rewritten in the loop immediately below.
-    strFolder = FSO.GetParentFolderName(CStr(this.dImages.Keys(0)))
+    strFolder = FSO.GetParentFolderName(strImagePath)
     ClearFilesByExtension strFolder, "bmp"
 
     Perf.OperationStart "Save CommandBar Images"
     For Each varPic In this.dImages.Keys
         ' Save the item image to a file
-        stdole.SavePicture this.dImages(varPic).Picture, varPic & "_Picture.bmp"
+        strImagePath = ComparisonImagePath(CStr(varPic), strAlternatePath)
+        stdole.SavePicture this.dImages(varPic).Picture, strImagePath & "_Picture.bmp"
         ' Also save image mask
-        stdole.SavePicture this.dImages(varPic).Mask, varPic & "_Mask.bmp"
+        stdole.SavePicture this.dImages(varPic).Mask, strImagePath & "_Mask.bmp"
     Next varPic
     Perf.OperationEnd
 
@@ -1415,3 +1418,23 @@ End Sub
 Public Property Get Parent() As IDbComponent
     Set Parent = Me
 End Property
+
+
+' The JSON keeps relative image names. Only the output root changes for comparison.
+'---------------------------------------------------------------------------------------
+' Procedure : ComparisonImagePath
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Map canonical command-bar image names into the owned alternate export root.
+'---------------------------------------------------------------------------------------
+'
+Private Function ComparisonImagePath(ByVal strCanonical As String, ByVal strAlternatePath As String) As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    If Len(strAlternatePath) = 0 Then
+        ComparisonImagePath = strCanonical
+    Else
+        ComparisonImagePath = FSO.GetParentFolderName(strAlternatePath) & PathSep _
+            & Mid$(strCanonical, Len(IDbComponent_BaseFolder) + 1)
+    End If
+    CatchAny eelCritical, T("Unable to determine the isolated command-bar image output path."), ModuleName(Me) & ".ComparisonImagePath", True, True
+End Function

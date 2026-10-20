@@ -47,7 +47,7 @@ Public Function ListAddinDialogs() As String
     Set colItems = New Collection
 
     ' Some properties are unavailable on a form that is closing.
-    LogUnhandledErrors
+    InitializeRequestErrors "ListAddinDialogs"
     On Error Resume Next
     For Each frm In Forms
         If IsAddinFormName(frm.Name) Then
@@ -61,13 +61,15 @@ Public Function ListAddinDialogs() As String
             colItems.Add dItem
         End If
     Next frm
-    CatchAny eelNoError, vbNullString, "modDialogInspect.ListAddinDialogs"
+    Err.Clear
     On Error GoTo 0
 
     dRoot.Add "success", True
     dRoot.Add "dialogs", colItems
     dRoot.Add "operation_status", Operation.StatusName()
     dRoot.Add "interaction", IIf(InteractionIsNonInteractive(), "noninteractive", "interactive")
+    AddOperationIdentity dRoot, Operation
+    dRoot("error_level") = Operation.ErrorLevel
     ListAddinDialogs = ConvertToJson(dRoot)
 
 End Function
@@ -239,17 +241,17 @@ End Function
 ' Procedure : ActiveOperationPublicId
 ' Author    : Josh
 ' Date      : 10/19/2026
-' Purpose   : The public ID of the session's active operation: the MCP operation ID
-'           : registered for it, while that operation has not reported its outcome.
-'           : Empty for an operation MCP did not start, so no ID can name it.
+' Purpose   : The public ID of the session's active operation, as stored on the
+'           : operation by its request. An MCP operation that has already posted its
+'           : outcome has no active ID, so a late cancel cannot name it.
 '---------------------------------------------------------------------------------------
 '
 Private Function ActiveOperationPublicId() As String
     If Not Operation.IsActive() Then Exit Function
-    If Operation.Source <> eosMCPTool Then Exit Function
-    If Not MCP.IsActive Then Exit Function
-    If MCP.TerminalPosted Then Exit Function
-    ActiveOperationPublicId = MCP.OperationId
+    If Operation.Source = eosMCPTool And MCP.IsActive Then
+        If MCP.TerminalPosted Then Exit Function
+    End If
+    ActiveOperationPublicId = Operation.PublicId
 End Function
 
 
@@ -297,7 +299,7 @@ Private Function AddinFormIsLoaded(ByVal strName As String) As Boolean
 
     Dim frm As Form
 
-    LogUnhandledErrors
+    InitializeRequestErrors "AddinFormIsLoaded"
     On Error Resume Next
     For Each frm In Forms
         If StrComp(frm.Name, strName, vbTextCompare) = 0 Then

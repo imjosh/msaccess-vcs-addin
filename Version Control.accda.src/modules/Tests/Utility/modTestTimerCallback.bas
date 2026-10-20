@@ -93,7 +93,7 @@ Public Sub EarlierEventLeavesTheLaterRequest()
 
     ' Arm the next request at once, as a continuation does, then replay the first
     ' request's event. Whether or not Windows reused the ID, it must not be consumed.
-    TestAssert TrySetTimer(ProbeCommand, "count", sngSeconds:=ARM_SECONDS), "the second request was not armed"
+    TestAssert TrySetTimer(ProbeCommand, "count", strOpToken:=ProbeToken, sngSeconds:=ARM_SECONDS), "the second request was not armed"
     lngSecond = ArmedID
     WinAPITimerCallback 0, WM_TIMER, lngFirst, GetTickCount
     TestAssert m_lngRuns = 1, "the first request's event ran the second request"
@@ -163,7 +163,7 @@ Private Function ArmProbe(ByVal strMode As String, ByVal sngSeconds As Single, _
     TestAssert Not TimerIsPending, "another timer request is pending"
     If TimerIsPending Then Exit Function
     If strCommand = vbNullString Then strCommand = ProbeCommand
-    ArmProbe = TrySetTimer(strCommand, strMode, sngSeconds:=sngSeconds)
+    ArmProbe = TrySetTimer(strCommand, strMode, strOpToken:=ProbeToken, sngSeconds:=sngSeconds)
     TestAssert ArmProbe, "the probe timer was not armed"
 End Function
 
@@ -179,6 +179,13 @@ Private Sub ReportAndDisarm()
     TestAssert False, "unexpected error " & Err.Number & ": " & Err.Description
     DisarmProbe
 End Sub
+
+
+' The probe is a continuation of the active root (the test run), so it carries
+' that root's token; with no active root it is a new command and carries none.
+Private Function ProbeToken() As String
+    If Operation.IsActive Then ProbeToken = Operation.CurrentRootToken
+End Function
 
 
 Private Function ArmedID() As LongPtr

@@ -68,8 +68,10 @@ Public Sub ClearOrphanedSourceFiles(cType As IDbComponent)
         ' Remove sub-artifacts (sidecars, per-object folders) before the generic scan.
         ' File sidecars are data-driven from FileExtensions(efesAll); folder artifacts
         ' (command-bar _Images, extracted theme folders) are dispatched by type.
-        ClearOrphanedComponentArtifacts cType, dBaseNames
-        ClearOrphanedComponentFolders cType, dBaseNames
+        If Not InteractionIsNonInteractive() Then
+            ClearOrphanedComponentArtifacts cType, dBaseNames
+            ClearOrphanedComponentFolders cType, dBaseNames
+        End If
         ' Loop through files in folder (and subfolders for @Folder support)
         ScanFolderForOrphans cType, StripSlash(cType.BaseFolder), dExtensions, dBaseNames
 
@@ -104,6 +106,8 @@ Private Sub ScanFolderForOrphans(cType As IDbComponent, strFolder As String, _
     Dim colSubFolders As New Collection
     Dim varItem As Variant
 
+    ' A prior group cleanup can remove a folder captured by its parent's scan.
+    If Not FSO.FolderExists(strFolder) Then Exit Sub
     ' Single-pass Win32 API scan for files and subfolders
     ScanFolderContents strFolder, colFiles, colSubFolders
 
@@ -111,19 +115,27 @@ Private Sub ScanFolderForOrphans(cType As IDbComponent, strFolder As String, _
     ' excluded from the scan progress bar (see modExport - the bar is sized to the object
     ' count only), so we do not increment progress here.
     For Each varItem In colFiles
-        CompareToIndex cType, CStr(varItem), dExtensions, dBaseNames
+        ' A complete unchanged group may already have removed this companion.
+        If FSO.FileExists(CStr(varItem)) Then
+            CompareToIndex cType, CStr(varItem), dExtensions, dBaseNames
+        End If
     Next varItem
 
     ' Recurse into subfolders
     For Each varItem In colSubFolders
-        ScanFolderForOrphans cType, CStr(varItem), dExtensions, dBaseNames
-        ' Remove subfolder if empty after cleanup
-        If FSO.GetFolder(CStr(varItem)).Files.Count = 0 _
-            And FSO.GetFolder(CStr(varItem)).SubFolders.Count = 0 Then
-            LogUnhandledErrors
-            On Error Resume Next
-            FSO.DeleteFolder CStr(varItem), True
-            CatchAny eelWarning, "Unable to delete empty folder: " & CStr(varItem), ModuleName & ".ScanFolderForOrphans"
+        ' Removing an unchanged primary also removes its nested artifact directory.
+        If FSO.FolderExists(CStr(varItem)) Then
+            ScanFolderForOrphans cType, CStr(varItem), dExtensions, dBaseNames
+            ' Recursion may itself have removed the captured directory.
+            If FSO.FolderExists(CStr(varItem)) Then
+                If FSO.GetFolder(CStr(varItem)).Files.Count = 0 _
+                    And FSO.GetFolder(CStr(varItem)).SubFolders.Count = 0 Then
+                    LogUnhandledErrors
+                    On Error Resume Next
+                    FSO.DeleteFolder CStr(varItem), True
+                    CatchAny eelWarning, "Unable to delete empty folder: " & CStr(varItem), ModuleName & ".ScanFolderForOrphans"
+                End If
+            End If
         End If
     Next varItem
 
@@ -144,60 +156,113 @@ Private Sub CompareToIndex(cType As IDbComponent, strFilePath As String, dExtens
     Dim strBaseName As String
     Dim strExt As String
     Dim strHash As String
+    Dim blnUnchanged As Boolean
+    Dim cEntry As clsVCSIndexItem
+    Dim colFileExtensions As Collection
+    Dim strPrimaryExtension As String
+    Dim strIndexedPrimary As String
+    Dim strIndexFile As String
 
-    ' Get base name and file extension to build primary source file name
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    ' A captured companion may have been deleted with its complete primary group.
+    If Not FSO.FileExists(strFilePath) Then Exit Sub
     strFileName = FSO.GetFileName(strFilePath)
     strBaseName = FSO.GetBaseName(strFileName)
     strExt = Mid$(strFileName, Len(strBaseName) + 2)
+    If dBaseNames.Exists(strBaseName) Then Exit Sub
+    If InteractionIsNonInteractive() Then
+        ' Actual history owns group identity, including .cls modules and primaries
+        ' retained from an earlier query, layout, table or macro source format.
+        strIndexedPrimary = VCSIndex.IndexedSourceGroupFile(cType, strFilePath)
+        If Len(strIndexedPrimary) > 0 Then
+            strPrimaryExtension = FSO.GetExtensionName(strIndexedPrimary)
+        Else
+            Set colFileExtensions = cType.FileExtensions
+            If colFileExtensions.Count = 0 Then Exit Sub
+            strPrimaryExtension = CStr(colFileExtensions(1))
+        End If
+    Else
+        ' Keep the established interactive cleanup path outside this policy repair.
+        strPrimaryExtension = CStr(dExtensions(0))
+    End If
+    strIndexFile = Nz2(strIndexedPrimary, strFileName)
+
 
     ' See if extension exists in cached list
-    If dExtensions.Exists(strExt) Then
+    If dExtensions.Exists(strExt) Or Len(strIndexedPrimary) > 0 Then
 
         ' See if base file name exists in list of database objects
         If Not dBaseNames.Exists(strBaseName) Then
 
             ' See if this is the primary file extension for this component type
-            If StrComp(strExt, dExtensions(0), vbTextCompare) = 0 Then
+            If StrComp(strExt, strPrimaryExtension, vbTextCompare) = 0 Then
 
                 ' Object not found in database. Check the index
-                If VCSIndex.Exists(cType, strFileName) Then
+                If VCSIndex.Exists(cType, strIndexFile) Then
 
                     ' If file is unchanged from the index, we can go ahead and delete it.
                     ' (The source file matches the last version imported or exported)
                     strHash = GetSourceFilesPropertyHash(cType, strFilePath)
-                    If VCSIndex.Item(cType, strFileName).FilePropertiesHash = strHash Then
+                    Set cEntry = VCSIndex.Item(cType, strIndexFile)
+                    blnUnchanged = (cEntry.FilePropertiesHash = strHash)
+                    If InteractionIsNonInteractive() Then
+                        blnUnchanged = (Len(cEntry.SourceFilesHash) > 0)
+                        If blnUnchanged Then blnUnchanged = (cEntry.SourceFilesHash = VCSIndex.SingleObjectComparisonHash(cType, strFilePath))
+                    End If
+                    If blnUnchanged Then
 
                         ' Remove file and index entry
                         Log.Add "  Removing orphaned file: " & cType.BaseFolder & strFileName, Options.ShowDebug
-                        DeleteFile strFilePath, True
-                        VCSIndex.Remove cType, strFileName
+                        If InteractionIsNonInteractive() Then
+                            DeleteUnchangedSourceGroup cType, strFilePath
+                        Else
+                            DeleteFile strFilePath, True
+                        End If
+                        If Operation.ErrorLevel < eelCritical Then
+                            VCSIndex.Remove cType, strIndexFile
+                            ' Do not classify captured companion paths as new orphans.
+                            If InteractionIsNonInteractive() And Not dBaseNames.Exists(strBaseName) Then
+                                dBaseNames.Add strBaseName, vbNullString
+                            End If
+                        End If
                     Else
                         ' File properties different from index. Add as a conflict to resolve.
                         ' (This can happen when the last export was during a different daylight savings time
                         ' setting, as the past file modified date returned by FSO is not adjusted for DST.)
                         Log.Add "  Orphaned source file does not match last export: " & strFilePath, Options.ShowDebug
-                        VCSIndex.Conflicts.Add cType, strFilePath, 0, GetSourceModifiedDate(cType, strFilePath), ercDelete, strFilePath, ercDelete
+                        VCSIndex.Conflicts.Add cType, strFilePath, 0, GetSourceModifiedDate(cType, strFilePath), ercDelete, strFilePath, ercDelete, _
+                            strClassification:="tracked_changed_orphan", blnTracked:=True
                     End If
                 Else
                     ' Object does not exist in the index. It might be a new file added
                     ' by another developer. Don't delete it, as it may need to be merged
                     ' into the database. (Defaults to skip deleting the file)
                     Log.Add "  Found new source file: " & strFilePath, Options.ShowDebug
-                    VCSIndex.Conflicts.Add cType, strFilePath, 0, GetSourceModifiedDate(cType, strFilePath), ercDelete, strFilePath, ercSkip
+                    VCSIndex.Conflicts.Add cType, strFilePath, 0, GetSourceModifiedDate(cType, strFilePath), ercDelete, strFilePath, ercSkip, _
+                        strClassification:="untracked_orphan", blnTracked:=False
                 End If
 
             Else
                 ' Not the primary extension for this component type.
                 ' If the primary source file exists, we will let that file handle evaluate any conflicts
-                If Not FSO.FileExists(SwapExtension(strFilePath, CStr(dExtensions(0)))) Then
-                    ' The primary source file does not exist. Go ahead and delete this orphaned file.
-                    Log.Add "  Removing orphaned file: " & cType.BaseFolder & strFileName, Options.ShowDebug
-                    DeleteFile strFilePath, True
+                If Not FSO.FileExists(SwapExtension(strFilePath, strPrimaryExtension)) Then
+                    If InteractionIsNonInteractive() Then
+                        CompareOrphanedCompanion cType, strFilePath, strPrimaryExtension, strIndexedPrimary
+                        ' One logical orphan group may have several companion files.
+                        ' Its complete-content decision owns the remaining members.
+                        If Not dBaseNames.Exists(strBaseName) Then dBaseNames.Add strBaseName, vbNullString
+                    Else
+                        ' Preserve the legacy direct cleanup path without an explicit policy.
+                        Log.Add "  Removing orphaned file: " & cType.BaseFolder & strFileName, Options.ShowDebug
+                        DeleteFile strFilePath, True
+                    End If
                 End If
             End If
         End If
     End If
 
+    CatchAny eelCritical, T("Unable to classify the orphan source content safely."), _
+        ModuleName & ".CompareToIndex", True, True
 End Sub
 
 
@@ -409,4 +474,72 @@ Public Sub ClearOrphanedArtifactFolders(cType As IDbComponent, dObjectBaseNames 
         End If
     Next varItem
 
+End Sub
+
+
+' Called only after complete content history proves this indexed orphan unchanged.
+'---------------------------------------------------------------------------------------
+' Procedure : DeleteUnchangedSourceGroup
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Delete complete orphan artifacts only after history proves the source group unchanged.
+'---------------------------------------------------------------------------------------
+'
+Private Sub DeleteUnchangedSourceGroup(ByVal cType As IDbComponent, ByVal strPrimary As String)
+    Dim varExt As Variant
+    Dim strBase As String
+    Dim strFile As String
+    Dim strFolder As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strBase = FSO.GetParentFolderName(strPrimary) & PathSep & FSO.GetBaseName(strPrimary)
+    For Each varExt In cType.FileExtensions(efesAll)
+        strFile = strBase & "." & CStr(varExt)
+        If FSO.FileExists(strFile) Then DeleteFile strFile, True
+    Next varExt
+    If FSO.FileExists(strPrimary) Then DeleteFile strPrimary, True
+    Select Case cType.ComponentType
+        Case edbCommandBar: strFolder = strBase & "_Images"
+        Case edbTheme: strFolder = strBase
+    End Select
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    End If
+    CatchAny eelCritical, T("Unable to remove the unchanged orphan source group."), ModuleName & ".DeleteUnchangedSourceGroup", True, True
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CompareOrphanedCompanion
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Protect a complete orphan group when only metadata companions remain.
+'---------------------------------------------------------------------------------------
+'
+Private Sub CompareOrphanedCompanion(ByVal cType As IDbComponent, ByVal strCompanion As String, _
+    ByVal strPrimaryExtension As String, Optional ByVal strIndexedPrimary As String)
+
+    Dim strPrimary As String
+    Dim cEntry As clsVCSIndexItem
+    Dim blnUnchanged As Boolean
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strPrimary = Nz2(strIndexedPrimary, SwapExtension(strCompanion, strPrimaryExtension))
+    If VCSIndex.Exists(cType, strPrimary) Then
+        Set cEntry = VCSIndex.Item(cType, strPrimary)
+        blnUnchanged = (Len(cEntry.SourceFilesHash) > 0)
+        If blnUnchanged Then blnUnchanged = (cEntry.SourceFilesHash = VCSIndex.SingleObjectComparisonHash(cType, strPrimary))
+        If Operation.ErrorLevel >= eelCritical Then Exit Sub
+        If blnUnchanged Then
+            DeleteUnchangedSourceGroup cType, strPrimary
+            If Operation.ErrorLevel < eelCritical Then VCSIndex.Remove cType, strPrimary
+        Else
+            VCSIndex.Conflicts.Add cType, strCompanion, cEntry.SyncDate, _
+                GetSourceModifiedDate(cType, strPrimary), ercDelete, strCompanion, ercDelete, _
+                strClassification:="tracked_changed_orphan", blnTracked:=True
+        End If
+    Else
+        VCSIndex.Conflicts.Add cType, strCompanion, 0, GetSourceModifiedDate(cType, strPrimary), _
+            ercDelete, strCompanion, ercSkip, strClassification:="untracked_orphan", blnTracked:=False
+    End If
+    CatchAny eelCritical, T("Unable to classify the complete orphan source group safely."), _
+        ModuleName & ".CompareOrphanedCompanion", True, True
 End Sub

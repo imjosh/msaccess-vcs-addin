@@ -46,12 +46,19 @@ Private m_strFile As String
 Private m_Git As clsGitIntegration
 Private m_Conflicts As clsConflicts
 Private m_strTempExportFolderPath As String
+Private m_blnSingleObjectHistory As Boolean
+Private m_blnPlanning As Boolean
+Private m_dSinglePlan As Dictionary
+Private m_dPlanCategories As Dictionary
+Private m_dCompletedTransfers As Dictionary
+Private m_dImportedBaselines As Dictionary
 
 ' Binary index format
-' Version 4 appended the SchemaState section. Version 3 files still load (the section
-' is simply absent), so upgrading the add-in does not discard an existing index.
+' Version 5 adds an optional actual database-content baseline per component.
+' Versions 3 and 4 still load; missing database baselines require conservative
+' actual-content comparison. Older add-ins reject version 5 and rebuild history.
 Private Const cstrIdxMagic As String = "VCSI"
-Private Const cintIdxFormatVersion As Integer = 4
+Private Const cintIdxFormatVersion As Integer = 5
 Private Const cintIdxMinReadVersion As Integer = 3
 Private Const cstrLegacyFileName As String = "vcs-index.json"
 
@@ -62,6 +69,8 @@ Private Const cbytFlagMetaHash As Byte = 4
 Private Const cbytFlagFilePropertiesHash As Byte = 8
 Private Const cbytFlagFolderAnnotation As Byte = 16
 Private Const cbytFlagAllFilesHash As Byte = 32
+Private Const cbytFlagDatabaseFilesHash As Byte = 64
+Private Const cbytFlagSourceFilesHash As Byte = 128
 
 ' UDTs for LSet Double <-> Byte() punning
 Private Type tDoubleBytes
@@ -195,6 +204,8 @@ Public Sub LoadFromFile(Optional strFile As String)
             If (bFlags And cbytFlagFilePropertiesHash) Then cEntry.FilePropertiesHash = ReadLPS(bData, lngPos)
             If (bFlags And cbytFlagFolderAnnotation) Then cEntry.FolderAnnotation = ReadLPS(bData, lngPos)
             If (bFlags And cbytFlagAllFilesHash) Then cEntry.AllFilesHash = ReadLPS(bData, lngPos)
+            If lngVersion >= 5 And (bFlags And cbytFlagDatabaseFilesHash) Then cEntry.DatabaseFilesHash = ReadLPS(bData, lngPos)
+            If lngVersion >= 5 And (bFlags And cbytFlagSourceFilesHash) Then cEntry.SourceFilesHash = ReadLPS(bData, lngPos)
 
             dCategory.Add strFileName, cEntry
         Next lngItem
@@ -312,6 +323,8 @@ Public Sub Save(Optional strInFolder As String)
             If Len(cEntry.FilePropertiesHash) > 0 Then bFlags = bFlags Or cbytFlagFilePropertiesHash
             If Len(cEntry.FolderAnnotation) > 0 Then bFlags = bFlags Or cbytFlagFolderAnnotation
             If Len(cEntry.AllFilesHash) > 0 Then bFlags = bFlags Or cbytFlagAllFilesHash
+            If Len(cEntry.DatabaseFilesHash) > 0 Then bFlags = bFlags Or cbytFlagDatabaseFilesHash
+            If Len(cEntry.SourceFilesHash) > 0 Then bFlags = bFlags Or cbytFlagSourceFilesHash
             WriteByte bFlags
 
             ' Fixed date fields (UTC)
@@ -327,6 +340,8 @@ Public Sub Save(Optional strInFolder As String)
             If (bFlags And cbytFlagFilePropertiesHash) Then WriteLPS cEntry.FilePropertiesHash
             If (bFlags And cbytFlagFolderAnnotation) Then WriteLPS cEntry.FolderAnnotation
             If (bFlags And cbytFlagAllFilesHash) Then WriteLPS cEntry.AllFilesHash
+            If (bFlags And cbytFlagDatabaseFilesHash) Then WriteLPS cEntry.DatabaseFilesHash
+            If (bFlags And cbytFlagSourceFilesHash) Then WriteLPS cEntry.SourceFilesHash
         Next varFile
     Next varCat
 
@@ -417,6 +432,9 @@ Public Function Update(cItem As IDbComponent, intAction As eIndexOperationType, 
                 .ExportDate = dteDateTime
             Case eatImport
                 .ImportDate = dteDateTime
+                ' Imports may normalize source. Capture a new actual database baseline
+                ' after the import, never retain a baseline from an earlier version.
+                .DatabaseFilesHash = vbNullString
         End Select
 
         ' Save the object's DateModified for accurate change detection.
@@ -430,7 +448,7 @@ Public Function Update(cItem As IDbComponent, intAction As eIndexOperationType, 
         End If
         Select Case cItem.ComponentType
             Case edbModule, edbForm, edbReport
-                If CurrentProject.AllModules.Count > 0 Then
+                If intAction = eatExport And Not m_blnSingleObjectHistory And CurrentProject.AllModules.Count > 0 Then
                     Me.VBAProjectDate = DateTruncToSeconds( _
                         CurrentProject.AllModules(0).DateModified)
                 End If
@@ -445,9 +463,16 @@ Public Function Update(cItem As IDbComponent, intAction As eIndexOperationType, 
             .SourceModified = dteDateTime
             .FilePropertiesHash = GetSourceFilesPropertyHash(cItem)
             .AllFilesHash = GetSourceFilesContentHash(cItem)
+            .SourceFilesHash = SingleObjectComparisonHash(cItem, cItem.SourceFile)
+            If intAction = eatExport Then .DatabaseFilesHash = .SourceFilesHash
         End If
     End With
 
+    If intAction = eatImport And InteractionIsNonInteractive() Then
+        cEntry.DatabaseFilesHash = CaptureImportedDatabaseHash(cItem)
+        If Len(cEntry.DatabaseFilesHash) > 0 Then m_dImportedBaselines(cItem.Category & "|" & LCase$(cItem.SourceFile)) = True
+    End If
+    If intAction <> eatAltExport Then RecordCompletedTransfer cItem, cItem.SourceFile
     Set Update = cEntry
 
 End Function
@@ -509,7 +534,10 @@ Public Sub UpdateFromAltExport(cItem As IDbComponent)
             .SourceModified = GetSourceModifiedDate(cItem, cItem.SourceFile)
             .FilePropertiesHash = GetSourceFilesPropertyHash(cItem)
             .AllFilesHash = GetSourceFilesContentHash(cItem)
+            .SourceFilesHash = SingleObjectComparisonHash(cItem, cItem.SourceFile)
+            .DatabaseFilesHash = .SourceFilesHash
         End With
+        RecordCompletedTransfer cItem, cItem.SourceFile
     End If
 
 End Sub
@@ -745,6 +773,46 @@ Public Function Exists(cCategory As IDbComponent, strSourceFilePath As String) A
     ' See if the entry exists in the index
     Exists = (Len(FindIndexedFileName(cCategory, strFile)) > 0)
 
+End Function
+
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : IndexedSourceGroupFile
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Find the actual canonical indexed member, including retained earlier formats.
+'---------------------------------------------------------------------------------------
+'
+Public Function IndexedSourceGroupFile(ByVal cType As IDbComponent, ByVal strFile As String) As String
+    Dim strKey As String
+    Dim strBase As String
+    Dim varKey As Variant
+    Dim varExtension As Variant
+    Dim dCategory As Dictionary
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strKey = FindIndexedFileName(cType, FSO.GetFileName(strFile))
+    strBase = FSO.GetBaseName(strFile)
+    ' Current-format siblings resolve by dictionary lookup, without walking a
+    ' large category for every metadata file. Retained formats use the fallback.
+    If Len(strKey) = 0 Then
+        For Each varExtension In cType.FileExtensions
+            strKey = FindIndexedFileName(cType, strBase & "." & CStr(varExtension))
+            If Len(strKey) > 0 Then Exit For
+        Next varExtension
+    End If
+    If Len(strKey) = 0 And m_dIndex("Components").Exists(cType.Category) Then
+        Set dCategory = m_dIndex("Components")(cType.Category)
+        For Each varKey In dCategory.Keys
+            If StrComp(FSO.GetBaseName(CStr(varKey)), strBase, vbTextCompare) = 0 Then
+                strKey = CStr(varKey)
+                Exit For
+            End If
+        Next varKey
+    End If
+    If Len(strKey) > 0 Then IndexedSourceGroupFile = FSO.GetParentFolderName(strFile) & PathSep & strKey
+    CatchAny eelCritical, T("Unable to identify the canonical tracked source group."), _
+        ModuleName(Me) & ".IndexedSourceGroupFile", True, True
 End Function
 
 
@@ -1110,6 +1178,10 @@ Private Function GetExportConflictFiles(cItem As IDbComponent) As Collection
     Dim blnCompareTemp As Boolean
     Dim cIdx As clsVCSIndexItem
 
+    If InteractionIsNonInteractive() Then
+        Set GetExportConflictFiles = PolicyExportConflictFiles(cItem)
+        Exit Function
+    End If
     ' Check for special cases based on component type
     If cItem.ComponentType = edbTableData Then
         ' Table data is not considered an export conflict, and should
@@ -1213,7 +1285,8 @@ Public Sub CheckMergeConflicts(cComponent As IDbComponent, dFiles As Dictionary)
                 GetSourceModifiedDate(cComponent, strFile), _
                 intConflict, _
                 strFile, _
-                ercSkip, colFiles
+                ercSkip, colFiles, _
+                IIf(intConflict = ercDelete, "edited_database_object_missing_source", "overwrite")
         End If
         ' Increment the progress bar
         Log.Increment
@@ -1245,6 +1318,10 @@ Private Function IsMergeConflict(cItemClass As IDbComponent, strSourceFile As St
     Dim cItem As IDbComponent
     Dim strTempFile As String
 
+    If InteractionIsNonInteractive() Then
+        IsMergeConflict = PolicyImportConflict(cItemClass, strSourceFile, colDiffFiles)
+        Exit Function
+    End If
     ' Check for special cases based on component type
     If cItemClass.ComponentType = edbTableData Then
         ' Table data is not considered an import conflict, and should
@@ -1482,6 +1559,8 @@ Public Sub DumpToJson(Optional strPath As String)
                 dEntryOut.Add "SourceModified", ZNDate(cEntry.SourceModified)
                 If Len(cEntry.FilePropertiesHash) > 0 Then dEntryOut.Add "FilePropertiesHash", cEntry.FilePropertiesHash
                 If Len(cEntry.AllFilesHash) > 0 Then dEntryOut.Add "AllFilesHash", cEntry.AllFilesHash
+                If Len(cEntry.DatabaseFilesHash) > 0 Then dEntryOut.Add "DatabaseFilesHash", cEntry.DatabaseFilesHash
+                If Len(cEntry.SourceFilesHash) > 0 Then dEntryOut.Add "SourceFilesHash", cEntry.SourceFilesHash
                 If Len(cEntry.OtherHash) > 0 Then dEntryOut.Add "OtherHash", cEntry.OtherHash
                 If Len(cEntry.MetaHash) > 0 Then dEntryOut.Add "MetaHash", cEntry.MetaHash
                 If cEntry.ObjectDate <> 0 Then dEntryOut.Add "ObjectDate", cEntry.ObjectDate
@@ -1774,7 +1853,686 @@ Private Sub Class_Initialize()
         Set .Item("AlternateExport") = New Dictionary
     End With
 
+    Set m_dCompletedTransfers = New Dictionary
+    m_dCompletedTransfers.CompareMode = TextCompare
+    Set m_dImportedBaselines = New Dictionary
+    m_dImportedBaselines.CompareMode = TextCompare
+
     ' Load Git integration
     Set m_dGitIndex = Nothing
 
+End Sub
+
+
+' Compare only the requested component. Metadata is never proof of safe overwrite.
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectTransferAllowed
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Compare source and actual database content before admitting one plan member.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectTransferAllowed(ByVal cItem As IDbComponent, _
+    ByVal intDirection As eIndexOperationType, ByVal strSourceFile As String, _
+    ByRef dResult As Dictionary, Optional ByVal blnDestinationExists As Boolean = True) As Boolean
+
+    Dim strTemp As String
+    Dim strSourceHash As String
+    Dim strDatabaseHash As String
+    Dim strBaseline As String
+    Dim strClassification As String
+    Dim cEntry As clsVCSIndexItem
+    Dim dCategories As Dictionary
+    Dim dCategory As Dictionary
+    Dim dItems As Dictionary
+    Dim blnTracked As Boolean
+    Dim dteSync As Date
+    Dim strArtifact As String
+    Dim strSourceArtifact As String
+
+    m_blnSingleObjectHistory = True
+    Set dResult = New Dictionary
+    dResult.Add "transferred", False
+    dResult.Add "skipped", False
+    dResult.Add "transferred_count", 0&
+    dResult.Add "skipped_count", 0&
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    Perf.OperationStart "Single Object Content Comparison"
+    If m_blnPlanning Then AddSingleObjectPlanItem cItem, intDirection, strSourceFile, dResult
+
+    If intDirection = eatImport And Not blnDestinationExists Then
+        SingleObjectTransferAllowed = True
+        GoTo CleanUp
+    End If
+    strTemp = SingleObjectTempFile(cItem, strSourceFile)
+    ResetSingleObjectTemp cItem
+    ExportPolicyComparison cItem, strTemp, strSourceFile
+    If Operation.ErrorLevel >= eelCritical Or SingleObjectComparisonFiles(cItem, strTemp).Count = 0 Then
+        dResult.Add "success", False
+        dResult.Add "error_pattern", "policy_comparison_unsupported"
+        dResult.Add "error", T("This component did not produce comparable content. The explicit policy cannot authorize its transfer.")
+        Operation.RecordPolicyComparisonRefusal dResult
+        Operation.ErrorLevel = eelCritical
+        GoTo CleanUp
+    End If
+
+    strSourceHash = SingleObjectComparisonHash(cItem, strSourceFile)
+    strDatabaseHash = SingleObjectComparisonHash(cItem, strTemp)
+
+    blnTracked = Me.Exists(cItem, SingleObjectIndexFile(cItem, strSourceFile))
+    strClassification = "missing_history"
+    If blnTracked Then
+        Set cEntry = GetExistingIndexItem(cItem, SingleObjectIndexFile(cItem, strSourceFile))
+        dteSync = cEntry.SyncDate
+        If intDirection = eatImport Then
+            strBaseline = SingleObjectDestinationBaseline(cEntry, intDirection)
+        Else
+            strBaseline = SingleObjectDestinationBaseline(cEntry, intDirection)
+        End If
+        If Len(strBaseline) > 0 Then strClassification = "overwrite"
+    End If
+
+    If intDirection <> eatImport Then blnDestinationExists = (SingleObjectComparisonFiles(cItem, strSourceFile).Count > 0)
+    If Not SingleObjectContentConflict(strSourceHash, strDatabaseHash, strBaseline, intDirection, blnDestinationExists) Then
+        SingleObjectTransferAllowed = True
+        GoTo CleanUp
+    End If
+
+    If Not m_blnPlanning Then
+        Set dItems = New Dictionary
+        Set dCategory = New Dictionary
+        Set dCategories = New Dictionary
+        dCategory.Add "Class", cItem
+        If intDirection = eatImport Then
+            dItems.Add strSourceFile, vbNullString
+            dCategory.Add "Files", dItems
+        Else
+            dItems.Add strSourceFile, cItem
+            dCategory.Add "Objects", dItems
+        End If
+        dCategories.Add cItem.Category, dCategory
+        Me.Conflicts.Initialize dCategories, intDirection
+    End If
+    Me.Conflicts.Add cItem, strSourceFile, dteSync, _
+        GetSourceModifiedDate(cItem, strSourceFile), ercOverwrite, strSourceFile, ercSkip, _
+        GetDifferingFiles(cItem, strSourceFile, strTemp), strClassification, blnTracked
+    If m_blnPlanning Then
+        SingleObjectTransferAllowed = True
+        GoTo CleanUp
+    End If
+    Me.Conflicts.ResolveOrPrompt
+    If Me.Conflicts.ApproveResolutions Then
+        Me.Conflicts.Resolve
+        If dCategories.Count = 0 Then
+            dResult("skipped") = True
+            dResult("skipped_count") = 1&
+        Else
+            SingleObjectTransferAllowed = True
+        End If
+    End If
+
+CleanUp:
+    Perf.OperationEnd
+    CatchAny eelCritical, T("Unable to compare the requested component safely."), ModuleName(Me) & ".SingleObjectTransferAllowed", True, True
+    If Operation.ErrorLevel >= eelCritical Then SingleObjectTransferAllowed = False
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectTempFile
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Return the owned comparison path for one component category and source file.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectTempFile(ByVal cItem As IDbComponent, ByVal strSourceFile As String) As String
+    SingleObjectTempFile = GetTempExportFolder & "single" & PathSep & cItem.Category & PathSep & FSO.GetFileName(strSourceFile)
+End Function
+
+
+' Capture the post-import database representation separately from source bytes.
+' Export normalization can make these baselines differ during ordinary edit cycles.
+'---------------------------------------------------------------------------------------
+' Procedure : RecordSingleObjectImport
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Save complete source and normalized database baselines after a successful import.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordSingleObjectImport(ByVal cItem As IDbComponent, ByVal strSourceFile As String)
+    Dim strTemp As String
+    Dim cEntry As clsVCSIndexItem
+    If m_dImportedBaselines.Exists(cItem.Category & "|" & LCase$(SingleObjectIndexFile(cItem, strSourceFile))) Then Exit Sub
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    Perf.OperationStart "Single Object History"
+    strTemp = SingleObjectTempFile(cItem, strSourceFile)
+    ResetSingleObjectTemp cItem
+    ExportPolicyComparison cItem, strTemp, strSourceFile
+    If Operation.ErrorLevel < eelCritical And SingleObjectComparisonFiles(cItem, strTemp).Count > 0 Then
+        Set cEntry = Me.Item(cItem, SingleObjectIndexFile(cItem, strSourceFile))
+        cEntry.DatabaseFilesHash = SingleObjectComparisonHash(cItem, strTemp)
+        cEntry.SourceFilesHash = SingleObjectComparisonHash(cItem, strSourceFile)
+        cEntry.AllFilesHash = GetSourceFilesContentHash(cItem, strSourceFile)
+        cEntry.ImportDate = Now
+    Else
+        Operation.ErrorLevel = eelCritical
+    End If
+    Perf.OperationEnd
+    CatchAny eelCritical, T("Unable to save synchronization history for the requested component."), ModuleName(Me) & ".RecordSingleObjectImport", True, True
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ResetSingleObjectTemp
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Remove only the current category's owned single-object comparison output.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ResetSingleObjectTemp(ByVal cItem As IDbComponent)
+    Dim strFolder As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strFolder = GetTempExportFolder & "single" & PathSep & cItem.Category
+    If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    CatchAny eelCritical, T("Unable to clear the owned single-object comparison folder."), ModuleName(Me) & ".ResetSingleObjectTemp", True, True
+End Sub
+
+
+' Pure decision rule shared by the actual-content check and its history regressions.
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectContentConflict
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Detect independent destination changes using content equality and trusted history.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectContentConflict(ByVal strSourceHash As String, ByVal strDatabaseHash As String, _
+    ByVal strDestinationBaseline As String, ByVal intDirection As eIndexOperationType, _
+    Optional ByVal blnDestinationExists As Boolean = True) As Boolean
+
+    If Not blnDestinationExists Then Exit Function
+    If Len(strSourceHash) > 0 And strSourceHash = strDatabaseHash Then Exit Function
+    If Len(strDestinationBaseline) > 0 Then
+        If intDirection = eatImport Then
+            If strDatabaseHash = strDestinationBaseline Then Exit Function
+        Else
+            If strSourceHash = strDestinationBaseline Then Exit Function
+        End If
+    End If
+    SingleObjectContentConflict = True
+End Function
+
+
+' Compare complete import-defining content, including object-owned directories.
+' Relative names are case-insensitive Windows identities; ordering is deterministic.
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectComparisonHash
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Hash complete indexed content and artifact directories with stable relative names.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectComparisonHash(ByVal cItem As IDbComponent, ByVal strFile As String) As String
+    Dim dFiles As Dictionary
+    Dim varKey As Variant
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    Set dFiles = SingleObjectComparisonFiles(cItem, strFile)
+    Set dFiles = SortDictionaryByKeys(dFiles)
+    With New clsConcat
+        For Each varKey In dFiles.Keys
+            .Add CStr(varKey) & vbNullChar & GetFileHash(CStr(dFiles(varKey))) & vbNullChar
+        Next varKey
+        SingleObjectComparisonHash = GetStringHash(.GetStr)
+    End With
+    CatchAny eelCritical, T("Unable to hash complete component comparison content."), ModuleName(Me) & ".SingleObjectComparisonHash", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectComparisonFiles
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Collect import-defining files and object-owned image or theme directories.
+'---------------------------------------------------------------------------------------
+'
+Private Function SingleObjectComparisonFiles(ByVal cItem As IDbComponent, ByVal strFile As String) As Dictionary
+    Dim dFiles As New Dictionary
+    Dim varExt As Variant
+    Dim strBase As String
+    Dim strCandidate As String
+    Dim strFolder As String
+    Dim strRoot As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    dFiles.CompareMode = TextCompare
+    strRoot = FSO.GetParentFolderName(strFile) & PathSep
+    strBase = strRoot & FSO.GetBaseName(strFile)
+    For Each varExt In cItem.FileExtensions
+        strCandidate = strBase & "." & CStr(varExt)
+        If FSO.FileExists(strCandidate) Then dFiles.Add LCase$(FSO.GetFileName(strCandidate)), strCandidate
+    Next varExt
+    ' Retained indexed primaries may use an earlier source format. Include the
+    ' supplied canonical member even when today's extension list omits that format.
+    strCandidate = LCase$(FSO.GetFileName(strFile))
+    If Not dFiles.Exists(strCandidate) Then
+        If FSO.FileExists(strFile) Then dFiles.Add strCandidate, strFile
+    End If
+    Select Case cItem.ComponentType
+        Case edbCommandBar: strFolder = strBase & "_Images"
+        Case edbTheme: strFolder = strBase
+    End Select
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then AddComparisonDirectory dFiles, strRoot, strFolder
+    End If
+    Set SingleObjectComparisonFiles = dFiles
+    CatchAny eelCritical, T("Unable to enumerate complete component comparison content."), ModuleName(Me) & ".SingleObjectComparisonFiles", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : AddComparisonDirectory
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Collect nested artifact files using case-insensitive relative Windows identities.
+'---------------------------------------------------------------------------------------
+'
+Private Sub AddComparisonDirectory(ByVal dFiles As Dictionary, ByVal strRoot As String, ByVal strFolder As String)
+    Dim objFile As Scripting.File
+    Dim objFolder As Scripting.Folder
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    For Each objFile In FSO.GetFolder(strFolder).Files
+        dFiles.Add LCase$(Mid$(objFile.Path, Len(strRoot) + 1)), objFile.Path
+    Next objFile
+    For Each objFolder In FSO.GetFolder(strFolder).SubFolders
+        AddComparisonDirectory dFiles, strRoot, objFolder.Path
+    Next objFolder
+    CatchAny eelCritical, T("Unable to enumerate the complete component artifact directory."), ModuleName(Me) & ".AddComparisonDirectory", True, True
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BeginSingleObjectPlan
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Initialize a dependency group whose conflicts must all be checked before transfer.
+'---------------------------------------------------------------------------------------
+'
+Public Sub BeginSingleObjectPlan(ByVal intDirection As eIndexOperationType)
+    Set m_dSinglePlan = New Dictionary
+    m_dSinglePlan.CompareMode = TextCompare
+    Set m_dPlanCategories = New Dictionary
+    m_dPlanCategories.CompareMode = TextCompare
+    m_blnPlanning = True
+    Me.Conflicts.Initialize m_dPlanCategories, intDirection
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : AddSingleObjectPlanItem
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Register a component and its result in the unresolved dependency group.
+'---------------------------------------------------------------------------------------
+'
+Private Sub AddSingleObjectPlanItem(ByVal cItem As IDbComponent, ByVal intDirection As eIndexOperationType, _
+    ByVal strSourceFile As String, ByVal dResult As Dictionary)
+    Dim dPlan As New Dictionary
+    Dim dCategory As Dictionary
+    Dim dItems As Dictionary
+    Dim strList As String
+    strList = IIf(intDirection = eatImport, "Files", "Objects")
+    If Not m_dPlanCategories.Exists(cItem.Category) Then
+        Set dCategory = New Dictionary
+        Set dItems = New Dictionary
+        dItems.CompareMode = TextCompare
+        dCategory.Add "Class", cItem
+        dCategory.Add strList, dItems
+        m_dPlanCategories.Add cItem.Category, dCategory
+    End If
+    Set dCategory = m_dPlanCategories(cItem.Category)
+    Set dItems = dCategory(strList)
+    If intDirection = eatImport Then
+        dItems.Add strSourceFile, vbNullString
+    Else
+        dItems.Add strSourceFile, cItem
+    End If
+    dPlan.Add "Component", cItem
+    dPlan.Add "SourceFile", strSourceFile
+    dPlan.Add "Result", dResult
+    dPlan.Add "Allowed", False
+    dPlan.Add "Direction", intDirection
+    m_dSinglePlan.Add cItem.Category & "|" & strSourceFile, dPlan
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ResolveSingleObjectPlan
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Resolve the complete conflict list, then mark each permitted or preserved member.
+'---------------------------------------------------------------------------------------
+'
+Public Function ResolveSingleObjectPlan() As Boolean
+    Dim varKey As Variant
+    Dim dPlan As Dictionary
+    Dim cItem As IDbComponent
+    Dim dResult As Dictionary
+    Dim strList As String
+    m_blnPlanning = False
+    If Operation.ErrorLevel >= eelCritical Then Exit Function
+    If Me.Conflicts.Count > 0 Then
+        Me.Conflicts.ResolveOrPrompt
+        If Not Me.Conflicts.ApproveResolutions Then Exit Function
+        Me.Conflicts.Resolve
+    End If
+    For Each varKey In m_dSinglePlan.Keys
+        Set dPlan = m_dSinglePlan(varKey)
+        Set cItem = dPlan("Component")
+        Set dResult = dPlan("Result")
+        strList = IIf(dPlan("Direction") = eatImport, "Files", "Objects")
+        If m_dPlanCategories.Exists(cItem.Category) Then
+            dPlan("Allowed") = m_dPlanCategories(cItem.Category)(strList).Exists(dPlan("SourceFile"))
+        End If
+        If Not dPlan("Allowed") Then
+            dResult("skipped") = True
+            dResult("skipped_count") = 1&
+        End If
+    Next varKey
+    ResolveSingleObjectPlan = True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectPlanItems
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Return the ordered transfer group after its shared conflict preflight.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectPlanItems() As Collection
+    Dim varKey As Variant
+    Dim colItems As New Collection
+    For Each varKey In m_dSinglePlan.Keys
+        colItems.Add m_dSinglePlan(varKey)
+    Next varKey
+    Set SingleObjectPlanItems = colItems
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PolicyExportConflictFiles
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Compare complete source content with an isolated actual database export.
+'---------------------------------------------------------------------------------------
+'
+Private Function PolicyExportConflictFiles(ByVal cItem As IDbComponent) As Collection
+    Dim strTemp As String
+    Dim strSourceHash As String
+    Dim strDatabaseHash As String
+    Dim strBaseline As String
+    Dim cEntry As clsVCSIndexItem
+    Dim colFiles As Collection
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strTemp = Replace(cItem.SourceFile, Options.GetExportFolder, GetTempExportFolder, , , vbTextCompare)
+    ExportPolicyComparison cItem, strTemp, cItem.SourceFile
+    If SingleObjectComparisonFiles(cItem, strTemp).Count = 0 Then
+        If SingleObjectComparisonFiles(cItem, cItem.SourceFile).Count = 0 Then Exit Function
+        RecordUncomparable cItem
+        Exit Function
+    End If
+    strSourceHash = SingleObjectComparisonHash(cItem, cItem.SourceFile)
+    strDatabaseHash = SingleObjectComparisonHash(cItem, strTemp)
+    If Me.Exists(cItem, cItem.SourceFile) Then
+        Set cEntry = GetExistingIndexItem(cItem, cItem.SourceFile)
+        strBaseline = cEntry.SourceFilesHash
+    End If
+    If SingleObjectContentConflict(strSourceHash, strDatabaseHash, strBaseline, eatExport, _
+        SingleObjectComparisonFiles(cItem, cItem.SourceFile).Count > 0) Then
+        Set colFiles = GetDifferingFiles(cItem, cItem.SourceFile, strTemp)
+        If colFiles Is Nothing Then
+            Set colFiles = New Collection
+            colFiles.Add FSO.GetFileName(cItem.SourceFile)
+        End If
+        Set PolicyExportConflictFiles = colFiles
+    End If
+    CatchAny eelCritical, T("Unable to compare the complete export destination safely."), ModuleName(Me) & ".PolicyExportConflictFiles", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PolicyImportConflict
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Classify source overwrite or deletion against complete database synchronization history.
+'---------------------------------------------------------------------------------------
+'
+Private Function PolicyImportConflict(ByVal cClass As IDbComponent, ByVal strFile As String, _
+    ByRef colFiles As Collection) As eResolveConflict
+    Dim cItem As IDbComponent
+    Dim cCandidate As IDbComponent
+    Dim dItems As Dictionary
+    Dim varKey As Variant
+    Dim strTemp As String
+    Dim strSourceHash As String
+    Dim strDatabaseHash As String
+    Dim strBaseline As String
+    Dim cEntry As clsVCSIndexItem
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    Set cItem = cClass
+    If Not cClass.SingleFile Then
+        Set dItems = cClass.GetAllFromDB(False)
+        Set cItem = Nothing
+        For Each varKey In dItems.Keys
+            Set cCandidate = dItems(varKey)
+            If StrComp(SingleObjectIndexFile(cCandidate, cCandidate.SourceFile), _
+                SingleObjectIndexFile(cCandidate, strFile), vbTextCompare) = 0 Then
+                Set cItem = cCandidate
+                Exit For
+            End If
+        Next varKey
+        If cItem Is Nothing Then Exit Function
+    End If
+    strTemp = Replace(SingleObjectIndexFile(cItem, strFile), Options.GetExportFolder, GetTempExportFolder, , , vbTextCompare)
+    ExportPolicyComparison cItem, strTemp, strFile
+    If SingleObjectComparisonFiles(cItem, strTemp).Count = 0 Then
+        If SingleObjectComparisonFiles(cItem, strFile).Count = 0 Then Exit Function
+        RecordUncomparable cItem
+        Exit Function
+    End If
+    strDatabaseHash = SingleObjectComparisonHash(cItem, strTemp)
+    If Me.Exists(cItem, SingleObjectIndexFile(cItem, strFile)) Then
+        Set cEntry = GetExistingIndexItem(cItem, SingleObjectIndexFile(cItem, strFile))
+        If Len(cEntry.SourceFilesHash) > 0 Then strBaseline = cEntry.DatabaseFilesHash
+    End If
+    If Not SourceDefinitionExists(cItem, strFile) Then
+        If Len(strBaseline) = 0 Or strDatabaseHash <> strBaseline Then PolicyImportConflict = ercDelete
+    Else
+        strSourceHash = SingleObjectComparisonHash(cItem, strFile)
+        If SingleObjectContentConflict(strSourceHash, strDatabaseHash, strBaseline, eatImport) Then
+            PolicyImportConflict = ercOverwrite
+            Set colFiles = GetDifferingFiles(cItem, strFile, strTemp)
+        End If
+    End If
+    CatchAny eelCritical, T("Unable to compare the complete import destination safely."), ModuleName(Me) & ".PolicyImportConflict", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordUncomparable
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Publish an explicit refusal when complete comparison content is unavailable.
+'---------------------------------------------------------------------------------------
+'
+Private Sub RecordUncomparable(ByVal cItem As IDbComponent)
+    Dim dRefusal As Dictionary
+    Set dRefusal = New Dictionary
+    dRefusal.Add "success", False
+    dRefusal.Add "error_pattern", "policy_comparison_unsupported"
+    dRefusal.Add "error", T("The component {0} did not produce comparable content. No conflict transfer was authorized.", var0:=cItem.Name)
+    Operation.RecordPolicyComparisonRefusal dRefusal
+    Operation.ErrorLevel = eelCritical
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectIndexFile
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Map an extracted theme folder to its canonical internal history key.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectIndexFile(ByVal cItem As IDbComponent, ByVal strFile As String) As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    SingleObjectIndexFile = strFile
+    If cItem.ComponentType = edbTheme Then
+        If LCase$(FSO.GetExtensionName(strFile)) <> "thmx" Then SingleObjectIndexFile = StripSlash(strFile) & ".thmx"
+    End If
+    CatchAny eelCritical, T("Unable to identify the component synchronization entry."), ModuleName(Me) & ".SingleObjectIndexFile", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordCompletedTransfer
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Count a completed canonical transfer once per component and source identity.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordCompletedTransfer(ByVal cItem As IDbComponent, ByVal strSourceFile As String)
+    If m_dCompletedTransfers Is Nothing Then Set m_dCompletedTransfers = New Dictionary
+    m_dCompletedTransfers(cItem.Category & "|" & LCase$(strSourceFile)) = True
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : TransferOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Report actual completed transfers and policy-preserved conflict members.
+'---------------------------------------------------------------------------------------
+'
+Public Function TransferOutcome() As Dictionary
+    Dim dResult As New Dictionary
+    Dim lngSkipped As Long
+    If m_dCompletedTransfers Is Nothing Then Set m_dCompletedTransfers = New Dictionary
+    lngSkipped = Me.Conflicts.SkippedTransferCount
+    dResult.Add "transferred", (m_dCompletedTransfers.Count > 0)
+    dResult.Add "skipped", (lngSkipped > 0)
+    dResult.Add "transferred_count", m_dCompletedTransfers.Count
+    dResult.Add "skipped_count", lngSkipped
+    Set TransferOutcome = dResult
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectDestinationBaseline
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Read only complete-content history, treating earlier index records conservatively.
+'---------------------------------------------------------------------------------------
+'
+Public Function SingleObjectDestinationBaseline(ByVal cEntry As clsVCSIndexItem, _
+    ByVal intDirection As eIndexOperationType) As String
+    ' Earlier unpublished v5 entries may contain the old indexed DatabaseFilesHash.
+    ' SourceFilesHash marks the complete-content representation, including artifacts.
+    If Len(cEntry.SourceFilesHash) = 0 Then Exit Function
+    If intDirection = eatImport Then
+        SingleObjectDestinationBaseline = cEntry.DatabaseFilesHash
+    Else
+        SingleObjectDestinationBaseline = cEntry.SourceFilesHash
+    End If
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SourceDefinitionExists
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Distinguish a real source definition from leftover metadata companions.
+'---------------------------------------------------------------------------------------
+'
+Private Function SourceDefinitionExists(ByVal cItem As IDbComponent, ByVal strFile As String) As Boolean
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    SourceDefinitionExists = FSO.FileExists(strFile)
+    If cItem.ComponentType = edbTheme Then
+        If FSO.FolderExists(StripSlash(strFile)) Then SourceDefinitionExists = True
+        If FSO.FolderExists(FSO.GetParentFolderName(strFile) & PathSep & FSO.GetBaseName(strFile)) Then SourceDefinitionExists = True
+    End If
+    CatchAny eelCritical, T("Unable to inspect the component source definition."), ModuleName(Me) & ".SourceDefinitionExists", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ExportPolicyComparison
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Export complete comparison content inside the owned temporary tree.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ExportPolicyComparison(ByVal cItem As IDbComponent, ByVal strTemp As String, ByVal strSource As String)
+    Dim blnExtract As Boolean
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    If StrComp(Left$(strTemp, Len(GetTempExportFolder)), GetTempExportFolder, vbTextCompare) <> 0 Then
+        Log.Error eelCritical, T("The comparison output is outside the owned temporary folder."), ModuleName(Me) & ".ExportPolicyComparison"
+        Exit Sub
+    End If
+    ClearComparisonOutput cItem, strTemp
+    blnExtract = Options.ExtractThemeFiles
+    If cItem.ComponentType = edbTheme Then
+        If FSO.FolderExists(StripSlash(strSource)) Or _
+            FSO.FolderExists(FSO.GetParentFolderName(strSource) & PathSep & FSO.GetBaseName(strSource)) Then Options.ExtractThemeFiles = True
+    End If
+    cItem.Export strTemp
+    Options.ExtractThemeFiles = blnExtract
+    CatchAny eelCritical, T("Unable to export complete comparison content safely."), ModuleName(Me) & ".ExportPolicyComparison", True, True
+    If Operation.ErrorLevel >= eelError Then Operation.ErrorLevel = eelCritical
+End Sub
+
+
+' Called after an import has bound its actual database object. The recursive index
+' update is an alternate export, so it never recaptures or commits this history.
+'---------------------------------------------------------------------------------------
+' Procedure : CaptureImportedDatabaseHash
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Capture normalized database content after import without recursively committing history.
+'---------------------------------------------------------------------------------------
+'
+Private Function CaptureImportedDatabaseHash(ByVal cItem As IDbComponent) As String
+    Dim strTemp As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    strTemp = GetTempExportFolder & "history" & PathSep & cItem.Category & PathSep & FSO.GetFileName(cItem.SourceFile)
+    ExportPolicyComparison cItem, strTemp, cItem.SourceFile
+    If Operation.ErrorLevel < eelCritical And SingleObjectComparisonFiles(cItem, strTemp).Count > 0 Then
+        CaptureImportedDatabaseHash = SingleObjectComparisonHash(cItem, strTemp)
+    End If
+    CatchAny eelCritical, T("Unable to capture normalized imported component content."), ModuleName(Me) & ".CaptureImportedDatabaseHash", True, True
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : ClearComparisonOutput
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Remove stale comparison files and artifact directories before the next export.
+'---------------------------------------------------------------------------------------
+'
+Private Sub ClearComparisonOutput(ByVal cItem As IDbComponent, ByVal strTemp As String)
+    Dim dFiles As Dictionary
+    Dim varKey As Variant
+    Dim strFolder As String
+    If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
+    Set dFiles = SingleObjectComparisonFiles(cItem, strTemp)
+    For Each varKey In dFiles.Keys
+        If FSO.FileExists(CStr(dFiles(varKey))) Then FSO.DeleteFile CStr(dFiles(varKey)), True
+    Next varKey
+    Select Case cItem.ComponentType
+        Case edbCommandBar: strFolder = FSO.GetParentFolderName(strTemp) & PathSep & FSO.GetBaseName(strTemp) & "_Images"
+        Case edbTheme: strFolder = FSO.GetParentFolderName(strTemp) & PathSep & FSO.GetBaseName(strTemp)
+    End Select
+    If Len(strFolder) > 0 Then
+        If FSO.FolderExists(strFolder) Then FSO.DeleteFolder strFolder, True
+    End If
+    CatchAny eelCritical, T("Unable to remove stale owned component comparison output."), ModuleName(Me) & ".ClearComparisonOutput", True, True
 End Sub

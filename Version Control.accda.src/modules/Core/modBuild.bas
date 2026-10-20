@@ -109,6 +109,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
     Dim lngCurrent As Long
     Dim cBatch As IDbBatchImport
     Dim strRootToken As String
+    Dim strTimerResult As String
     Dim dPrinterWarnings As Dictionary
     Dim lngErrorJournalStart As Long
 
@@ -277,9 +278,14 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
                 ' timers are picked up by the merge stage that follows the reset.
                 Log.Flush
                 strRootToken = Operation.CurrentRootToken
-                Operation.DetachRootLease strRootToken
                 TraceInPlaceMerge "prep: staging reset timer"
-                SetTimer "MergeReset", strSourceFolder, CStr(CLng(intFilter)), strRootToken
+                strTimerResult = SetTimer("MergeReset", strSourceFolder, CStr(CLng(intFilter)), strRootToken)
+                If Not TimerRequestSucceeded(strTimerResult) Then
+                    Operation.RecordRootRuntimeError strRootToken, T("Could not queue the merge continuation."), vbObjectError + 2410
+                    Operation.CompleteRootLease strRootToken, eorFailed
+                    Exit Sub
+                End If
+                Operation.DetachRootLease strRootToken
                 Exit Sub
             Else
                 ' Fall back to the reliable path.
@@ -335,6 +341,7 @@ Public Sub Build(strSourceFolder As String, blnFullBuild As Boolean _
         .Add T("Export Folder: {0}", var0:=strSourceFolder), False
         ' Log operation source (file only, not console)
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
         .Flush
@@ -855,6 +862,8 @@ CleanUp:
             T("A backup of the previous build was saved as '{0}'.", var0:=FSO.GetFileName(strBackup)), vbInformation
     End If
 
+    If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
+
 End Sub
 
 
@@ -1298,8 +1307,8 @@ End Sub
 '           : are attempting to import.
 '           : When blnNoIndex is True, the VCS index is disabled for the duration
 '           : of the call, skipping the expensive full-file parse/serialize cycle
-'           : and conflict detection. Used by MCP/API callers that treat the import
-'           : as a deliberate action (like a user saving directly in the designer).
+'           : and conflict detection for legacy MCP/API calls without a policy.
+'           : An effective noninteractive policy always enables content protection.
 '           : strSavedLogPath returns the log file written by this call. Callers
 '           : cannot read Log.SavedLogFilePath afterwards, since Operation.Finish
 '           : releases the Log singleton before this returns.
@@ -1307,12 +1316,22 @@ End Sub
 '
 Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, _
     strSourceFilePath As String, Optional blnNoIndex As Boolean = False, _
-    Optional ByRef strSavedLogPath As String, Optional ByRef blnCanceled As Boolean)
+    Optional ByRef strSavedLogPath As String, Optional ByRef dTransferResult As Dictionary, _
+    Optional ByRef blnCanceled As Boolean)
 
     Dim dCategories As Dictionary
     Dim dCategory As Dictionary
     Dim dSourceFiles As Dictionary
     Dim intResult As eOperationResult
+    Dim blnPolicy As Boolean
+    Dim cCheck As IDbComponent
+    Dim blnDestinationExists As Boolean
+    Dim dExisting As Dictionary
+    Dim varExisting As Variant
+    Dim cExisting As IDbComponent
+    Dim dPlan As Dictionary
+    Dim dMember As Dictionary
+    Dim cTransfer As IDbComponent
     Dim blnClosed As Boolean
 
     blnCanceled = False
@@ -1327,6 +1346,14 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     ' will be deleting the object before adding it from source.) The result is
     ' reported after Log.Clear below, which would otherwise discard it.
     blnClosed = CloseObjectBeforeOperation(cComponentClass.ComponentType, strName, blnCanceled)
+
+    blnPolicy = InteractionIsNonInteractive()
+    blnNoIndex = blnNoIndex And Not blnPolicy
+    Set dTransferResult = New Dictionary
+    dTransferResult.Add "transferred", False
+    dTransferResult.Add "skipped", False
+    dTransferResult.Add "transferred_count", 0&
+    dTransferResult.Add "skipped_count", 0&
 
     If blnNoIndex Then
         ' Skip the expensive index load and options reload. The caller has already
@@ -1363,13 +1390,15 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
         .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
         ' Log operation source (file only, not console)
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
         .Add T("Importing {0}...", var0:=strName)
         .Flush
     End With
 
-    If SourceFileIsMissing(strSourceFilePath) Then
+    If SourceFileIsMissing(strSourceFilePath) And Not _
+        (cComponentClass.ComponentType = edbTheme And FSO.FolderExists(strSourceFilePath)) Then
         Log.Error eelError, T("Source file not found: {0}", _
             var0:=Nz2(strSourceFilePath, T("(empty path)"))), _
             ModuleName & ".LoadSingleObject"
@@ -1391,7 +1420,32 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
         GoTo CleanUp
     End If
 
-    If Not blnNoIndex Then
+    If blnPolicy Then
+        Set cCheck = cComponentClass
+        If Not cComponentClass.SingleFile And Not cComponentClass.DbObject Is Nothing Then
+            ' The API already resolved the named object; repeated edits need no
+            ' whole-category object enumeration to prove that it exists.
+            blnDestinationExists = True
+        Else
+            Set dExisting = cComponentClass.GetAllFromDB(False)
+            If cComponentClass.SingleFile Then
+                blnDestinationExists = (dExisting.Count > 0)
+            Else
+                ' Some component dictionaries use names rather than source paths.
+                For Each varExisting In dExisting.Keys
+                    Set cExisting = dExisting(varExisting)
+                    If StrComp(VCSIndex.SingleObjectIndexFile(cExisting, cExisting.SourceFile), _
+                        VCSIndex.SingleObjectIndexFile(cExisting, strSourceFilePath), vbTextCompare) = 0 Then
+                        blnDestinationExists = True
+                        Set cCheck = cExisting
+                        Exit For
+                    End If
+                Next varExisting
+            End If
+        End If
+        If Not modExport.PrepareSingleObjectPlan(cCheck, eatImport, strSourceFilePath, _
+            blnDestinationExists, dTransferResult) Then GoTo CleanUp
+    ElseIf Not blnNoIndex Then
         ' Check for conflicts
         Set dSourceFiles = New Dictionary
         Set dCategory = New Dictionary
@@ -1399,7 +1453,7 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
         dSourceFiles.Add strSourceFilePath, vbNullString
         dCategory.Add "Class", cComponentClass
         dCategory.Add "Files", dSourceFiles
-        dCategories.Add cComponentClass, dCategory
+        dCategories.Add cComponentClass.Category, dCategory
         VCSIndex.Conflicts.Initialize dCategories, eatImport
         VCSIndex.CheckMergeConflicts cComponentClass, dSourceFiles
 
@@ -1434,9 +1488,29 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
         End If
     End If
 
-    ' Replace the existing object with the source file
-    cComponentClass.Merge strSourceFilePath
-    MergeDependentObjects cComponentClass, strName
+    If blnPolicy Then
+        For Each dPlan In VCSIndex.SingleObjectPlanItems
+            Set cTransfer = dPlan("Component")
+            Set dMember = dPlan("Result")
+            If dPlan("Allowed") Then
+                cTransfer.Merge CStr(dPlan("SourceFile"))
+                If Operation.ErrorLevel < eelCritical Then
+                    VCSIndex.RecordSingleObjectImport cTransfer, CStr(dPlan("SourceFile"))
+                    dMember("transferred") = True
+                    dMember("transferred_count") = 1&
+                End If
+            End If
+            modExport.AddSingleObjectOutcome dTransferResult, dMember
+            If Operation.ErrorLevel >= eelCritical Then Exit For
+        Next dPlan
+    Else
+        cComponentClass.Merge strSourceFilePath
+        MergeDependentObjects cComponentClass, strName
+        If Operation.ErrorLevel < eelCritical Then
+            dTransferResult("transferred") = True
+            dTransferResult("transferred_count") = 1&
+        End If
+    End If
 
 PostMerge:
 
@@ -1455,7 +1529,8 @@ CleanUp:
     ' never reaches the report and the cost of writing the whole file is invisible.
     If blnNoIndex Then
         VCSIndex.Disabled = False
-    ElseIf Not VCSIndex.Conflicts.UserCanceled Then
+    ElseIf Not VCSIndex.Conflicts.UserCanceled And Not Operation.DecisionBlocked _
+        And (Not blnPolicy Or CBool(dTransferResult("transferred"))) Then
         ' Save index file (don't change export date for single item export).
         ' Skipped if the user canceled a conflict dialog so the same conflicts
         ' will reappear on the next run.
@@ -1603,188 +1678,6 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : FinishSingleObjectImport
-' Author    : Josh
-' Date      : 09/30/2026
-' Purpose   : Complete the root operation after an API LoadSingleObject and return the
-'           : JSON result. colErrors is the import's error journal, read before Finish
-'           : releases the Log singleton, so the logged error goes back to the caller
-'           : in place of the message box a noninteractive policy suppressed. A prompt
-'           : the policy blocked makes the result decision_required.
-'---------------------------------------------------------------------------------------
-'
-Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
-    colErrors As Collection, Optional blnCanceled As Boolean = False) As String
-
-    Dim dResult As Dictionary
-    Dim intLevel As eErrorLevel
-
-    ' Read the outcome first. Finish closes the operation's interaction scope, which
-    ' restores the error level from before the operation, so under a noninteractive
-    ' policy a refused merge would otherwise report success.
-    intLevel = cOp.ErrorLevel
-    If cOp.Status = eosRunning Then
-        cOp.Finish IIf(intLevel >= eelCritical, eorFailed, eorSuccess)
-    End If
-
-    If cOp.Result = eorDecisionRequired Then
-        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
-    Else
-        Set dResult = New Dictionary
-        dResult.Add "success", (intLevel < eelError)
-        If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
-        If blnCanceled Then dResult.Add "cancelled", True
-    End If
-    AddDecisionJournal dResult, cOp.LastDecisions
-    dResult.Add "logPath", strLogPath
-    FinishSingleObjectImport = ConvertToJson(dResult)
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : FinishSingleObjectExport
-' Author    : Josh
-' Date      : 09/30/2026
-' Purpose   : Complete the root operation after an API ExportObject and return the JSON
-'           : result. dResult already holds a failure when the export stopped early. A
-'           : prompt the policy blocked makes the result decision_required.
-'---------------------------------------------------------------------------------------
-'
-Public Function FinishSingleObjectExport(cOp As clsOperation, strLogPath As String, _
-    dResult As Dictionary) As String
-
-    Dim dFinal As Dictionary
-    Dim intLevel As eErrorLevel
-
-    ' Read the error level before Finish restores it (see FinishSingleObjectImport).
-    intLevel = cOp.ErrorLevel
-    If cOp.Status = eosRunning Then cOp.Finish
-
-    If cOp.Result = eorDecisionRequired Then
-        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
-    Else
-        Set dFinal = dResult
-        If Not dFinal.Exists("success") Then
-            dFinal.Add "success", (intLevel < eelError)
-            If intLevel >= eelError Then
-                dFinal.Add "error", T("Export completed with errors. Check the log for details.")
-            End If
-        End If
-    End If
-    AddDecisionJournal dFinal, cOp.LastDecisions
-    If Len(strLogPath) > 0 And Not dFinal.Exists("logPath") Then dFinal.Add "logPath", strLogPath
-    FinishSingleObjectExport = ConvertToJson(dFinal)
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : FinishScopedOperation
-' Author    : Josh
-' Date      : 10/01/2026
-' Purpose   : Complete the root operation after an API ImportByType or ExportByType and
-'           : return the JSON result. A prompt the policy blocked makes the result
-'           : decision_required and keeps the log path, which the caller read before the
-'           : log was released. Any other outcome carries the decision journal when it
-'           : is not empty.
-'---------------------------------------------------------------------------------------
-'
-Public Function FinishScopedOperation(cOp As clsOperation, dResult As Dictionary, _
-    ByVal intResult As eOperationResult, strLogPath As String) As String
-
-    Dim dFinal As Dictionary
-
-    cOp.Finish intResult
-    If intResult = eorDecisionRequired Then
-        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
-        If Len(strLogPath) > 0 Then dFinal.Add "logPath", strLogPath
-    Else
-        Set dFinal = dResult
-        AddDecisionJournal dFinal, cOp.LastDecisions
-    End If
-    FinishScopedOperation = ConvertToJson(dFinal)
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : FailSingleObjectOperation
-' Author    : Josh
-' Date      : 09/30/2026
-' Purpose   : The error-handler result for an API ImportObject, ExportObject,
-'           : ImportByType or ExportByType. Finishes cOp as failed, so a raised error
-'           : does not leave the root, its log and its interaction scope open for the
-'           : next call. Pass Nothing when the call had
-'           : not begun its operation yet: the running root, if any, is someone else's.
-'           : If a prompt was blocked, decision_required is the primary result and the
-'           : error goes alongside as runtime_error, as for a test run.
-'---------------------------------------------------------------------------------------
-'
-Public Function FailSingleObjectOperation(cOp As clsOperation, strLogPath As String, _
-    lngNumber As Long, strDescription As String) As String
-
-    Dim dResult As Dictionary
-    Dim blnBlocked As Boolean
-
-    If Not cOp Is Nothing Then
-        If cOp.Status = eosRunning Then cOp.Finish eorFailed
-        blnBlocked = (cOp.Result = eorDecisionRequired)
-    End If
-
-    If blnBlocked Then
-        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
-        dResult.Add "runtime_error", strDescription
-    Else
-        Set dResult = New Dictionary
-        dResult.Add "success", False
-        dResult.Add "error", strDescription
-        If Not cOp Is Nothing Then AddDecisionJournal dResult, cOp.LastDecisions
-    End If
-    dResult.Add "errorNumber", lngNumber
-    If Len(strLogPath) > 0 Then dResult.Add "logPath", strLogPath
-    FailSingleObjectOperation = ConvertToJson(dResult)
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : SingleObjectImportError
-' Author    : Josh
-' Date      : 09/30/2026
-' Purpose   : The first error or critical entry in the journal, with a count of any
-'           : others. Falls back to pointing at the log when none was journaled.
-'---------------------------------------------------------------------------------------
-'
-Private Function SingleObjectImportError(colErrors As Collection) As String
-
-    Dim varEntry As Variant
-    Dim dEntry As Dictionary
-    Dim strFirst As String
-    Dim lngCount As Long
-
-    If Not colErrors Is Nothing Then
-        For Each varEntry In colErrors
-            Set dEntry = varEntry
-            Select Case CStr(dEntry("level"))
-                Case "error", "critical"
-                    lngCount = lngCount + 1
-                    If lngCount = 1 Then strFirst = CStr(dEntry("message"))
-            End Select
-        Next varEntry
-    End If
-
-    Select Case lngCount
-        Case 0:     SingleObjectImportError = T("Import completed with errors. Check the log for details.")
-        Case 1:     SingleObjectImportError = strFirst
-        Case Else:  SingleObjectImportError = strFirst & T(" (and {0} more errors in the log)", _
-                        var0:=lngCount - 1)
-    End Select
-
-End Function
-
-
-'---------------------------------------------------------------------------------------
 ' Procedure : RunBuildFromContinuation
 ' Author    : Adam Waller
 ' Date      : 8/20/2026
@@ -1804,7 +1697,7 @@ Public Sub RunBuildFromContinuation(strRootToken As String, strSourceFolder As S
 
     Set cRoot = Operation.ResumeRoot(strRootToken)
     If cRoot Is Nothing Then
-        Log.Add T("Build continuation could not resume the operation."), False
+        Debug.Print T("Build continuation could not resume the operation.")
         Exit Sub
     End If
 
@@ -1829,30 +1722,6 @@ ErrHandler:
     End If
 
 End Sub
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : BuildContinuationResult
-' Date      : 09/30/2026
-' Purpose   : The result a build continuation completes its root with. Build records
-'           : its outcome in the operation's Result on every path that reaches its end,
-'           : so that outcome is kept: a merge that rejected its target fails even
-'           : though no critical error was logged. A critical error still fails a
-'           : build that recorded success. An unknown result means Build never reached
-'           : its end, so it fails rather than reporting success Build did not record.
-'           : A blocked prompt still wins over all of these when the root finishes.
-'---------------------------------------------------------------------------------------
-'
-Public Function BuildContinuationResult(cOp As clsOperation) As eOperationResult
-    Select Case cOp.Result
-        Case eorSuccess
-            BuildContinuationResult = IIf(cOp.ErrorLevel = eelCritical, eorFailed, eorSuccess)
-        Case eorUnknown
-            BuildContinuationResult = eorFailed
-        Case Else
-            BuildContinuationResult = cOp.Result
-    End Select
-End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -1979,6 +1848,7 @@ Public Sub MergeAllSource()
         .Add T("Export Folder: {0}", var0:=Options.GetExportFolder), False
         ' Log operation source (file only, not console)
         If Len(Operation.SourceName) > 0 Then .Add T("Source: {0}", var0:=Operation.SourceName), False
+        LogOperationIdentity
         .Add Now
         .Spacer
         .Add T("Scanning source files...")
@@ -2191,7 +2061,9 @@ Public Sub MergeScoped(colContainers As Collection, blnFullMerge As Boolean)
                 var0:=T(LCase(cCategory.Category))), Options.ShowDebug
         Else
             dCategories.Add cCategory.Category, dCategory
-            If Not blnFullMerge Then
+            ' A full import still needs destination protection when a request owns
+            ' a noninteractive policy. Preflight every member before resolving any.
+            If Not blnFullMerge Or InteractionIsNonInteractive() Then
                 VCSIndex.CheckMergeConflicts cCategory, dCategory("Files")
             End If
         End If
@@ -2287,6 +2159,8 @@ Public Sub MergeScoped(colContainers As Collection, blnFullMerge As Boolean)
         Log.Add T("Initializing forms...")
         InitializeForms dCategories
     End If
+
+    If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
 
 End Sub
 
@@ -2618,4 +2492,230 @@ Private Sub OpenFormInCurrentDb(FormName, Optional View As AcFormView = acNormal
         DoCmd.OpenForm FormName, View, FilterName, WhereCondition, DataMode, WindowMode, OpenArgs
     End If
 
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishSingleObjectImport
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Finish an import with owned identity, decisions, errors, and actual transfer diagnostics.
+'---------------------------------------------------------------------------------------
+'
+Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
+    colErrors As Collection, Optional ByVal dTransferResult As Dictionary, _
+    Optional ByVal blnCanceled As Boolean = False) As String
+
+    Dim dResult As Dictionary
+    Dim intLevel As eErrorLevel
+
+    ' Read the outcome first. Finish closes the operation's interaction scope, which
+    ' restores the error level from before the operation, so under a noninteractive
+    ' policy a refused merge would otherwise report success.
+    intLevel = cOp.ErrorLevel
+    CopyTransferOutcome dTransferResult, cOp.PolicyComparisonRefusal
+    cOp.SetTransferOutcome dTransferResult
+    If cOp.Status = eosRunning Then
+        cOp.Finish IIf(intLevel >= eelError, eorFailed, eorSuccess)
+    End If
+
+    If cOp.Result = eorDecisionRequired Then
+        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", (intLevel < eelError)
+        If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+        If blnCanceled Then dResult.Add "cancelled", True
+    End If
+    AddDecisionJournal dResult, cOp.LastDecisions
+    CopyTransferOutcome dResult, dTransferResult, (cOp.Result <> eorDecisionRequired)
+    AddOperationIdentity dResult, cOp
+    dResult("error_level") = intLevel
+    dResult.Add "logPath", strLogPath
+    FinishSingleObjectImport = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishSingleObjectExport
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Finish an export with an explicit outcome and the captured operation identity.
+'---------------------------------------------------------------------------------------
+'
+Public Function FinishSingleObjectExport(cOp As clsOperation, strLogPath As String, _
+    dResult As Dictionary) As String
+
+    Dim dFinal As Dictionary
+    Dim intLevel As eErrorLevel
+
+    ' Read the error level before Finish restores it (see FinishSingleObjectImport).
+    intLevel = cOp.ErrorLevel
+    CopyTransferOutcome dResult, cOp.PolicyComparisonRefusal
+    cOp.SetTransferOutcome dResult
+    If cOp.Status = eosRunning Then cOp.Finish IIf(intLevel >= eelError, eorFailed, eorSuccess)
+
+    If cOp.Result = eorDecisionRequired Then
+        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
+    Else
+        Set dFinal = dResult
+        If Not dFinal.Exists("success") Then
+            dFinal.Add "success", (intLevel < eelError)
+            If intLevel >= eelError Then
+                dFinal.Add "error", T("Export completed with errors. Check the log for details.")
+            End If
+        End If
+    End If
+    AddDecisionJournal dFinal, cOp.LastDecisions
+    CopyTransferOutcome dFinal, dResult, (cOp.Result <> eorDecisionRequired)
+    AddOperationIdentity dFinal, cOp
+    dFinal("error_level") = intLevel
+    If Len(strLogPath) > 0 And Not dFinal.Exists("logPath") Then dFinal.Add "logPath", strLogPath
+    FinishSingleObjectExport = ConvertToJson(dFinal)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FinishScopedOperation
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Finish category work with accurate aggregate transfer and refusal fields.
+'---------------------------------------------------------------------------------------
+'
+Public Function FinishScopedOperation(cOp As clsOperation, dResult As Dictionary, _
+    ByVal intResult As eOperationResult, strLogPath As String) As String
+
+    Dim dFinal As Dictionary
+    Dim intLevel As eErrorLevel
+
+    intLevel = cOp.ErrorLevel
+    CopyTransferOutcome dResult, cOp.TransferOutcome
+    CopyTransferOutcome dResult, cOp.PolicyComparisonRefusal
+    cOp.SetTransferOutcome dResult
+    cOp.Finish intResult
+    If cOp.Result = eorDecisionRequired Then
+        Set dFinal = DecisionRequiredResult(cOp.LastDecisions)
+        If Len(strLogPath) > 0 Then dFinal.Add "logPath", strLogPath
+    Else
+        Set dFinal = dResult
+        AddDecisionJournal dFinal, cOp.LastDecisions
+    End If
+    CopyTransferOutcome dFinal, dResult, (cOp.Result <> eorDecisionRequired)
+    AddOperationIdentity dFinal, cOp
+    dFinal("error_level") = intLevel
+    FinishScopedOperation = ConvertToJson(dFinal)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : FailSingleObjectOperation
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Return an owned single-object failure with its log and decision journal.
+'---------------------------------------------------------------------------------------
+'
+Public Function FailSingleObjectOperation(cOp As clsOperation, strLogPath As String, _
+    lngNumber As Long, strDescription As String) As String
+
+    Dim dResult As Dictionary
+    Dim blnBlocked As Boolean
+
+    If Not cOp Is Nothing Then
+        If cOp.Status = eosRunning Then cOp.Finish eorFailed
+        blnBlocked = (cOp.Result = eorDecisionRequired)
+    End If
+
+    If blnBlocked Then
+        Set dResult = DecisionRequiredResult(cOp.LastDecisions)
+        dResult.Add "runtime_error", strDescription
+    Else
+        Set dResult = New Dictionary
+        dResult.Add "success", False
+        dResult.Add "error", strDescription
+        If Not cOp Is Nothing Then AddDecisionJournal dResult, cOp.LastDecisions
+    End If
+    dResult.Add "errorNumber", lngNumber
+    If Len(strLogPath) > 0 Then dResult.Add "logPath", strLogPath
+    FailSingleObjectOperation = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SingleObjectImportError
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Build a translated import failure message from captured errors.
+'---------------------------------------------------------------------------------------
+'
+Private Function SingleObjectImportError(colErrors As Collection) As String
+
+    Dim varEntry As Variant
+    Dim dEntry As Dictionary
+    Dim strFirst As String
+    Dim lngCount As Long
+
+    If Not colErrors Is Nothing Then
+        For Each varEntry In colErrors
+            Set dEntry = varEntry
+            Select Case CStr(dEntry("level"))
+                Case "error", "critical"
+                    lngCount = lngCount + 1
+                    If lngCount = 1 Then strFirst = CStr(dEntry("message"))
+            End Select
+        Next varEntry
+    End If
+
+    Select Case lngCount
+        Case 0:     SingleObjectImportError = T("Import completed with errors. Check the log for details.")
+        Case 1:     SingleObjectImportError = strFirst
+        Case Else:  SingleObjectImportError = strFirst & T(" (and {0} more errors in the log)", _
+                        var0:=lngCount - 1)
+    End Select
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BuildContinuationResult
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Choose the continuation result from owned decision and error state.
+'---------------------------------------------------------------------------------------
+'
+Public Function BuildContinuationResult(cOp As clsOperation) As eOperationResult
+    Select Case cOp.Result
+        Case eorSuccess
+            BuildContinuationResult = IIf(cOp.ErrorLevel = eelCritical, eorFailed, eorSuccess)
+        Case eorUnknown
+            BuildContinuationResult = eorFailed
+        Case Else
+            BuildContinuationResult = cOp.Result
+    End Select
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CopyTransferOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Copy explicit transfer diagnostics while preserving the authoritative operation result.
+'---------------------------------------------------------------------------------------
+'
+Private Sub CopyTransferOutcome(ByVal dTarget As Dictionary, ByVal dTransfer As Dictionary, _
+    Optional ByVal blnIncludeDiagnostics As Boolean = True)
+    Dim varKey As Variant
+    If dTransfer Is Nothing Then Exit Sub
+    If dTarget Is Nothing Then Exit Sub
+    For Each varKey In Array("transferred", "skipped", "transferred_count", "skipped_count")
+        If dTransfer.Exists(varKey) Then dTarget(varKey) = dTransfer(varKey)
+    Next varKey
+    If blnIncludeDiagnostics Then
+        For Each varKey In Array("success", "error", "error_pattern")
+            If dTransfer.Exists(varKey) Then dTarget(varKey) = dTransfer(varKey)
+        Next varKey
+    End If
 End Sub

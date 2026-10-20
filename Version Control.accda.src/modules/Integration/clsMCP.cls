@@ -142,6 +142,10 @@ Public Sub PostCallback(strType As String, _
     Dim lngSendError As Long
 
     If Not this.IsActive Or Len(this.CallbackUrl) = 0 Then Exit Sub
+    If Not IsStreamingCallback(strType) Then
+        If this.TerminalPosted Then Exit Sub
+        this.TerminalPosted = True
+    End If
 
     LogUnhandledErrors
     On Error Resume Next  ' Don't let callback failures break the operation
@@ -161,7 +165,9 @@ Public Sub PostCallback(strType As String, _
 
     If Not dExtraData Is Nothing Then
         For Each varKey In dExtraData.Keys
-            dPayload.Add varKey, dExtraData(varKey)
+            If varKey <> "operation_id" And varKey <> "type" Then
+                If Not dPayload.Exists(varKey) Then dPayload.Add varKey, dExtraData(varKey)
+            End If
         Next varKey
     End If
 

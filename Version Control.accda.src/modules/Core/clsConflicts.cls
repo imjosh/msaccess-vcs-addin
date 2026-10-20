@@ -84,7 +84,7 @@ Public Sub ResolveOrPrompt()
     ElseIf Operation.Source = eosMCPTool Or Operation.Source = eosExternalAPI _
         Or Operation.InteractionMode <> eimNormal Then
         ' Existing agent behavior when the caller did not opt into a decision
-        ' policy: source wins. Noninteractive callers pass a policy instead.
+        ' policy: the requested import or export action wins.
         For Each varKey In m_dItems.Keys
             Set cItem = m_dItems(varKey)
             If cItem.ActionType <> ercNone Then
@@ -117,36 +117,110 @@ Private Sub ApplyNonInteractivePolicy()
     Dim varKey As Variant
     Dim cItem As clsConflictItem
     Dim intPolicy As eDecisionPolicy
-    Dim strKeys As String
+    Dim blnBlocked As Boolean
+    Dim intResolution As eResolveConflict
 
-    ' The policy, not the operation, answers each conflict, so read it once and map
-    ' it with ConflictActionForPolicy everywhere below.
     intPolicy = Operation.DecisionPolicy
-    If ConflictActionForPolicy(intPolicy) = ercNone Then
-        For Each varKey In m_dItems.Keys
-            Set cItem = m_dItems(varKey)
-            If Len(strKeys) > 0 Then strKeys = strKeys & ", "
-            strKeys = strKeys & cItem.ItemKey
-        Next varKey
-        Log.Add T("Merge blocked: {0} conflict(s) need a decision policy (prefer_source, prefer_database, or skip).", _
-            var0:=Me.Count), False
-        Operation.RecordDecision NewDecision(DECISION_REQUIRED, "Merge conflicts", _
-            Me.Count & " conflict(s): " & strKeys, DECISION_BLOCKED, "policy=" & CStr(intPolicy))
+    ' Inspect the whole list before assigning any resolution or changing item lists.
+    For Each varKey In m_dItems.Keys
+        Set cItem = m_dItems(varKey)
+        intResolution = ConflictActionForPolicy(intPolicy, cItem.ActionType, cItem.Operation, cItem.Classification)
+        If intResolution = ercNone Then
+            blnBlocked = True
+            RecordConflictDecision cItem, intPolicy, intResolution
+        End If
+    Next varKey
+    If blnBlocked Then
+        Log.Add T("Operation blocked: one or more conflicts require review. See the decision journal."), False
         Me.ApproveResolutions = False
-        MCP.Log "Conflict decision required (" & Me.Count & ")."
         Exit Sub
     End If
 
     For Each varKey In m_dItems.Keys
         Set cItem = m_dItems(varKey)
-        cItem.Resolution = ConflictActionForPolicy(intPolicy, cItem.ActionType)
+        cItem.Resolution = ConflictActionForPolicy(intPolicy, cItem.ActionType, cItem.Operation, cItem.Classification)
+        RecordConflictDecision cItem, intPolicy, cItem.Resolution
     Next varKey
     Me.ApproveResolutions = True
     Log.Add T("Applied conflict policy to {0} conflict(s).", var0:=Me.Count), False
-    Operation.RecordDecision NewDecision(DECISION_APPLIED, "Merge conflicts", _
-        Me.Count & " conflict(s)", ConflictResolutionName(intPolicy), _
-        "policy=" & CStr(intPolicy))
-    MCP.Log "Applied conflict policy to " & Me.Count & " conflict(s)."
+
+End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordConflictDecision
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Record stable conflict codes and translated direction-specific recovery messages.
+'---------------------------------------------------------------------------------------
+'
+Private Sub RecordConflictDecision(ByVal cItem As clsConflictItem, ByVal intPolicy As eDecisionPolicy, _
+    ByVal intResolution As eResolveConflict)
+
+    Dim cRecord As clsDecisionRecord
+    Dim strDirection As String
+    Dim strAction As String
+    Dim strWarning As String
+    Dim strReason As String
+    Dim strRecovery As String
+    Dim strResolution As String
+    Dim blnDeletion As Boolean
+
+    strDirection = IIf(cItem.Operation = eatImport, "import", "export")
+    strAction = IIf(cItem.ActionType = ercDelete, "delete", "overwrite")
+    blnDeletion = (cItem.ActionType = ercDelete And cItem.Classification <> "untracked_orphan")
+    ' Keep stable journal codes separate from complete translated display sentences.
+    If cItem.Operation = eatImport Then
+        If cItem.ActionType = ercDelete Then
+            strWarning = T("Import would delete {0}.", var0:=cItem.FileName)
+        Else
+            strWarning = T("Import would overwrite {0}.", var0:=cItem.FileName)
+        End If
+    Else
+        If cItem.ActionType = ercDelete Then
+            strWarning = T("Export would delete {0}.", var0:=cItem.FileName)
+        Else
+            strWarning = T("Export would overwrite {0}.", var0:=cItem.FileName)
+        End If
+    End If
+    If intResolution = ercNone Then
+        strResolution = DECISION_BLOCKED
+        If blnDeletion Then
+            strReason = T("The active policy does not authorize deletion of independently changed content.")
+            strRecovery = T("No noninteractive policy in this version authorizes this deletion. Review and resolve the conflict interactively, then retry. Use a preserving policy only if keeping the affected item is acceptable.")
+        Else
+            strReason = T("The active policy does not authorize overwriting independently changed content or content with missing synchronization history.")
+            If cItem.Operation = eatImport Then
+                strRecovery = T("Review the conflict. prefer_source imports the source over the database object; prefer_database or skip preserves the database object. Retry only when existing user authorization establishes which side wins.")
+            Else
+                strRecovery = T("Review the conflict. prefer_database exports the database over the source; prefer_source or skip preserves the source. Retry only when existing user authorization establishes which side wins.")
+            End If
+        End If
+        Set cRecord = NewDecision(DECISION_REQUIRED, T("Conflict requires review"), _
+            T("{0} {1} {2}", var0:=strWarning, var1:=strReason, var2:=strRecovery), strResolution)
+    Else
+        If intResolution = ercSkip Then
+            strResolution = IIf(cItem.Operation = eatImport, DECISION_KEEP_DATABASE, "keep_source")
+            strReason = T("The active policy preserves the destination and skips this transfer or deletion.")
+        Else
+            strResolution = ConflictResolutionName(intPolicy, cItem.Operation)
+            strReason = T("The active policy authorizes this transfer.")
+        End If
+        Set cRecord = NewDecision(DECISION_APPLIED, T("Conflict policy applied"), strReason, strResolution)
+    End If
+    Set cRecord.ConflictContext = New Dictionary
+    With cRecord.ConflictContext
+        .Add "item", cItem.FileName
+        .Add "direction", strDirection
+        .Add "requested_action", strAction
+        .Add "classification", cItem.Classification
+        .Add "tracked", cItem.Tracked
+        .Add "policy", DecisionPolicyName(intPolicy)
+        .Add "reason", strReason
+        .Add "recovery", strRecovery
+        .Add "noninteractive_authorization_available", (cItem.ActionType <> ercDelete)
+    End With
+    Operation.RecordDecision cRecord
 
 End Sub
 
@@ -184,7 +258,8 @@ End Sub
 '
 Public Sub Add(cComponent As IDbComponent, strKey As String, dteSyncDate As Date, dteFileDate As Date, intActionType As eResolveConflict, _
     Optional strSourceFile As String, Optional intSuggestedResolution As eResolveConflict, _
-    Optional colDifferingFiles As Collection)
+    Optional colDifferingFiles As Collection, _
+    Optional ByVal strClassification As String = "overwrite", Optional ByVal blnTracked As Boolean = True)
 
     Dim cItem As clsConflictItem
 
@@ -200,6 +275,8 @@ Public Sub Add(cComponent As IDbComponent, strKey As String, dteSyncDate As Date
         .FileDate = dteFileDate
         .ActionType = intActionType
         .Suggestion = intSuggestedResolution
+        .Classification = strClassification
+        .Tracked = blnTracked
         Set .DifferingFiles = colDifferingFiles
         Set .CategoryList = m_dCategories
         ' Key by ItemKey so UpdateResolutionsFromTable can find the item after
@@ -444,3 +521,31 @@ End Sub
 Private Sub Class_Initialize()
     Set m_dItems = New Dictionary
 End Sub
+
+
+' Inspect a conflict without changing its resolution or applying it.
+'---------------------------------------------------------------------------------------
+' Procedure : Item
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Expose a conflict for inspection without changing its resolution.
+'---------------------------------------------------------------------------------------
+'
+Public Function Item(ByVal strKey As String) As clsConflictItem
+    Set Item = m_dItems(strKey)
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SkippedTransferCount
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Count conflict members preserved by applied skip resolutions.
+'---------------------------------------------------------------------------------------
+'
+Public Function SkippedTransferCount() As Long
+    Dim varKey As Variant
+    For Each varKey In m_dItems.Keys
+        If m_dItems(varKey).Resolution = ercSkip Then SkippedTransferCount = SkippedTransferCount + 1
+    Next varKey
+End Function

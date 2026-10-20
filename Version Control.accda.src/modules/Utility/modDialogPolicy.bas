@@ -107,15 +107,24 @@ End Function
 ' Procedure : ConflictResolutionName
 ' Date      : 09/29/2026
 ' Purpose   : The resolution reported when a policy answered a conflict: the policy
-'           : name for prefer_source, otherwise keep_database.
+'           : outcome identifies the transferred or preserved side by direction.
 '---------------------------------------------------------------------------------------
 '
-Public Function ConflictResolutionName(ByVal intPolicy As eDecisionPolicy) As String
-    If intPolicy = edpPreferSource Then
-        ConflictResolutionName = DecisionPolicyName(edpPreferSource)
+Public Function ConflictResolutionName(ByVal intPolicy As eDecisionPolicy, _
+    Optional ByVal intDirection As eIndexOperationType = eatImport) As String
+
+    If intDirection = eatImport Then
+        If intPolicy = edpPreferSource Then
+            ConflictResolutionName = "import_source"
+        Else
+            ConflictResolutionName = DECISION_KEEP_DATABASE
+        End If
+    ElseIf intPolicy = edpPreferDatabase Then
+        ConflictResolutionName = "export_database"
     Else
-        ConflictResolutionName = DECISION_KEEP_DATABASE
+        ConflictResolutionName = "keep_source"
     End If
+
 End Function
 
 
@@ -132,31 +141,7 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function SetSessionPolicy(ByVal cOp As clsOperation, ByVal strPolicy As String) As String
-
-    Dim dResult As Dictionary
-    Dim intPolicy As eDecisionPolicy
-
-    ' A running or staged operation keeps the policy it began with. Refuse without
-    ' touching its scope, or the policy this call would replace.
-    SetSessionPolicy = PolicyRequestRefusal(cOp)
-    If Len(SetSessionPolicy) > 0 Then Exit Function
-
-    ' Refuse an unknown name before touching the scope: a refusal changes nothing, so
-    ' the policy already in force stays in force.
-    If Not ParseDecisionPolicy(strPolicy, intPolicy) Then
-        SetSessionPolicy = RefusalJson(ERR_INVALID_DECISION_POLICY, InvalidPolicyMessage(), False)
-        Exit Function
-    End If
-
-    ' OpenSessionScope replaces a policy left over from an earlier call rather than
-    ' nesting under it.
-    cOp.OpenSessionScope intPolicy
-
-    Set dResult = New Dictionary
-    dResult.Add "success", True
-    dResult.Add "policy", LCase$(Trim$(strPolicy))
-    SetSessionPolicy = ConvertToJson(dResult)
-
+    SetSessionPolicy = RefusalJson("policy_activation_retired", T("Persistent policy activation is no longer supported. Supply the decision policy on the operation request."), False)
 End Function
 
 
@@ -169,7 +154,6 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function ClearSessionPolicy(ByVal cOp As clsOperation) As String
-    cOp.CloseSessionScope
     ClearSessionPolicy = "{""success"":true}"
 End Function
 
@@ -194,6 +178,12 @@ Public Function SelectInteractionMode(ByVal cOp As clsOperation, ByVal intMode A
     If intMode < eimNormal Or intMode > eimNonInteractive Then
         strPattern = ERR_INVALID_INTERACTION_MODE
         strError = T("Unknown interaction mode. Use 0 (normal), 1 (silent), or 2 (noninteractive).")
+    ElseIf intMode = eimNonInteractive Then
+        strPattern = ERR_INTERACTION_MODE_REFUSED
+        strError = T("Standalone noninteractive mode is no longer supported. Supply a decision policy on the operation request.")
+    ElseIf cOp.IsActive Then
+        strPattern = ERR_INTERACTION_MODE_REFUSED
+        strError = T("An active operation owns its interaction mode.")
     Else
         cOp.InteractionMode = intMode
         If cOp.InteractionMode <> intMode Then
@@ -384,23 +374,38 @@ End Function
 ' Date      : 09/29/2026
 ' Purpose   : Map a decision policy to a conflict resolution.
 '           : intRequested is the action the conflict itself asks for.
-'           : prefer_source applies it, falling back to overwrite when none is set.
-'           : ercNone means the policy does not resolve the conflict (block).
-'           : prefer_database, skip, and decline keep the database object.
+'           : Preferences name the side preserved, independently of direction.
+'           : No policy authorizes a conflicting deletion. ercNone requires review.
 '---------------------------------------------------------------------------------------
 '
 Public Function ConflictActionForPolicy(ByVal intPolicy As eDecisionPolicy, _
-    Optional ByVal intRequested As eResolveConflict = ercNone) As eResolveConflict
+    Optional ByVal intRequested As eResolveConflict = ercNone, _
+    Optional ByVal intDirection As eIndexOperationType = eatImport, _
+    Optional ByVal strClassification As String = "overwrite") As eResolveConflict
+
+    ' A new source file never authorizes deletion and never blocks unrelated work.
+    If strClassification = "untracked_orphan" Then
+        ConflictActionForPolicy = ercSkip
+        Exit Function
+    End If
 
     Select Case intPolicy
-        Case edpPreferSource
-            If intRequested = ercNone Then
-                ConflictActionForPolicy = ercOverwrite
-            Else
-                ConflictActionForPolicy = intRequested
-            End If
-        Case edpPreferDatabase, edpSkip, edpDecline
+        Case edpSkip, edpDecline
             ConflictActionForPolicy = ercSkip
+        Case edpPreferSource
+            If intRequested = ercSkip Then
+                ConflictActionForPolicy = ercSkip
+            ElseIf intDirection <> eatImport Then
+                ConflictActionForPolicy = ercSkip
+            ElseIf intRequested <> ercDelete Then
+                ConflictActionForPolicy = ercOverwrite
+            End If
+        Case edpPreferDatabase
+            If intDirection = eatImport Then
+                ConflictActionForPolicy = ercSkip
+            ElseIf intRequested <> ercDelete Then
+                ConflictActionForPolicy = ercOverwrite
+            End If
         Case Else
             ConflictActionForPolicy = ercNone
     End Select
@@ -505,6 +510,14 @@ End Function
 '           : a prompt must not leave success true.
 '---------------------------------------------------------------------------------------
 '
+
+'---------------------------------------------------------------------------------------
+' Procedure : SetDecisionRequiredOutcome
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Normalize blocked decisions into the authoritative failed result.
+'---------------------------------------------------------------------------------------
+'
 Public Sub SetDecisionRequiredOutcome(ByVal dResult As Object, ByVal colDecisions As Collection)
     ' Preserve the runner failure before assigning the primary decision fields.
     ' Runtime exceptions already have runtime_error/errorNumber and keep that shape.
@@ -522,6 +535,14 @@ Public Sub SetDecisionRequiredOutcome(ByVal dResult As Object, ByVal colDecision
 End Sub
 
 
+
+'---------------------------------------------------------------------------------------
+' Procedure : OverlayDecisionRequired
+' Author    : Codex
+' Date      : 10/16/2026
+' Purpose   : Preserve an existing result while applying blocked-decision precedence.
+'---------------------------------------------------------------------------------------
+'
 Public Function OverlayDecisionRequired(ByVal strJson As String) As String
 
     Dim dParsed As Object
@@ -624,7 +645,7 @@ Public Function RefusalJson(ByVal strPattern As String, ByVal strMessage As Stri
     dResult.Add "success", False
     If Len(strPattern) > 0 Then dResult.Add "error_pattern", strPattern
     dResult.Add "error", strMessage
-    If blnPostCallback Then PostRefusal dResult, strMessage
+    ' Refusals belong to the incoming request. Its dispatcher owns any delivery.
     RefusalJson = ConvertToJson(dResult)
 
 End Function
@@ -645,7 +666,7 @@ Public Function StartedJson() As String
     Set dResult = New Dictionary
     dResult.Add "success", True
     dResult.Add "started", True
-    If Len(MCP.OperationId) > 0 Then dResult.Add "operation_id", MCP.OperationId
+    AddOperationIdentity dResult, Operation
     StartedJson = ConvertToJson(dResult)
 
 End Function
@@ -796,10 +817,13 @@ End Function
 '
 Private Function NonDestructiveResult(ByVal intStyle As Long) As VbMsgBoxResult
 
+    ' Prompt callers must require an affirmative response before performing the
+    ' action being offered. No and Cancel paths must avoid that action.
+    ' For Yes/No/Cancel, return Cancel because No may select another action.
     Select Case intStyle
-        Case vbOKCancel, vbRetryCancel
+        Case vbOKCancel, vbRetryCancel, vbYesNoCancel
             NonDestructiveResult = vbCancel
-        Case vbYesNo, vbYesNoCancel
+        Case vbYesNo
             NonDestructiveResult = vbNo
         Case vbAbortRetryIgnore
             NonDestructiveResult = vbAbort
