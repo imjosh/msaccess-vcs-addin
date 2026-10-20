@@ -389,16 +389,23 @@ Failed:
 End Function
 
 ' Synchronous MCP work under the caller's public operation ID. The session is validated
-' as for APIExecute; the request is dispatched in this library, which admitted the
-' session, so the development redirect in APIMCP is not taken.
+' as for APIExecute, and the request is dispatched in this library, which admitted the
+' session.
 Public Function APIExecuteMCP(ByVal envelope As String, ByVal operationId As String, ByVal method As String, _
     Optional arg1 As Variant, Optional arg2 As Variant, Optional arg3 As Variant) As Variant
     Dim refused As String
     Dim request As clsOperationRequest
     Dim args As New Collection
+    ' Automation must never stop at a debugger break, as in API.
+    SuppressErrorBreaks
+    LogUnhandledErrors
     On Error GoTo Failed
     refused = EnterCompatibilitySession(envelope)
-    If Len(refused) > 0 Then APIExecuteMCP = refused: Exit Function
+    If Len(refused) > 0 Then
+        APIExecuteMCP = refused
+        RestoreErrorBreaks
+        Exit Function
+    End If
     If Len(operationId) = 0 Or Len(operationId) > 128 Or InStr(operationId, vbNullChar) > 0 Then
         APIExecuteMCP = RefusalJson("invalid_operation_id", T("Operation IDs must contain 1 to 128 characters and no null characters."), False)
         GoTo Finished
@@ -412,10 +419,12 @@ Public Function APIExecuteMCP(ByVal envelope As String, ByVal operationId As Str
     APIExecuteMCP = DispatchOperationRequest(request, method, args)
 Finished:
     LeaveCompatibilitySession
+    RestoreErrorBreaks
     Exit Function
 Failed:
     LeaveCompatibilitySession
     APIExecuteMCP = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
+    RestoreErrorBreaks
 End Function
 
 Public Function APIExecuteAsync(ByVal envelope As String, ByVal callback As String, ByVal method As String, _

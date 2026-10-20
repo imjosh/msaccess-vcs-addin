@@ -585,6 +585,9 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
 
     ' Re-admission failures must not log into another operation.
     InitializeRequestErrors "HandleAPIAsyncOperation"
+    ' Automation must never stop at a debugger break, as in API.
+    SuppressErrorBreaks
+    LogUnhandledErrors
     On Error GoTo Failed
     cRequest.FromJson strRequest
     cEmitter.RegisterCallback cRequest.CallbackInfo
@@ -592,11 +595,16 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
     strRefusal = EnterCompatibilitySession(strAdmission)
     If Len(strRefusal) > 0 Then
         PostCompatibilityRefusal cRequest.CallbackInfo, strRefusal
+        RestoreErrorBreaks
         Exit Sub
     End If
     blnEntered = True
-    strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
-    If Len(strRefusal) = 0 And APIDispatchBusy Then strRefusal = RefusalJson("api_busy", T("Another API command is still running."), False)
+    ' A dispatch already on this thread is the precise reason, as in DispatchOperationRequest.
+    If APIDispatchBusy Then
+        strRefusal = RefusalJson("api_busy", T("Another API command is still running."), False)
+    Else
+        strRefusal = RequestAdmissionRefusal(blnQuiet:=True)
+    End If
     If Len(strRefusal) > 0 Then
         Set dResult = ParseJson(strRefusal)
         cEmitter.PostCallback "error", -1, -1, CStr(dResult("error")), dResult
@@ -635,6 +643,7 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
 
 CleanUp:
     If blnEntered Then LeaveCompatibilitySession
+    RestoreErrorBreaks
     Exit Sub
 
 Failed:
@@ -643,6 +652,7 @@ Failed:
     Err.Clear
     On Error Resume Next
     If blnEntered Then LeaveCompatibilitySession
+    RestoreErrorBreaks
     If cEmitter.TerminalPosted Then Exit Sub
     If Not cOwnerEmitter Is Nothing Then
         If cOwnerEmitter.TerminalPosted Then Exit Sub

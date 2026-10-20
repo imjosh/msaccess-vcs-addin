@@ -893,50 +893,6 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
-' Procedure : APIMCP
-' Author    : Codex
-' Date      : 10/16/2026
-' Purpose   : Dispatch synchronous MCP work while retaining the supplied public operation ID.
-'---------------------------------------------------------------------------------------
-'
-Public Function APIMCP(ByVal strOperationId As String, ByVal strMethod As String, _
-    Optional ByVal varArg1 As Variant, Optional ByVal varArg2 As Variant, Optional ByVal varArg3 As Variant) As Variant
-
-    Dim cRequest As clsOperationRequest
-    Dim colArgs As New Collection
-    Dim strRunCmd As String
-    InitializeRequestErrors "APIMCP"
-    On Error GoTo Failed
-    If Len(strOperationId) = 0 Or Len(strOperationId) > 128 Or InStr(strOperationId, vbNullChar) > 0 Then
-        APIMCP = RefusalJson("invalid_operation_id", T("Operation IDs must contain 1 to 128 characters and no null characters."), False)
-        Exit Function
-    End If
-    If RunningOnLocal() And Not RedirectTargetIsSelf() Then
-        strRunCmd = GetRunCmdAddInFullLibName & ".APIMCP"
-        If Not IsMissing(varArg3) Then
-            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod, varArg1, varArg2, varArg3)
-        ElseIf Not IsMissing(varArg2) Then
-            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod, varArg1, varArg2)
-        ElseIf Not IsMissing(varArg1) Then
-            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod, varArg1)
-        Else
-            APIMCP = Application.Run(strRunCmd, strOperationId, strMethod)
-        End If
-        Exit Function
-    End If
-    Set cRequest = CreateOperationRequest(eosMCPTool)
-    cRequest.PublicId = strOperationId
-    If Not IsMissing(varArg1) Then colArgs.Add varArg1
-    If Not IsMissing(varArg2) Then colArgs.Add varArg2
-    If Not IsMissing(varArg3) Then colArgs.Add varArg3
-    APIMCP = DispatchOperationRequest(cRequest, strMethod, colArgs)
-    Exit Function
-Failed:
-    APIMCP = RefusalJson("api_error", Err.Description, False)
-End Function
-
-
-'---------------------------------------------------------------------------------------
 ' Procedure : RequestArgument
 ' Author    : Codex
 ' Date      : 10/16/2026
