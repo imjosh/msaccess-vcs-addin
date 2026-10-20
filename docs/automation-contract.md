@@ -279,7 +279,8 @@ ID. Manual and direct-API roots receive generated IDs. Admitted IDs cannot be
 reused, including after completion or project-state recreation. Final results,
 callbacks, logs, and inspection identify the same public ID, effective policy,
 and initiating source even after callback registration is released.
-Synchronous MCP work uses `APIMCP(operation_id, method, arg1, arg2, arg3)`.
+Synchronous MCP work uses `APIExecuteMCP(envelope, operation_id, method, arg1, arg2, arg3)`
+after the compatibility session is validated.
 The method arguments are optional. `API` keeps external-API attribution. IDs are
 case-sensitive and contain 1 to 128 UTF-16 code units without null characters.
 
