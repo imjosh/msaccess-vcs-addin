@@ -574,45 +574,48 @@ Private Sub ExportLegacy(strFile As String, Optional blnAlternate As Boolean = F
 
     strHash = SaveComponentAsText(acQuery, m_Query.Name, strFile, Me)
 
+    ' Save the SQL beside the exported definition for both normal and alternate-path
+    ' (temp) exports, so conflict detection compares the files a normal export writes.
+    If Options.SaveQuerySQL Then
+        Perf.OperationStart "Save Query SQL"
+        Set dbs = SharedDb
+        strSqlFile = SwapExtension(strFile, "sql")
+        LogUnhandledErrors
+        On Error Resume Next
+        strSql = dbs.QueryDefs(m_Query.Name).SQL
+        If Catch(3258) Then
+            Log.Error eelWarning, "Unable to access SQL property of query '" & _
+                m_Query.Name & "'. SQL view may not be available for this query.", _
+                ModuleName(Me) & ".Export"
+        ElseIf Err.Number Then
+            Log.Error eelError, "Unexpected error accessing SQL property of query '" & _
+                m_Query.Name & "'. Error " & Err.Number & ": " & Err.Description, _
+                ModuleName(Me) & ".Export"
+        End If
+        ' Restore outer error mode (was set at top of sub) instead of forcing GoTo 0,
+        ' which would defeat the wrap in release mode.
+        If DebugMode(False) Then On Error GoTo 0 Else On Error Resume Next
+        If strSql <> vbNullString Then
+            Select Case dbs.QueryDefs(m_Query.Name).Type
+                Case dbQSQLPassThrough, dbQSPTBulk
+                Case Else
+                    With New clsSqlFormatter
+                        .FormatVersion = Options.ExportFormatVersion
+                        Perf.OperationStart "Format SQL"
+                        strSql = .FormatSQL(strSql, esdAccess)
+                        Perf.OperationEnd
+                    End With
+            End Select
+            WriteFile strSql, strSqlFile
+        End If
+        Perf.OperationEnd
+        If Not blnAlternate Then Log.Add "  " & m_Query.Name & " (SQL)", Options.ShowDebug
+    End If
+
     If blnAlternate Then
         VCSIndex.Update Me, eatAltExport, strHash, _
             strMetaHash:=GetMetadataHash("Tables", m_Query.Name, acQuery)
     Else
-        If Options.SaveQuerySQL Then
-            Perf.OperationStart "Save Query SQL"
-            Set dbs = SharedDb
-            strSqlFile = IDbComponent_BaseFolder & GetSafeFileName(m_Query.Name) & ".sql"
-            LogUnhandledErrors
-            On Error Resume Next
-            strSql = dbs.QueryDefs(m_Query.Name).SQL
-            If Catch(3258) Then
-                Log.Error eelWarning, "Unable to access SQL property of query '" & _
-                    m_Query.Name & "'. SQL view may not be available for this query.", _
-                    ModuleName(Me) & ".Export"
-            ElseIf Err.Number Then
-                Log.Error eelError, "Unexpected error accessing SQL property of query '" & _
-                    m_Query.Name & "'. Error " & Err.Number & ": " & Err.Description, _
-                    ModuleName(Me) & ".Export"
-            End If
-            ' Restore outer error mode (was set at top of sub) instead of forcing GoTo 0,
-            ' which would defeat the wrap in release mode.
-            If DebugMode(False) Then On Error GoTo 0 Else On Error Resume Next
-            If strSql <> vbNullString Then
-                Select Case dbs.QueryDefs(m_Query.Name).Type
-                    Case dbQSQLPassThrough, dbQSPTBulk
-                    Case Else
-                        With New clsSqlFormatter
-                            .FormatVersion = Options.ExportFormatVersion
-                            Perf.OperationStart "Format SQL"
-                            strSql = .FormatSQL(strSql, esdAccess)
-                            Perf.OperationEnd
-                        End With
-                End Select
-                WriteFile strSql, strSqlFile
-            End If
-            Perf.OperationEnd
-            Log.Add "  " & m_Query.Name & " (SQL)", Options.ShowDebug
-        End If
         VCSIndex.Update Me, eatExport, GetFileHash(strFile), _
             strMetaHash:=GetMetadataHash("Tables", m_Query.Name, acQuery)
     End If
