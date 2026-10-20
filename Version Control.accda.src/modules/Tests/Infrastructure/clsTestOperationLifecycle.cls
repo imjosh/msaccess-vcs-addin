@@ -811,7 +811,7 @@ Public Sub TestAnsweredPromptsAreInSingleObjectImportResult()
         ' So does a cancel.
         Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
         cOp.ErrorLevel = eelCritical
-        strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, True)
+        strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, blnCanceled:=True)
         AssertJournalCarried strJson, strResolution, "import cancel, " & varScenario
         TestAssert ParseJson(strJson)("cancelled") = True, varScenario & ": the cancel is kept"
         ClearSessionPolicy cOp
@@ -1236,7 +1236,7 @@ Public Sub TestCanceledCloseStopsSingleObjectImportWithCancelFlag()
     Set colErrors = New Collection
     colErrors.Add dEntry
 
-    Set dResult = ParseJson(FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, True))
+    Set dResult = ParseJson(FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, blnCanceled:=True))
     TestAssert dResult("success") = False, "a canceled close is not a success"
     TestAssert dResult("cancelled") = True, "import reports the cancel as export does"
     TestAssert InStr(dResult("error"), "frmOrders") > 0, "the error names the object"
