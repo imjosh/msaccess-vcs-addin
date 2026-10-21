@@ -59,6 +59,8 @@ Public Sub SemanticOrdering()
 End Sub
 
 Public Sub LegacyAdmissionChangesNoOperationState()
+    ' A51: a call without an envelope gets only the 5.1.0 surface. A member or an
+    ' argument 5.1.0 did not have is refused before dispatch and changes nothing.
     Dim before As String
     Dim counters As Dictionary
     Dim result As Dictionary
@@ -66,13 +68,18 @@ Public Sub LegacyAdmissionChangesNoOperationState()
     Set counters = ParseJson(APICompatibilityCounters())
     Set result = ParseJson(CStr(API("SetInteractionMode", eimNonInteractive)))
     TestAssert result("success") = False
-    TestAssert result("error_pattern") = "compatibility_session_invalid"
+    TestAssert result("error_pattern") = "compatibility_session_required"
+    Set result = ParseJson(CStr(API("ExportObject", "queries", "qryNone", "block")))
+    TestAssert result("error_pattern") = "compatibility_session_required"
+    Set result = ParseJson(APIAsync(vbNullString, "ExportByType", "queries", False, "block"))
+    TestAssert result("error_pattern") = "compatibility_session_required"
     TestAssert OperationState = before
     TestAssert ParseJson(APICompatibilityCounters())("dispatches") = counters("dispatches")
-    Set result = ParseJson(APIAsync(vbNullString, "Export"))
-    TestAssert result("success") = False
-    TestAssert OperationState = before
     TestAssert Not TimerIsPending
+    ' A nonempty envelope that is not this library's session is invalid, not legacy.
+    Set result = ParseJson(CStr(API("GetOption", "ExportFolder", strSessionEnvelope:="{}")))
+    TestAssert result("error_pattern") = "compatibility_session_invalid"
+    TestAssert OperationState = before
 End Sub
 
 Public Sub RefusedHandshakeChangesNoOperationState()
@@ -233,6 +240,8 @@ Private Function NativeOwnerFixtureMatches(ByVal expectedLibrary As String) As B
 End Function
 
 Public Sub LegacyCannotBorrowAmbientAdmission()
+    ' A legacy call made while another call's session is entered stays legacy: it
+    ' is gated on its own (empty) envelope and is never counted as admitted work.
     Dim request As Dictionary
     Dim result As Dictionary
     Dim before As String
@@ -244,11 +253,11 @@ Public Sub LegacyCannotBorrowAmbientAdmission()
     before = OperationState
     Set counters = ParseJson(APICompatibilityCounters())
     Set result = ParseJson(CStr(API("SetInteractionMode", eimNonInteractive)))
-    TestAssert result("success") = False
-    TestAssert result("error_pattern") = "compatibility_session_invalid"
-    Set result = ParseJson(APIAsync(vbNullString, "Export"))
-    TestAssert result("success") = False
-    TestAssert result("error_pattern") = "compatibility_session_invalid"
+    TestAssert result("error_pattern") = "compatibility_session_required"
+    Set result = ParseJson(APIAsync(vbNullString, "ExportByType", "queries", False, "block"))
+    TestAssert result("error_pattern") = "compatibility_session_required"
+    TestAssert Not TimerIsPending
+    API "GetOption", "ExportFolder"
     TestAssert OperationState = before
     TestAssert ParseJson(APICompatibilityCounters())("dispatches") = counters("dispatches")
     LeaveCompatibilitySession
