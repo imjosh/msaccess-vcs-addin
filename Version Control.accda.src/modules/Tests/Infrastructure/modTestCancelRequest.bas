@@ -23,6 +23,9 @@ Option Private Module
 ' Fails at once. XMLHTTP rejects the malformed host before it tries to connect.
 Private Const UNREACHABLE_CALLBACK As String = "http://invalid..host/callback"
 
+' A last poll 100 ms before midnight. Timer has since restarted near zero.
+Private Const BEFORE_MIDNIGHT_MS As Double = 86399900#
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : NewOperation
@@ -373,6 +376,46 @@ Public Sub TestCancelPollErrorIsLoggedOnceAndIgnored()
     TestAssert McpCounter(cMCP, "cancelPollErrors") = 2, "both polls failed"
     TestAssert dblLogAfterFirst > dblLogBefore, "the first failure is logged"
     TestAssert dblLogAfterSecond = dblLogAfterFirst, "the second failure is not"
+    TestAssert Log.ErrorCount = lngErrorsBefore, "a failed poll is not an error of the run"
+    TestAssert Operation.ErrorLevel = eelBefore, "a failed poll leaves the run's outcome alone"
+
+End Sub
+
+
+Public Sub TestCancelPollThrottleHoldsAndSurvivesMidnight()
+
+    Dim cMCP As clsMCP
+    Dim blnFirst As Boolean
+    Dim blnThrottled As Boolean
+    Dim blnAfterMidnight As Boolean
+    Dim lngPollsFirst As Long
+    Dim lngPollsThrottled As Long
+    Dim lngPollsAfterMidnight As Long
+    Dim lngErrorsBefore As Long
+    Dim eelBefore As eErrorLevel
+
+    Set cMCP = New clsMCP
+    cMCP.RegisterCallback "{""callback_url"":""" & UNREACHABLE_CALLBACK & """,""operation_id"":""cancel-poll-throttle""}"
+    TestAssert cMCP.IsActive, "the callback is registered"
+
+    ' Nothing between the reads may write to the log, so the assertions wait.
+    lngErrorsBefore = Log.ErrorCount
+    eelBefore = Operation.ErrorLevel
+    blnFirst = cMCP.CheckCancelled
+    lngPollsFirst = McpCounter(cMCP, "cancelPolls")
+    blnThrottled = cMCP.CheckCancelled
+    lngPollsThrottled = McpCounter(cMCP, "cancelPolls")
+    cMCP.SetLastCancelCheckForTest BEFORE_MIDNIGHT_MS
+    blnAfterMidnight = cMCP.CheckCancelled
+    lngPollsAfterMidnight = McpCounter(cMCP, "cancelPolls")
+
+    TestAssert Not blnFirst, "a failed poll reads as no request"
+    TestAssert lngPollsFirst = 1, "the first check polls"
+    TestAssert Not blnThrottled, "the throttled check reads as no request"
+    TestAssert lngPollsThrottled = 1, "an immediate second check does not poll"
+    TestAssert Not blnAfterMidnight, "the check after midnight reads as no request"
+    TestAssert lngPollsAfterMidnight = 2, "a last poll before midnight does not hold the next one"
+    TestAssert McpCounter(cMCP, "cancelPollErrors") = 2, "only the two sent polls failed"
     TestAssert Log.ErrorCount = lngErrorsBefore, "a failed poll is not an error of the run"
     TestAssert Operation.ErrorLevel = eelBefore, "a failed poll leaves the run's outcome alone"
 

@@ -464,6 +464,18 @@ End Sub
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : SetLastCancelCheckForTest
+' Author    : Josh
+' Date      : 10/21/2026
+' Purpose   : Test seam. Sets the time of the last poll, in milliseconds after midnight.
+'---------------------------------------------------------------------------------------
+'
+Friend Sub SetLastCancelCheckForTest(ByVal dblMs As Double)
+    this.LastCancelCheck = dblMs
+End Sub
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : CallbackUrl
 ' Author    : Adam Waller
 ' Date      : 1/23/2026
