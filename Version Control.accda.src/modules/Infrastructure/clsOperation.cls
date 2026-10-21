@@ -60,6 +60,7 @@ Private Type udtRoot
     RuntimeError As String
     RuntimeErrorNumber As Long
     CancelRequested As Boolean
+    OutputPath As String
     NativeCloseCanceled As Boolean
 End Type
 Private m_Root As udtRoot
@@ -217,6 +218,17 @@ End Sub
 
 
 
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : RecordOutputPath
+' Purpose   : Record the file a successful build actually wrote before completion.
+'---------------------------------------------------------------------------------------
+'
+Public Sub RecordOutputPath(ByVal strPath As String)
+    If m_Root.Completed Then Exit Sub
+    m_Root.OutputPath = strPath
+End Sub
 
 
 '---------------------------------------------------------------------------------------
@@ -726,6 +738,7 @@ Private Sub InitializeRoot(intType As eOperationType, ByVal intPolicy As eDecisi
     m_Root.RuntimeError = vbNullString
     m_Root.RuntimeErrorNumber = 0
     m_Root.CancelRequested = False
+    m_Root.OutputPath = vbNullString
     m_Root.NativeCloseCanceled = False
     Set m_TransferOutcome = Nothing
     Set m_PolicyComparisonRefusal = Nothing
@@ -835,6 +848,7 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
         dExtra("runtime_error") = m_Root.RuntimeError
         dExtra("errorNumber") = m_Root.RuntimeErrorNumber
     End If
+    If Len(m_Root.OutputPath) > 0 Then dExtra("output_path") = m_Root.OutputPath
 
     ' A saved file already preserves results. Only carry them inline when that
     ' file is unavailable. Capture the small diagnostic payload before fallible

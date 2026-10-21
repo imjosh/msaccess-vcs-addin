@@ -464,19 +464,31 @@ End Sub
 ' Procedure : BuildAs
 ' Author    : Adam Waller
 ' Date      : 7/8/2023
-' Purpose   : Build the source files to a new file name or location.
-'           : If source files are identified for the currently open database, it will
-'           : build from those files. Otherwise it will ask the use to select a folder
-'           : with source files.
+' Purpose   : With no arguments, preserve the interactive ribbon workflow.
+'           : With either path supplied, require a valid source/output pair before
+'           : acquiring a root; the build then runs without a picker.
 '---------------------------------------------------------------------------------------
 '
-Public Sub BuildAs()
-    If ManualCommandRefused Then Exit Sub
+Public Function BuildAs(Optional ByVal strSourceFolder As String, _
+    Optional ByVal strOutputPath As String) As String
 
     Dim strNewDbPath As String
-    Dim strSourceFolder As String
 
-    If Not Operation.Begin(eotBuild) Then Exit Sub
+    If Len(strSourceFolder) > 0 Or Len(strOutputPath) > 0 Then
+        BuildAs = BuildAsPathRefusal(strSourceFolder, strOutputPath)
+        If Len(BuildAs) > 0 Then Exit Function
+        If Not Operation.Begin(eotBuild) Then
+            BuildAs = RefusalJson(ERR_OPERATION_ALREADY_RUNNING, OperationRunningMessage())
+            Exit Function
+        End If
+        modBuild.Build strSourceFolder, True, , strOutputPath
+        CompleteBuildOperation True
+        Exit Function
+    End If
+
+    If ManualCommandRefused Then Exit Function
+
+    If Not Operation.Begin(eotBuild) Then Exit Function
 
     ' See if we can find source files for the currently open database.
     If DatabaseFileOpen Then
@@ -505,12 +517,12 @@ Public Sub BuildAs()
                     MsgBox2 "Source files not found", "Required source files were not found in this folder.", _
                         "You selected: " & .SelectedItems(1), vbExclamation
                     Operation.Finish eorCanceled
-                    Exit Sub
+                    Exit Function
                 End If
             Else
                 ' Canceled dialog
                 Operation.Finish eorCanceled
-                Exit Sub
+                Exit Function
             End If
         End With
     End If
@@ -539,7 +551,54 @@ Public Sub BuildAs()
         Operation.Finish eorCanceled
     End If
 
-End Sub
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : BuildAsPathRefusal
+' Author    : Josh
+' Date      : 10/01/2026
+' Purpose   : Check the paths an unattended Build As was given. Returns the refusal
+'           : JSON, or an empty string when the build can start. Both paths are
+'           : required: a missing one would otherwise fall back to a picker.
+'---------------------------------------------------------------------------------------
+'
+Private Function BuildAsPathRefusal(ByVal strSourceFolder As String, _
+    ByVal strOutputPath As String) As String
+
+    Dim strMessage As String
+    Dim strFolder As String
+
+    If Len(strSourceFolder) = 0 Or Len(strOutputPath) = 0 Then
+        strMessage = T("Build As needs both a source folder and an output file path.")
+    ElseIf Not BuildOutputIsFullyQualified(strOutputPath) Then
+        strMessage = T("The output must be a full path to a database file: {0}", var0:=strOutputPath)
+    ElseIf Not FolderHasVcsOptionsFile(strSourceFolder) Then
+        strMessage = T("Source files not found in folder: {0}", var0:=strSourceFolder)
+    Else
+        strFolder = FSO.GetParentFolderName(strOutputPath)
+        If Len(strFolder) = 0 Or Len(FSO.GetExtensionName(strOutputPath)) = 0 Then
+            strMessage = T("The output must be a full path to a database file: {0}", var0:=strOutputPath)
+        ElseIf Not FSO.FolderExists(strFolder) Then
+            strMessage = T("The output folder does not exist: {0}", var0:=strFolder)
+        ElseIf StrComp(FSO.GetAbsolutePathName(strOutputPath), CodeProject.FullName, vbTextCompare) = 0 Then
+            strMessage = T("Cannot build over the add-in itself. Use RebuildAddIn instead.")
+        End If
+    End If
+
+    If Len(strMessage) > 0 Then BuildAsPathRefusal = RefusalJson(ERR_INVALID_BUILD_PATH, strMessage)
+
+End Function
+
+
+' A supplied destination must name its drive root or its UNC server and share.
+' Check the caller's path before resolving it: absolute conversion would hide
+' drive-relative and root-relative inputs. Keep existing file/folder validation.
+Private Function BuildOutputIsFullyQualified(ByVal strPath As String) As Boolean
+    strPath = Replace(strPath, "/", "\")
+    BuildOutputIsFullyQualified = strPath Like "[A-Za-z]:\*" Or _
+        strPath Like "\\?*\?*\?*"
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -3011,6 +3070,16 @@ End Property
 '
 Public Function GetVCSVersion() As String
     GetVCSVersion = modVCSUtility.GetVCSVersion
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : GetCapabilities
+' Purpose   : Optional named discovery. Never probe an unknown method through API.
+'---------------------------------------------------------------------------------------
+'
+Public Function GetCapabilities() As String
+    GetCapabilities = modAPI.APICapabilities
 End Function
 
 

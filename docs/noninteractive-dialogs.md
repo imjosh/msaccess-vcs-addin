@@ -117,6 +117,27 @@ their secondary compile diagnosis. A failed results write reports `results_error
 without inventing a results path. Available partial results remain in callbacks.
 Final diagnostics are captured separately from restored interaction state.
 
+### Named Build As
+
+`BuildAs(source, output)` requires both arguments when either is supplied.
+The source folder must contain `vcs-options.json`. The output must be a fully
+qualified drive or supported UNC file path with an extension and an existing
+parent folder; it cannot name the add-in itself. Relative, root-relative and
+drive-relative paths return `invalid_build_path` before the root is acquired,
+the current database is closed, or any picker appears. An invalid request
+leaves the current operation and open database alone.
+
+A valid pair builds from the supplied source into the named file without
+pickers. On success the terminal callback's `output_path` is the file the
+build actually left open. The no-argument ribbon route retains its source
+folder and save-file pickers.
+
+`APICapabilities` advertises `build_as_paths` for optional discovery.
+An unknown add-in build should be probed with
+`Application.Run "<add-in path>.APICapabilities"` directly. Probing a
+missing method through `API` can hold Access on a run-time error 438 dialog.
+The accepted MCP `template` argument does not change the add-in build.
+
 ### Terminal callbacks from the timer
 
 Every request that `APIAsync` queues on the timer gets one terminal callback.
@@ -160,8 +181,8 @@ starts without the request.
 - `modBuild.Build` checks after each fast-imported file and after each
   component of the regular loop. `MergeBuild` runs that same loop.
 
-`Export`, `FullExport`, `ExportVBA`, `Build`, `MergeBuild`, and
-`RunFilteredTests` run these loops when `APIAsync` launches them, so a request
+`Export`, `FullExport`, `ExportVBA`, `Build`, `BuildAs`, `MergeBuild`,
+and `RunFilteredTests` run these loops when `APIAsync` launches them, so a request
 can stop them.
 
 ### Cannot be cancelled
@@ -254,9 +275,8 @@ timer capacity before helper launch. Post-launch timer failure reports that the
 helper launched. Separate rebuild recovery remains outside this contract.
 
 Native Access save/discard, compile, trust, and error dialogs, VBA `MsgBox`, and
-End/Debug dialogs remain outside decision policies. Native object-close behavior,
-named build destinations, migration recovery, and mutual compatibility sessions
-remain separately qualified work.
+End/Debug dialogs remain outside decision policies. Native object-close behavior and named build destinations are described above.
+Migration recovery and mutual compatibility sessions remain separate work.
 
 Use the [automation contract](automation-contract.md) for entry-point details and
 [disposable test workflow](agent-test-runs.md) for add-in qualification.

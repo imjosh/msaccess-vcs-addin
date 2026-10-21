@@ -83,6 +83,54 @@ contradictory guidance.
 
 ---
 
+## 2026-10-21 — Named capability discovery is a direct procedure
+
+**Trigger**: An older add-in can leave Access on a modal run-time error 438 if
+an unknown method is probed through the generic API dispatcher.
+
+**Options explored**:
+- Probe through `API("GetCapabilities")`: works only when the method exists.
+- Resolve a named standard-module procedure first: an older add-in returns a
+  procedure-not-found COM error without entering the dispatcher. Chosen.
+
+**Decision**: `APICapabilities` returns the `build_as_paths` capability.
+Clients with unknown add-in builds call it directly through `Application.Run`.
+`clsVersionControl.GetCapabilities` returns the same JSON for known builds.
+This is optional feature discovery; a release version remains its own identity.
+
+**What this rules out**: Sending an unknown method through `API` as a probe.
+
+**Relevant files**: `modAPI.bas`, `clsVersionControl.cls`,
+`modTestBuildAsPaths.bas`, `docs/noninteractive-dialogs.md`.
+
+---
+
+## 2026-10-21 — Build As accepts explicit source and output paths
+
+**Trigger**: A caller supplying an output to an interactive Build As could
+encounter pickers and could not prove that its requested output was written.
+
+**Options explored**:
+- Derive a default name after a picker: cannot honor an arbitrary output.
+- Accept a complete source/output pair and report the actual file. Chosen.
+
+**Decision**: `BuildAs` retains the no-argument interactive workflow. If either
+argument is nonempty, it requires both, validates the source and a fully
+qualified drive or supported UNC output before root admission, and refuses
+invalid paths as `invalid_build_path`. A valid pair builds without pickers.
+A successful full build records `CurrentProject.FullName` on its root before
+completion, which emits that actual file as `output_path`. Failed and
+cancelled builds do not claim a written output.
+
+**What this rules out**: Falling back to a picker with supplied arguments or
+echoing a requested path as proof of a completed build.
+
+**Relevant files**: `clsVersionControl.cls`, `clsOperation.cls`,
+`modBuild.bas`, `modDialogPolicy.bas`, `modTestBuildAsPaths.bas`,
+`docs/noninteractive-dialogs.md`.
+
+---
+
 ## 2026-10-21 - Async refusals and cancel polls belong to their own caller
 
 **Trigger**: A pending launch could overwrite the timer's callback, and a

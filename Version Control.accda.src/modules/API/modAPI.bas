@@ -212,6 +212,25 @@ End Function
 
 
 '---------------------------------------------------------------------------------------
+' Procedure : APICapabilities
+' Purpose   : Named, optional discovery for clients with unknown add-in versions.
+'           : Application.Run can call this directly. Unknown API methods may open
+'           : a modal run-time error on an older add-in.
+'---------------------------------------------------------------------------------------
+'
+Public Function APICapabilities() As String
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", True
+    dResult.Add "capabilities", Array("build_as_paths")
+    APICapabilities = ConvertToJson(dResult)
+
+End Function
+
+
+'---------------------------------------------------------------------------------------
 ' Procedure : WorkerCallback
 ' Author    : Adam Waller
 ' Date      : 3/2/2023
