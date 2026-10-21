@@ -154,3 +154,11 @@ recovery need their own evidence. Request isolation checks do not close the sepa
 cancellation/reentrancy submission gate. F3's rebuild reservation and post-launch
 failure probes do not qualify the separate helper recovery protocol. Native
 object-close mechanics remain inherited.
+
+For UP-005's direct VBA scoped cancellation routes, run
+`check_noninteractive_policies.py` with `--seam-mode=scoped` in a disposable host.
+It creates a saved form Timer fixture and 300 queries. The timer reads the running
+public operation ID and calls `DismissAddinDialog` during full scoped query export
+and import. Require an accepted request for that same ID, a changed or processed
+query before the operation returns `cancelled`, and a clean next scoped run. The
+separate `ScopedSyncRequestCancelCheck` seam cannot replace this native route.

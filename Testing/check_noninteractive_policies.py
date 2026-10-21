@@ -356,6 +356,135 @@ def live(label):
         def source_files(source):
             return sorted(str(p.relative_to(source)) for p in source.rglob('*') if p.is_file())
 
+        def scoped_route_cases():
+            # F5 R1/R2: a saved user form delivers a trusted VBA request from
+            # its Timer event while the synchronous scoped API call is running.
+            # The form is outside the selected query category, so neither sync
+            # closes or imports the event source.
+            failures = []
+            module = project.VBComponents('modTestPolicyFixture').CodeModule
+            probe_code = '''
+Public ProbeAttempts As Long
+Public ProbeId As String
+Public ProbeResponse As String
+Public ProbeErrorText As String
+Public Sub UP005ResetProbe()
+    ProbeAttempts = 0
+    ProbeId = vbNullString
+    ProbeResponse = vbNullString
+    ProbeErrorText = vbNullString
+End Sub
+Public Function UP005CancelScopedProbe() As Boolean
+    On Error GoTo ProbeError
+    If ProbeAttempts <> 0 Then Exit Function
+    If GetSetting("MSAccessVCS", "State", "State", "0") <> "2" Then Exit Function
+    ProbeId = GetSetting("MSAccessVCS", "State", "PublicOperationId", vbNullString)
+    If Len(ProbeId) = 0 Then Exit Function
+    ProbeAttempts = 1
+    Forms("frmUP005CancelProbe").TimerInterval = 0
+    ProbeResponse = CStr(Application.Run("@LIB@.DismissAddinDialog", "frmVCSMain", "cancel", ProbeId))
+    UP005CancelScopedProbe = True
+    Exit Function
+ProbeError:
+    ProbeErrorText = CStr(Err.Number) & ": " & Err.Description
+End Function
+Public Function UP005ProbeAttempts() As Long
+    UP005ProbeAttempts = ProbeAttempts
+End Function
+Public Function UP005ProbeId() As String
+    UP005ProbeId = ProbeId
+End Function
+Public Function UP005ProbeResponse() As String
+    UP005ProbeResponse = ProbeResponse
+End Function
+Public Function UP005ProbeError() As String
+    UP005ProbeError = ProbeErrorText
+End Function
+'''.replace('@LIB@', driver.replace('"', '""'))
+            module.AddFromString(probe_code.replace('\n', '\r\n'))
+            app.DoCmd.Save(5, 'modTestPolicyFixture')
+            module = None
+            form = app.CreateForm()
+            temporary_name = form.Name
+            form.OnTimer = '=UP005CancelScopedProbe()'
+            form.TimerInterval = 0
+            app.DoCmd.Save(2, temporary_name)
+            app.DoCmd.Close(2, temporary_name, 0)
+            form = None
+            app.DoCmd.Rename('frmUP005CancelProbe', 2, temporary_name)
+            app.DoCmd.OpenForm('frmUP005CancelProbe')
+            database = app.CurrentDb()
+            for number in range(300):
+                database.CreateQueryDef(f'qUP005{number:03}', f'SELECT {number} AS n;')
+            database = None
+            debug_option = run('SetOption', 'ShowDebug', True)
+            if debug_option.get('success') is not True:
+                return ['could not enable object progress in disposable fixture: ' + repr(debug_option)]
+            baseline = run('FullExport', 'block')
+            source = Path(str(fixture) + '.src')
+            source_sql = source / 'queries/qUP005000.sql'
+            result['cases']['scoped_baseline'] = {'outcome': baseline, 'source_exists': source.is_dir(),
+                'query_file_count': sum(1 for _ in source.rglob('qUP005*')) if source.is_dir() else 0}
+            save_live()
+            if baseline.get('success') is not True:
+                return ['full export did not establish scoped source']
+            # FullExport closes open forms while scanning every category.
+            app.DoCmd.OpenForm('frmUP005CancelProbe')
+
+            def scalar(name):
+                value = app.Run(name)
+                return value[0] if isinstance(value, tuple) else value
+
+            for route, method in (('F5-R1', 'ExportByType'), ('F5-R2', 'ImportByType')):
+                if route == 'F5-R1':
+                    database = app.CurrentDb()
+                    database.QueryDefs('qUP005000').SQL = 'SELECT 1000 AS n;'
+                    database = None
+                    before_object = source_sql.read_text(encoding='utf-8-sig')
+                else:
+                    before_object = app.CurrentDb().QueryDefs('qUP005000').SQL
+                    source_sql.write_text('SELECT 2000 AS n;\n', encoding='utf-8-sig')
+                app.Run('UP005ResetProbe')
+                # The first log flush is pre-loop. With visible per-object debug
+                # progress, a later throttled flush pumps the timer in the loop.
+                app.Forms('frmUP005CancelProbe').TimerInterval = 5000 if route == 'F5-R1' else 6000
+                outcome = run(method, 'query', True, 'block')
+                app.Forms('frmUP005CancelProbe').TimerInterval = 0
+                receipt = {'method': method, 'outcome': outcome,
+                    'attempts': scalar('UP005ProbeAttempts'), 'operation_id': scalar('UP005ProbeId'),
+                    'response': scalar('UP005ProbeResponse'), 'probe_error': scalar('UP005ProbeError')}
+                after_object = (source_sql.read_text(encoding='utf-8-sig') if route == 'F5-R1'
+                                else app.CurrentDb().QueryDefs('qUP005000').SQL)
+                receipt['object_checkpoint'] = {'before': before_object, 'after': after_object,
+                                                'changed': before_object != after_object}
+                if route == 'F5-R2':
+                    # Import merges .bas and .sql source entries. A mid-loop
+                    # cancellation can precede q000's .sql merge even after
+                    # many .bas entries were imported.
+                    receipt['object_checkpoint']['processed_count'] = outcome.get('transferred_count', 0)
+                    receipt['object_checkpoint']['changed'] = outcome.get('transferred_count', 0) > 0
+                try:
+                    receipt['response_json'] = json.loads(receipt['response'])
+                except (TypeError, ValueError):
+                    pass
+                receipt['next_run'] = run(method, 'query', False, 'block')
+                receipt['failures'] = [message for condition, message in (
+                    (receipt['attempts'] == 1, 'timer delivered one request'),
+                    (not receipt['probe_error'], 'timer VBA call had no error'),
+                    ((receipt.get('response_json') or {}).get('requested') is True, 'dismiss accepted matching ID'),
+                    ((receipt.get('response_json') or {}).get('operation_id') == outcome.get('operation_id') ==
+                     receipt['operation_id'], 'dismiss targeted the scoped root'),
+                    (outcome.get('success') is False and outcome.get('cancelled') is True,
+                     'scoped root returned cancelled rather than failed'),
+                    (receipt['object_checkpoint']['changed'], 'a scoped object was processed before cancel'),
+                    (receipt['next_run'].get('success') is True and not receipt['next_run'].get('cancelled'),
+                     'next scoped run was admitted clean')) if not condition]
+                result['cases'][route] = receipt
+                failures.extend(route + ': ' + message for message in receipt['failures'])
+                save_live()
+            app.DoCmd.Close(2, 'frmUP005CancelProbe', 0)
+            return failures
+
         def seam_cases():
             # F5 R3-R6: each export, build, merge and test checkpoint in this owned host.
             failures = []
@@ -471,6 +600,15 @@ def live(label):
         module = None
         project = None
         run('SetOption', 'DefaultTestFilter', 'modTestPolicyFixture')
+        if SEAM_MODE == 'scoped':
+            # Reacquire this host's VBE project for the saved timer fixture.
+            project = next(p for p in app.VBE.VBProjects if Path(p.FileName) == fixture)
+            failures = scoped_route_cases()
+            if failures:
+                raise AssertionError(failures)
+            result['verified'] = True
+            save_live()
+            return
         failures = case('combined_async', 'async', True, True)
         if failures:
             # Keep the polluted state as evidence; do not hide it with local resets.
@@ -574,7 +712,7 @@ if __name__ == '__main__':
     parser.add_argument('--evidence',type=Path,required=True)
     parser.add_argument('--label',required=True)
     parser.add_argument('--client-source',type=Path,required=True)
-    parser.add_argument('--seam-mode',choices=('merge', 'build'),default='merge')
+    parser.add_argument('--seam-mode',choices=('merge', 'build', 'scoped'),default='merge')
     args=parser.parse_args()
     SEAM_MODE=args.seam_mode
     OUT=args.evidence.resolve()
