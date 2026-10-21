@@ -117,6 +117,129 @@ their secondary compile diagnosis. A failed results write reports `results_error
 without inventing a results path. Available partial results remain in callbacks.
 Final diagnostics are captured separately from restored interaction state.
 
+### Terminal callbacks from the timer
+
+Every request that `APIAsync` queues on the timer gets one terminal callback.
+A root posts its own callback when it completes, and `clsMCP.TerminalPosted`
+then stops the timer from posting a second one. A root left staged for a build
+or merge continuation posts from that continuation. When the method returns
+without either, `modTimer.HandleAPIAsyncOperation` posts the method's own JSON
+return to the request's emitter, as `complete` for `success: true` and as
+`error` otherwise. An empty return posts an `error` with
+`error_pattern: operation_not_started`. An exception in the timer posts an
+`error` with `error_pattern: dispatch_error` and is not raised into Windows.
+
+## Cancelling from MCP
+
+A cancel is a request, not a result. The operation stops at its next check, and
+its own terminal result says whether it was cancelled. Report an operation as
+cancelled only when that result is `cancelled`, which means the root finished
+with `eorCanceled`.
+
+`vcs_cancel_operation` records the request on the MCP server. The add-in finds
+it at its next checkpoint. `Operation.CheckCancelRequest` asks
+`clsMCP.CheckCancelled`, which sends `GET /cancel-status/{operation_id}` to the
+callback server at most once every 500 ms. A request that the poll finds goes to
+`Operation.RequestCancel`. Every cancel route uses that one procedure.
+
+- A test run calls `TestRunner.Cancel`. The runner checks before each test,
+  stops, and returns `cancelled: true` with the results so far.
+- Export, build, and merge log a critical "Canceled Operation", the level their
+  loops already stop on. The root records the request and finishes
+  `eorCanceled`, so the terminal callback is `cancelled`, not `error`.
+
+Two outcomes take precedence over a request. A blocked prompt still reports
+`decision_required`, and a runtime error still fails the root. The next root
+starts without the request.
+
+### Where the add-in checks
+
+- `clsTestRunner.RunSelected` checks before each test.
+- `modExport.ExportSource` checks after each category scan and after each
+  exported object.
+- `modBuild.Build` checks after each fast-imported file and after each
+  component of the regular loop. `MergeBuild` runs that same loop.
+
+`Export`, `FullExport`, `ExportVBA`, `Build`, `MergeBuild`, and
+`RunFilteredTests` run these loops when `APIAsync` launches them, so a request
+can stop them.
+
+### Cannot be cancelled
+
+These calls have no checkpoint that MCP reaches, and they run to the end.
+
+- `ImportObject` and `ExportObject`.
+- `ImportByType` and `ExportByType`. Their wrap-up reports a request that their
+  root accepted from VBA as cancelled, but they have no MCP poll.
+- `MergeAllSource` and `LoadSelected`.
+- `RebuildAddIn`.
+- `BuildHeadless` and `MergeHeadless`. They run the build loop, but a call
+  through `API` or `APIMCP` registers no MCP callback, so the loop never polls.
+  Their result has no cancelled form.
+- Every other synchronous call through `API` or `APIMCP`, for the same reason.
+
+### Limits
+
+- Only the session `Operation` polls, and only while its root is running. A
+  paused root, inside a user hook such as `AfterExport` or while a form closes,
+  does not poll. A root staged for a timer continuation polls again only after
+  it resumes. A private `clsOperation` instance never polls.
+- With no MCP callback registered, `CheckCancelled` returns at once and sends
+  nothing, so interactive use is unchanged.
+- A failed poll reads as no request and leaves the result alone. The first
+  failure for a callback goes to the log without counting as an error of the
+  run. `GetDiagnosticData` counts every poll in `cancelPolls` and every failure
+  in `cancelPollErrors`.
+- A request between checkpoints waits for the next one. A long single step,
+  such as one large object, finishes first.
+
+The poll uses `MSXML2.XMLHTTP` with `Cache-Control: no-cache` and an old
+`If-Modified-Since`. Without those headers WinINet answers every later poll with
+the first response, so a request made after the first check is never seen.
+`ServerXMLHTTP` skips that cache, but it waits on the add-in's own asynchronous
+log posts, and each poll took about 2.5 s. The throttle compares `Timer`
+values. A value smaller than the last check means midnight passed, so the poll
+runs.
+
+`modAPI.SetCancelPollForTest n` is the test seam. A user project reaches it
+through `Application.Run`. A test calls `Operation.SetCancelPollForTest` on a
+private instance. The nth check from then on reports a request once, without
+asking MCP, and 0 disarms it.
+
+### Cancelling from VBA
+
+`VCS.DismissAddinDialog("frmVCSMain", "cancel", operation_id)` sends the same
+request to `Operation.RequestCancel`. Every caller passes the running
+operation's public ID. A missing ID refuses with `operation_id_required`, and
+an ID that does not name the active operation refuses with
+`operation_id_mismatch`. A staged or paused root refuses with
+`operation_not_running`. A refusal changes nothing. An accepted call returns `requested: true` and does not call `Finish`.
+The operation stops at its next check, and its own result reports whether it was
+cancelled. A synchronous API call holds the dispatcher until it returns, so the
+API route reaches a root only while no API call is running, such as a build or
+merge continuation on the timer.
+
+`ImportByType` and `ExportByType` report a request that their root accepted as
+`error: "Operation was canceled."` with `cancelled: true` and `logPath`. A
+runtime error after the request is an ordinary failure.
+
+`DismissAddinDialog` is the add-in's own VBA procedure, and it needs Access to
+be responsive. The MCP tools `vcs_list_dialogs` and `vcs_dismiss_dialog` are a
+separate inspector in the MCP server. They read and press native windows with
+Win32 messages and do not call `DismissAddinDialog`.
+
+### Closing frmVCSMain over a root
+
+Closing `frmVCSMain` asks "Cancel Current Operation?" only for a running root
+that closing it can stop (`MainFormWaitsForRoot`). A test-run root counts only
+while this project's `TestRunner` is running it. A noninteractive run skips the
+confirmation, because closing the window is the request. On Yes, a test run
+calls `TestRunner.Cancel`, and any other root calls `Operation.RequestCancel`.
+The form stays open until the owning procedure finishes the root. All copies of
+the add-in share one registry key for operation state. A new `Operation`
+singleton adopts saved state only if its own add-in file wrote it
+(`CanAdoptRegistryState`), so a development copy does not adopt the installed
+add-in's test run.
 ## Workflow limits
 
 Noninteractive runs suppress the add-in's main form and optional migration offer.
@@ -132,8 +255,8 @@ helper launched. Separate rebuild recovery remains outside this contract.
 
 Native Access save/discard, compile, trust, and error dialogs, VBA `MsgBox`, and
 End/Debug dialogs remain outside decision policies. Native object-close behavior,
-confirmed cancellation polling, named build destinations, migration recovery, and
-mutual compatibility sessions remain separately qualified work.
+named build destinations, migration recovery, and mutual compatibility sessions
+remain separately qualified work.
 
 Use the [automation contract](automation-contract.md) for entry-point details and
 [disposable test workflow](agent-test-runs.md) for add-in qualification.

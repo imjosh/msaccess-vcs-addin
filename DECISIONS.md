@@ -83,6 +83,45 @@ contradictory guidance.
 
 ---
 
+## 2026-10-21 - Async refusals and cancel polls belong to their own caller
+
+**Trigger**: A pending launch could overwrite the timer's callback, and a
+dispatch during a running API registered the new MCP identity before the
+reentry was refused. The owner then lost its completion and polled the refused
+caller's cancel channel. Cancel polling makes that failure worse, because a
+poll on the wrong channel could stop or miss the owner's work.
+
+**Options explored**:
+
+- Swap the shared MCP identity to post a refusal, then restore it. Rejected. A
+  synchronous HTTP post can yield, and a cancel check or a completion can see
+  the swapped identity.
+- Rely on the MCP server's Access gate. Rejected. Direct VBA and API callers
+  and already admitted timers still reach the add-in.
+- Admit each request with its own callback and give each refusal its own
+  emitter. Poll for cancellation only through the running root's emitter.
+  Chosen.
+
+**Decision**: `APIAsync` checks API dispatch, pending timers, and running or
+staged roots before it changes shared state. The timer stores the callback with
+the admitted method and arguments, and dispatch repeats admission before the
+request can reach the root. A refusal posts through a new `clsMCP` with an outcome
+built without the owner's journal, result, or log. Only the session
+`Operation` polls, through the emitter its root registered, so a refused caller
+can never cancel the owner. A cancel the poll finds is a request.
+`Operation.RequestCancel` records it on the root, and the root reports
+`cancelled` only when it finished `eorCanceled`. A blocked decision and a
+runtime error keep precedence over the request.
+
+**What this rules out**: Shared-identity swaps for refusals, posting refusals
+through the owner's emitter, and treating an accepted cancel as a confirmed
+cancellation. A caller that wants cancellation must read the terminal result.
+
+**Relevant files**: `modAPI.bas`, `modTimer.bas`, `clsOperation.cls`,
+`clsMCP.cls`, `modTestAsyncCallerIdentity.bas`, `modTestCancelRequest.bas`,
+`docs/noninteractive-dialogs.md`.
+---
+
 ## 2026-10-16 - Request-owned policies protect explicit single-object transfers
 
 **Trigger**: A successful policy setter did not protect a single-object transfer.

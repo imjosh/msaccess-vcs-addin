@@ -296,8 +296,13 @@ The result cannot establish that the helper stopped. An unresolved launched
 helper keeps its owned reservation across heartbeat expiry and same-project VBA
 state recreation. The outer rebuild job and the child Build use distinct public
 IDs; `build_operation_id` identifies the child's progress stream. The status file
-remains authoritative for the outer rebuild outcome. Separate rebuild recovery,
-native close cancellation, and confirmed cancellation polling remain later work.
+remains authoritative for the outer rebuild outcome. Separate rebuild recovery
+and native close cancellation remain later work.
+
+A cancel is a request. The root records it and stops at its next check, and its
+own result reports `cancelled` only when it finished cancelled. See
+[Cancelling from MCP](noninteractive-dialogs.md#cancelling-from-mcp) for the
+checkpoints, the calls that cannot be cancelled, and the poll's limits.
 
 ## Related
 
