@@ -107,8 +107,8 @@ request. They stop the test loop, the export scan and object loops, the merge lo
 and the regular and fast build loops. Each needs one `cancelled` terminal and a
 ready root. Export and test cases also have an unarmed run that completes.
 The merge seam changes a saved query, then checks cancellation in the regular
-file loop with no earlier critical error. A final case changes a module's
-source name to cause an import failure before the armed cancel checkpoint; it
+file loop with no earlier critical error. A final case edits a module's
+source to reproduce a critical import failure before the armed checkpoint; it
 requires an error terminal. The build seams check both loops in a separate
 disposable host because a cancelled build changes its host.
 The refusal driver retains an active owner while other requests are refused.

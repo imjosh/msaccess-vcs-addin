@@ -567,16 +567,12 @@ End Function
             # queued cancel poll. Leave this destructive case last in its host.
             changed = next(source.rglob('modTestPolicyFixture.bas'))
             original = changed.read_bytes()
-            source_name = b'Attribute VB_Name = "modTestPolicyFixture"'
-            if source_name not in original:
-                raise AssertionError('merge failure fixture lost its source name')
-            changed.write_bytes(original.replace(source_name,
-                b'Attribute VB_Name = "modUP005WrongName"', 1))
+            changed.write_bytes(original + b"' UP005 critical import fixture\r\n")
             try:
                 item, found = seam_case('merge_error_before_cancel', 'MergeBuild', ('block',), 1, 'error')
             finally:
                 changed.write_bytes(original)
-            found += [] if 'Imported module not found after import' in item.get('log_excerpt', '') else [
+            found += [] if 'CRITICAL: Imported module not found after import' in item.get('log_excerpt', '') else [
                 'deliberate module import error reached the log']
             failures += found
             save_live()
