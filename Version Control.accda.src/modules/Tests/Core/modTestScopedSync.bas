@@ -523,3 +523,38 @@ ErrHandler:
     strError = Err.Description
     Resume CleanUp
 End Function
+
+
+' Real native-prompt driver entry point. No close fault or cancellation seam is
+' armed here. The external supervisor captures the prompt, then an independent
+' Win32 phase verifies and chooses its literal Cancel control.
+Public Function NativeCloseLiveCall(ByVal strCase As String) As String
+    If Operation.IsActive Then
+        NativeCloseLiveCall = "Not run: an operation is already active."
+        Exit Function
+    End If
+    If StrComp(CurrentProject.FullName, CodeProject.FullName, vbTextCompare) = 0 Then
+        NativeCloseLiveCall = "Not run: use a disposable user database."
+        Exit Function
+    End If
+    Operation.InteractionMode = eimNormal
+    Operation.ForceUnattended = False
+    Select Case strCase
+        Case "category-export", "category-import"
+            Operation.Source = eosUserInterface
+            If strCase = "category-export" Then
+                NativeCloseLiveCall = VCS.ExportByType("forms", True)
+            Else
+                NativeCloseLiveCall = VCS.ImportByType("forms", True)
+            End If
+        Case "single-export", "single-import"
+            Operation.Source = eosExternalAPI
+            If strCase = "single-export" Then
+                NativeCloseLiveCall = VCS.ExportObject("form", "frmNativeCloseProbe")
+            Else
+                NativeCloseLiveCall = VCS.ImportObject("form", "frmNativeCloseProbe")
+            End If
+        Case Else
+            NativeCloseLiveCall = "Not run: unknown native-close case."
+    End Select
+End Function
