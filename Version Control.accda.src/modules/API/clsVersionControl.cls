@@ -24,6 +24,7 @@ Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 ' Instance-owned test seams for scoped calls; see the Friend properties below.
 Private m_lngFaultAfterBegin As Long
 Private m_blnCancelAfterBegin As Boolean
+Private m_blnRequestCancelAfterBegin As Boolean
 Private m_RebuildLauncherForTest As Object
 
 
@@ -1661,8 +1662,10 @@ End Function
 ' Purpose   : Shared ErrHandler for ImportObject, ExportObject, ImportByType and
 '           : ExportByType. blnBegun is True only once the call's own Begin succeeded.
 '           : Then the error goes into that operation's log, the log is saved while the
-'           : Log singleton still holds it, and the operation is finished. Before that,
-'           : any running root is another caller's, so nothing of it is touched.
+'           : Log singleton still holds it, the error is recorded on the root, and the
+'           : operation is finished. The recorded error outranks a cancel request in
+'           : Finish. Before that, any running root is another caller's, so nothing of
+'           : it is touched.
 '---------------------------------------------------------------------------------------
 '
 Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Boolean) As String
@@ -1690,6 +1693,7 @@ Private Function ApiOperationErrHandler(strProcedure As String, blnBegun As Bool
         End If
         strLogPath = Log.SavedLogFilePath
         Set cOp = Operation
+        cOp.RecordRootRuntimeError cOp.CurrentRootToken, strDescription, lngNumber
     End If
 
     ApiOperationErrHandler = FailSingleObjectOperation(cOp, strLogPath, lngNumber, strDescription)
@@ -1767,10 +1771,11 @@ Public Function ExportByType(ByVal varTypes As Variant, _
 
 
     BeginScopedSyncLog T("Beginning Category Export")
+    If m_blnRequestCancelAfterBegin Then Operation.RequestCancel "clsVersionControl.RequestCancelAfterBegin"
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
-    Else
+    ElseIf Not m_blnRequestCancelAfterBegin Then
         modExport.ExportScoped colContainers, blnFullExport
     End If
     ExportByType = FinishScopedSync(dResult, colContainers, True)
@@ -1854,10 +1859,11 @@ Public Function ImportByType(ByVal varTypes As Variant, _
 
 
     BeginScopedSyncLog T("Beginning Category Import")
+    If m_blnRequestCancelAfterBegin Then Operation.RequestCancel "clsVersionControl.RequestCancelAfterBegin"
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
-    Else
+    ElseIf Not m_blnRequestCancelAfterBegin Then
         modBuild.MergeScoped colContainers, blnFullImport
     End If
     ImportByType = FinishScopedSync(dResult, colContainers, False)
@@ -1897,6 +1903,14 @@ End Property
 '
 Friend Property Let CancelAfterBegin(ByVal blnCancel As Boolean)
     m_blnCancelAfterBegin = blnCancel
+End Property
+
+
+' Test seam: the running root accepts a cancel request in place of the scoped work, as
+' closing the main form or a dismiss cancel makes one. The request comes before
+' FaultAfterBegin raises, so a runtime error can follow it.
+Friend Property Let RequestCancelAfterBegin(ByVal blnRequest As Boolean)
+    m_blnRequestCancelAfterBegin = blnRequest
 End Property
 
 
@@ -1949,6 +1963,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Dim blnCanceled As Boolean
     Dim blnCritical As Boolean
     Dim blnUserCanceled As Boolean
+    Dim blnRequested As Boolean
     Dim intResult As eOperationResult
     Dim strColor As String
     Dim strLogPath As String
@@ -1957,8 +1972,11 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
 
     ' The conflict dialog records a confirmed user cancellation.
     blnUserCanceled = VCSIndex.Conflicts.UserCanceled
+    ' A cancel request the root accepted is a cancel too, unless a runtime error
+    ' ended the root.
+    blnRequested = Operation.CancelRequested And Not Operation.HasRootRuntimeError
     blnCritical = (Operation.ErrorLevel = eelCritical)
-    blnCanceled = blnCritical Or blnUserCanceled
+    blnCanceled = blnCritical Or blnUserCanceled Or blnRequested
 
     If blnCanceled Then
         strColor = "Red"
@@ -1991,7 +2009,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     If Operation.DecisionBlocked Then
         ' A prompt no policy answered is not a plain failure or cancel.
         intResult = eorDecisionRequired
-    ElseIf blnUserCanceled Then
+    ElseIf blnUserCanceled Or blnRequested Then
         intResult = eorCanceled
     ElseIf blnCritical Or Operation.ErrorLevel >= eelError Then
         intResult = eorFailed
@@ -2004,7 +2022,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     If Not dResult.Exists("success") Then
         dResult.Add "success", (intResult = eorSuccess)
         If intResult <> eorSuccess Then
-            dResult.Add "error", IIf(blnUserCanceled, _
+            dResult.Add "error", IIf(blnUserCanceled Or blnRequested, _
                 "Operation was canceled.", _
                 "Operation completed with errors. Check the log for details.")
         End If
