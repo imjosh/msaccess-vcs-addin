@@ -141,11 +141,11 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
             CheckMigration colFailures, dAfter("CategoryHashes")("_Global") = dCurrent("_Global"), "successful full export records global hash"
         End If
         If strCase = "warning_complete" Then
-            CheckMigration colFailures, Log.WarningCount > 0, "complete output emitted a warning"
+            CheckMigration colFailures, CLng(dResult("error_level")) = eelWarning, "complete output emitted a warning"
         End If
     ElseIf strCase = "warning_incomplete" Then
         CheckMigration colFailures, OutcomeSucceeded(dResult), "incomplete output warning is publicly recorded"
-        CheckMigration colFailures, Log.WarningCount > 0, "incomplete output emitted a warning"
+        CheckMigration colFailures, CLng(dResult("error_level")) = eelWarning, "incomplete output emitted a warning"
         CheckMigration colFailures, Not FSO.FileExists(strFolder & "forms\frmUP008First.svg"), "warning left first SVG missing"
         CheckMigration colFailures, dAfter("CategoryHashes")("Forms") = dBefore("CategoryHashes")("Forms"), "missing SVG leaves form migration pending"
         CheckMigration colFailures, dAfter("FullExportDate") = dBefore("FullExportDate"), "missing SVG does not claim full completion"
