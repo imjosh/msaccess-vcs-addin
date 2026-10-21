@@ -402,19 +402,45 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function API(strMethod As String, _
-    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant) As Variant
+    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant, _
+    Optional ByVal strSessionEnvelope As String = vbNullString) As Variant
 
     Dim colArgs As New Collection
     Dim cRequest As clsOperationRequest
     Dim strRunCmd As String
     Dim strError As String
+    Dim strRefusal As String
+    Dim blnAdmitted As Boolean
+    ' Version and capability metadata read no session state.
+    If strMethod = "GetVCSVersion" Then
+        API = CStr(CodeDb.Properties("AppVersion"))
+        Exit Function
+    End If
+    If strMethod = "GetCapabilities" Then
+        API = APICapabilities()
+        Exit Function
+    End If
+    ' A51: an empty envelope is a legacy call on the 5.1.0 surface; a nonempty one
+    ' must match the session this library admitted, or nothing is dispatched.
+    If Len(strSessionEnvelope) = 0 Then
+        strRefusal = LegacyCallRefusal(strMethod, IIf(Not IsMissing(varArg3), 3, IIf(Not IsMissing(varArg2), 2, IIf(Not IsMissing(varArg1), 1, 0))), False)
+    ElseIf strSessionEnvelope <> CurrentCompatibilityEnvelope() Or Not CompatibilityDispatchAllowed Then
+        strRefusal = SessionFailure("missing_stale_or_foreign_session")
+    Else
+        blnAdmitted = True
+    End If
+    If Len(strRefusal) > 0 Then
+        API = strRefusal
+        Exit Function
+    End If
     InitializeRequestErrors "API"
     ' Automation must never stop at a debugger break: DebugMode and LogUnhandledErrors
     ' honor this scope (DECISIONS.md, MCP/API error-break suppression). Every exit
     ' below restores it.
     SuppressErrorBreaks
     On Error GoTo Failed
-    If RunningOnLocal() And Not RedirectTargetIsSelf() Then
+    ' An admitted session belongs to this library, so admitted work is not redirected.
+    If RunningOnLocal() And Not RedirectTargetIsSelf() And Not blnAdmitted Then
         strRunCmd = GetRunCmdAddInFullLibName & ".API"
         If Not IsMissing(varArg3) Then
             API = Application.Run(strRunCmd, strMethod, varArg1, varArg2, varArg3)
@@ -431,6 +457,7 @@ Public Function API(strMethod As String, _
     If Not IsMissing(varArg2) Then colArgs.Add varArg2
     If Not IsMissing(varArg3) Then colArgs.Add varArg3
     Set cRequest = CreateOperationRequest(eosExternalAPI)
+    If blnAdmitted Then CountCompatibilityDispatch
     API = DispatchOperationRequest(cRequest, strMethod, colArgs)
 CleanUp:
     RestoreErrorBreaks
@@ -453,7 +480,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
-    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant) As String
+    Optional varArg1 As Variant, Optional varArg2 As Variant, Optional varArg3 As Variant, _
+    Optional ByVal strSessionEnvelope As String = vbNullString) As String
 
     Dim cRequest As clsOperationRequest
     Dim colArgs As New Collection
@@ -463,13 +491,27 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
     Dim strRunCmd As String
     Dim lngTimeoutMs As Long
     Dim strError As String
+    Dim blnAdmitted As Boolean
+    ' A51: an empty envelope is a legacy call on the 5.1.0 surface; a nonempty one
+    ' must match the session this library admitted, or nothing is dispatched.
+    If Len(strSessionEnvelope) = 0 Then
+        strRefusal = LegacyCallRefusal(strMethod, IIf(Not IsMissing(varArg3), 3, IIf(Not IsMissing(varArg2), 2, IIf(Not IsMissing(varArg1), 1, 0))), True)
+    ElseIf strSessionEnvelope <> CurrentCompatibilityEnvelope() Or Not CompatibilityDispatchAllowed Then
+        strRefusal = SessionFailure("missing_stale_or_foreign_session")
+    Else
+        blnAdmitted = True
+    End If
+    If Len(strRefusal) > 0 Then
+        APIAsync = PostCompatibilityRefusal(strCallbackInfo, strRefusal)
+        Exit Function
+    End If
     InitializeRequestErrors "APIAsync"
     ' Automation must never stop at a debugger break: DebugMode and LogUnhandledErrors
     ' honor this scope (DECISIONS.md, MCP/API error-break suppression). Every exit
     ' below restores it.
     SuppressErrorBreaks
     On Error GoTo Failed
-    If RunningOnLocal() And Not RedirectTargetIsSelf() Then
+    If RunningOnLocal() And Not RedirectTargetIsSelf() And Not blnAdmitted Then
         strRunCmd = GetRunCmdAddInFullLibName & ".APIAsync"
         If Not IsMissing(varArg3) Then
             APIAsync = Application.Run(strRunCmd, strCallbackInfo, strMethod, varArg1, varArg2, varArg3)
