@@ -29,8 +29,8 @@ never run them inside the suite's active root or on the installed library as a d
   mutation, an owned log and released operation state. Keep real UI receipts separate.
 
 The live helper deliberately uses the user-interface source for categories to reach
-Access's save prompt; single-object calls use external-API attribution so their
-expected logged refusal cannot open another add-in error prompt. This does not
+Access's save prompt; single-object calls use an explicit request-local block policy so their
+expected logged refusal is acknowledged without another add-in error prompt. This does not
 claim that decision policies dismiss native Access prompts.
 
 Keep an unlocked interactive desktop awake for each bounded live run. Observe
