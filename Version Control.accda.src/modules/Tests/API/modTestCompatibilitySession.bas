@@ -73,6 +73,13 @@ Public Sub LegacyAdmissionChangesNoOperationState()
     TestAssert result("error_pattern") = "compatibility_session_required"
     Set result = ParseJson(APIAsync(vbNullString, "ExportByType", "queries", False, "block"))
     TestAssert result("error_pattern") = "compatibility_session_required"
+    ' 5.1.0 had no policy argument, so a legacy call cannot carry one and runs with edpAsk.
+    Set result = ParseJson(CStr(API("Build", vbNullString, "block")))
+    TestAssert result("error_pattern") = "compatibility_session_required"
+    Set result = ParseJson(CStr(API("MergeBuild", "block")))
+    TestAssert result("error_pattern") = "compatibility_session_required"
+    Set result = ParseJson(CStr(API("RunFilteredTests", "block")))
+    TestAssert result("error_pattern") = "compatibility_session_required"
     TestAssert OperationState = before
     TestAssert ParseJson(APICompatibilityCounters())("dispatches") = counters("dispatches")
     TestAssert Not TimerIsPending

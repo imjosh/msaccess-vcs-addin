@@ -83,6 +83,48 @@ contradictory guidance.
 
 ---
 
+## 2026-10-21 — Empty envelope means a 5.1.0 legacy call
+
+**Trigger**: Mutual compatibility sessions refused every call without a
+session envelope, which broke callers written against released 5.1.0, and
+the add-in refused servers outside a fixed version range it could not own.
+
+**Options explored**:
+- Refuse all envelope-less calls: breaks every 5.1.0 caller. Rejected.
+- Admit envelope-less calls on the full current surface: lets a legacy caller
+  reach session-owned state such as interaction mode and request policies
+  without a session. Rejected.
+- Treat an empty envelope as a legacy call limited to the method and argument
+  surface of 5.1.0 (`9dfb6a69`); a nonempty envelope that is not this
+  library's live session is `compatibility_session_invalid`. Chosen.
+- Keep the add-in's `supported_server_range`: duplicates a check the server
+  owns and refused older and prerelease servers that speak the same protocol.
+  Removed; the handshake checks only `msaccess-vcs.session/1`.
+
+**Decision**: `API` and `APIAsync` take a trailing `strSessionEnvelope`. Empty
+means legacy: 5.1.0 methods and argument counts only, which carry no policy
+argument, so legacy work runs with `edpAsk`; it is never redirected around the
+gate, never counted as admitted, and never borrows an ambient session.
+`GetVCSVersion` and `GetCapabilities` stay answerable without a session.
+`APIExecuteMCP(envelope, operation_id, ...)` replaces `APIMCP`, which took no
+envelope. A Build worker is admitted only when its launching dispatch was, and
+then reconnects with its own handshake. "End session" in the session contract
+is `APIDisconnectSession`; the 5.1.0 `EndSession` and `RegisterSession` remain
+legacy option-session calls. The provisional identity `6.0.0-up009.1` keeps
+the 6.x reference line; whether the API change needs a major is left to the
+maintainer, because every gated or removed surface was unreleased.
+
+**What this rules out**: Adding a method or argument to the legacy surface
+without a session. Version-range checks in the add-in. Revisit if option
+overrides need to become session-owned: today a legacy `SetOption` changes
+what admitted work in the same instance reads, as it did in 5.1.0.
+
+**Relevant files**: `modAPI.bas`, `modCompatibilitySession.bas`,
+`clsWorker.cls`, `modTimer.bas`, `modTestCompatibilitySession.bas`,
+`docs/automation-contract.md`.
+
+---
+
 ## 2026-10-21 — Named capability discovery is a direct procedure
 
 **Trigger**: An older add-in can leave Access on a modal run-time error 438 if

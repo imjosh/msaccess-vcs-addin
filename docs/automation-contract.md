@@ -305,6 +305,44 @@ own result reports `cancelled` only when it finished cancelled. See
 [Cancelling from MCP](noninteractive-dialogs.md#cancelling-from-mcp) for the
 checkpoints, the calls that cannot be cancelled, and the poll's limits.
 
+## Compatibility sessions
+
+A server that wants more than the 5.1.0 surface opens a
+`msaccess-vcs.session/1` session. `APIIdentity` reports the add-in version,
+instance and protocol. `APIHandshake(request)` admits any server version with
+that protocol: the add-in checks only the protocol identity, and the server owns
+version compatibility. Another protocol is refused with
+`compatibility_session_invalid` and `protocol_mismatch`. The session envelope
+carries `session_id`, `server_instance`, `connection_id` and `addin_instance`.
+`APIValidateSession` confirms one, `APIDisconnectSession` ends it, and a session
+idle for 30 minutes expires.
+
+Admitted work goes through `APIExecute(envelope, method, ...)`,
+`APIExecuteAsync(envelope, callback, method, ...)` and
+`APIExecuteMCP(envelope, operation_id, method, ...)`. `API` and `APIAsync` take
+the envelope as the optional trailing `strSessionEnvelope`:
+
+| Envelope | Outcome |
+| --- | --- |
+| Empty | Legacy call: the methods and argument counts of upstream 5.1.0 (`9dfb6a69`) only, with no session |
+| This library's live session | Admitted: the full surface, not redirected, counted as a dispatch |
+| Anything else | `compatibility_session_invalid` before dispatch |
+
+A legacy call outside the 5.1.0 surface, or with more arguments than 5.1.0
+took, is refused with `compatibility_session_required` and changes nothing.
+5.1.0 had no decision-policy argument, so a legacy call runs with `edpAsk`.
+Session-owned state, such as interaction mode set through `API` and request
+policies, belongs to admitted work only. `GetVCSVersion` and `GetCapabilities`
+read no session state and answer with any envelope. A legacy call made while
+another call's session is entered stays legacy and never borrows that
+admission. A `Build` launched by admitted work hands its envelope to the worker,
+which reconnects with its own handshake; a legacy `Build` worker stays legacy.
+
+Option overrides belong to the add-in instance, not to a session. A legacy
+`SetOption` changes what admitted work in the same instance reads, as it did in
+5.1.0. A legacy `RegisterSession` or `EndSession` is the 5.1.0 option session
+and does not touch a compatibility session.
+
 ## Related
 
 - [agentic-rebuild.md](agentic-rebuild.md) — rebuilding the add-in itself, and the
