@@ -290,6 +290,146 @@ def live(label):
             save_live()
             print(name, 'PASS' if not failures else failures, flush=True)
             return failures
+        def seam_case(name, method, args, cancel_on, expect='cancelled'):
+            # The test seam answers the Nth cancel check of the run, through the
+            # path a real MCP request takes. Zero runs the method unarmed.
+            start_index = len(endpoint.callbacks)
+            before = snapshot()
+            operation_id = 'seam-' + name + '-' + uuid.uuid4().hex
+            app.Run(driver + '.SetCancelPollForTest', cancel_on)
+            try:
+                outcome = parse_run(app.Run(driver + '.APIAsync', endpoint.info(operation_id), method, *args))
+                until = time.monotonic() + 60
+                while time.monotonic() < until:
+                    pythoncom.PumpWaitingMessages()
+                    if any(c['type'] in ('complete', 'error', 'cancelled') for c in endpoint.callbacks[start_index:]):
+                        break
+                    time.sleep(.05)
+                drain(.6)
+            finally:
+                app.Run(driver + '.SetCancelPollForTest', 0)
+            terminals = [c for c in endpoint.callbacks[start_index:] if c['type'] in ('complete', 'error', 'cancelled')]
+            after = snapshot(True)
+            item = {'method': method, 'args': list(args), 'cancel_on': cancel_on, 'operation_id': operation_id,
+                'before': before, 'outcome': outcome, 'terminals': terminals, 'after': after}
+            result['cases'][name] = item
+            payload = terminals[0] if terminals else {}
+            log = payload.get('log_path', payload.get('logPath'))
+            if log and Path(log).is_file():
+                item['log_excerpt'] = Path(log).read_text(encoding='utf-8-sig')[-6500:]
+            path = payload.get('results_path', payload.get('resultsPath'))
+            if path and Path(path).is_file():
+                item['saved_results'] = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+            failures = []
+            def check(condition, message):
+                if not condition:
+                    failures.append(message)
+            check(outcome.get('success') is True and outcome.get('async') is True, 'async admission')
+            check(len(terminals) == 1, 'terminal delivery count')
+            check(payload.get('type') == expect, 'terminal type ' + expect)
+            check(payload.get('operation_id') == operation_id, 'caller identity')
+            check(bool(log) and 'log_excerpt' in item, 'own operation log retained')
+            # Export, build and merge stop on a critical log entry; a test run stops
+            # through TestRunner.Cancel instead.
+            if method != 'RunFilteredTests':
+                canceled = 'Canceled Operation' in item.get('log_excerpt', '')
+                check(canceled == (expect == 'cancelled'), 'cancel logged only when cancelled')
+            if expect == 'cancelled':
+                check(payload.get('success') is False, 'cancel is not success')
+            check(after['status'] == 'ready' and not after['token'], 'root ready')
+            check(after['policy'] == before['policy'], 'caller policy preserved')
+            check(not after['blocked'] and not after['decisions'], 'no decision recorded')
+            check(all(after.get(k) for k in ('log_released', 'runner_released', 'mcp_released', 'options_released')), 'infrastructure released')
+            item['failures'] = failures
+            save_live()
+            print(name, 'PASS' if not failures else failures, flush=True)
+            return item, failures
+
+        def stage(item, verb):
+            # The last category header before the cancel names the loop that stopped.
+            text = item.get('log_excerpt', '')
+            text = text[:text.find('Canceled Operation')] if 'Canceled Operation' in text else text
+            headers = [line.strip() for line in text.splitlines() if line.strip().startswith(verb)]
+            item['stage'] = headers[-1] if headers else ''
+            return item['stage']
+
+        def source_files(source):
+            return sorted(str(p.relative_to(source)) for p in source.rglob('*') if p.is_file())
+
+        def seam_cases():
+            # F5 R3-R6: each export, build, merge and test checkpoint in this owned host.
+            failures = []
+            app.Run('ConfigureFixture', False, False, '', 0)
+            item, found = seam_case('seam_test_loop', 'RunFilteredTests', ('block',), 2)
+            saved = item.get('saved_results', {})
+            item['tests_run'] = saved.get('summary', {}).get('subs')
+            found += [m for c, m in (
+                (item['terminals'] and item['terminals'][0].get('cancelled') is True, 'test run reports cancelled'),
+                (saved.get('allPassed') is False, 'cancelled run is not allPassed'),
+                (item['tests_run'] == 1, 'partial results keep the test that ran')) if not c]
+            failures += found
+            source = Path(scratch.name) / 'fixture.accdb.src'
+            # Save the fixture's VBE edits: an unsaved module makes an export raise
+            # Access's own Save prompt, which no decision policy answers.
+            for module_name in ('modTestAssert', 'modTestPolicyFixture'):
+                app.DoCmd.Save(5, module_name)
+            item, found = seam_case('seam_export_baseline', 'FullExport', ('block',), 0, 'complete')
+            failures += found
+            baseline = source_files(source)
+            item['source_files'] = baseline
+            item, found = seam_case('seam_export_scan', 'FullExport', ('block',), 1)
+            found += [] if not stage(item, 'Exporting ') else ['cancel came after the scan']
+            failures += found
+            # 24 scan checks for an accdb, then one per exported object.
+            item, found = seam_case('seam_export_object', 'FullExport', ('block',), 26)
+            found += [] if stage(item, 'Exporting ') else ['cancel came before the object loop']
+            kept = source_files(source)
+            item['source_files'] = kept
+            found += [] if set(baseline) <= set(kept) else ['partial export kept the source']
+            failures += found
+            item, found = seam_case('seam_export_after', 'FullExport', ('block',), 0, 'complete')
+            failures += found
+            # The completed full export is the merge baseline. MergeBuild reads merge
+            # availability from frmVCSMain, which sets it on load, so close a hidden
+            # copy an earlier operation left loaded.
+            app.DoCmd.Close(2, 'frmVCSMain')
+            # A merge imports only changed files, so change one module's source.
+            changed = next(source.rglob('modTestPolicyFixture.bas'))
+            changed.write_bytes(changed.read_bytes() + b"' Seam merge marker\r\n")
+            item, found = seam_case('seam_merge_loop', 'MergeBuild', ('block',), 1)
+            found += [] if stage(item, 'Merging ').startswith('Merging modules') else ['merge stopped in its file loop']
+            failures += found
+            item, found = seam_case('seam_merge_after', 'MergeBuild', ('block',), 0, 'complete')
+            failures += found
+            # ExportByType and ImportByType: a cancel and an accepted request after Begin,
+            # outside the runner's root, in this library host.
+            checks = result['cases']['scoped_sync'] = {}
+            for check_name in ('ScopedSyncCancelCheck', 'ScopedSyncRequestCancelCheck'):
+                for exporting in (False, True):
+                    key = check_name + ('(export)' if exporting else '(import)')
+                    # Application.Run returns the result with its ByRef arguments.
+                    value = app.Run(driver + '.' + check_name, exporting)
+                    checks[key] = value[0] if isinstance(value, tuple) else value
+                    if checks[key] != 'OK':
+                        failures.append(key + ': ' + str(checks[key]))
+            save_live()
+            print('scoped_sync', checks, flush=True)
+            # A full build runs the regular loop for project files and the fast loop
+            # for modules. Last: a build replaces this fixture. An unarmed full build
+            # of this host's own project stops in FinalizeImports ('Imported module
+            # not found after import'), so these cases have no completing build.
+            before_modules = sum((source / n).is_file() for n in
+                ('project.json', 'vbe-project.json', 'vbe-references.json', 'proj-properties.json'))
+            item, found = seam_case('seam_build_regular', 'Build', (str(source), 'block'), 1)
+            found += [] if not stage(item, 'Importing ').startswith('Importing modules') and item['stage'] else ['build stopped in its regular loop']
+            failures += found
+            # The fast loop checks before each module: the second check is after the first module.
+            item, found = seam_case('seam_build_fast', 'Build', (str(source), 'block'), before_modules + 2)
+            item['files_before_modules'] = before_modules
+            found += [] if stage(item, 'Importing ').startswith('Importing modules') else ['build stopped in its fast loop']
+            failures += found
+            save_live()
+            return failures
         fixture = Path(scratch.name) / 'fixture.accdb'
         print('fixture', str(fixture), 'PID', pid, flush=True)
         app.NewCurrentDatabase(str(fixture))
@@ -324,7 +464,8 @@ def live(label):
             'Public FixtureBlock As Boolean\r\nPublic FixtureCompile As Boolean\r\nPublic FixtureResults As String\r\nPublic FixtureFault As Long\r\n'
             'Public Sub ConfigureFixture(ByVal blocked As Boolean, ByVal failed As Boolean, ByVal results As String, ByVal fault As Long)\r\n'
             'FixtureBlock = blocked\r\nFixtureCompile = failed\r\nFixtureResults = results\r\nFixtureFault = fault\r\nEnd Sub\r\n'
-            'Public Sub TestFixturePass()\r\nTestAssert True, "Policy fixture"\r\nEnd Sub\r\n')
+            'Public Sub TestFixturePass()\r\nTestAssert True, "Policy fixture"\r\nEnd Sub\r\n'
+            'Public Sub TestFixtureSecond()\r\nTestAssert True, "Policy fixture second"\r\nEnd Sub\r\n')
         module = None
         project = None
         run('SetOption', 'DefaultTestFilter', 'modTestPolicyFixture')
@@ -398,6 +539,9 @@ def live(label):
         save_live()
         assert not failures and result['locked_existing_bytes_preserved']
         failures = cancel_poll_case()
+        if failures:
+            raise AssertionError(failures)
+        failures = seam_cases()
         if failures:
             raise AssertionError(failures)
         result['verified'] = True

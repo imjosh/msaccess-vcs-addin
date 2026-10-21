@@ -101,8 +101,15 @@ The completion driver exercises direct VBA, synchronous API, asynchronous API,
 and MCP result paths. Its `cancel_poll` case polls the driver's own endpoint through
 `CancelPollProbe` on a private MCP. It requires a first poll that answers false, no
 new request inside the 500 ms throttle, an uncached poll that sees the switched answer,
-and a poll after a last check just before midnight. The refusal driver retains an active owner while other
-requests are refused. Require unchanged owner state, zero refusal terminal attempts,
+and a poll after a last check just before midnight. Its `seam_*` cases arm
+`SetCancelPollForTest` before an asynchronous run, so the Nth cancel check sees a
+request. They stop the test loop, the export scan and object loops, the merge loop,
+and the regular and fast build loops. Each needs one `cancelled` terminal, a ready
+root, and, except for the builds, an unarmed run of the same method that completes.
+An unarmed full build of the checker host's own project stops after its module
+imports, so the build cases check only where the cancel stopped.
+The refusal driver retains an active owner while other requests are refused.
+Require unchanged owner state, zero refusal terminal attempts,
 and exactly one owner completion. These drivers retain disposable user databases.
 The translation driver edits only a disposable library copy and preserves its files.
 
