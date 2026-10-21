@@ -41,9 +41,11 @@ vcs_rebuild_addin("<source folder>")
 
 The MCP server derives the development copy beside that folder, launches
 `RebuildAddIn`, and registers a callback operation. The callback URL and
-operation ID pass through `Worker.vbs` to the builder Access process, which
-invokes the same `APIAsync(..., "Build", source)` entry point as an ordinary
-database build. `Log.Add` and `Log.Progress` therefore provide detailed output
+operation ID pass through `Worker.vbs` to the builder Access process. When the
+launching call was admitted to a compatibility session, the builder opens its
+own session and invokes `APIExecuteAsync(envelope, callback, "Build", source)`;
+a legacy launch invokes the same `APIAsync(..., "Build", source)` entry point as
+an ordinary database build. `Log.Add` and `Log.Progress` therefore provide detailed output
 without a second logging implementation. Internally, the tool uses the status
 file for the later compile/install phases and terminal result. For guaranteed
 live output in a terminal (Cursor often shows only "Running..."):
@@ -220,3 +222,23 @@ says so.
   building from source.
 - It does not close, quit, or terminate any Access process. If another one holds
   a file it needs, it refuses and names both the process and the file.
+
+## Compatibility admission
+
+A `RebuildAddIn` launched by admitted work hands the builder the server
+version, the server instance, a fresh session and connection ID, and the parent
+add-in version. The builder checks its own `APIIdentity` version and protocol,
+then handshakes for its own Access and add-in incarnation; it does not inherit
+the launcher's admission. A builder without a callback uses the same handshake
+and `APIExecute`. A legacy launch, made without an envelope, builds through the
+legacy `APIAsync` or `API` route. Manual rebuilds keep their manual route.
+
+The callback-free `Build` call returns Empty because it is a VBA Sub. That
+confirms dispatch only. The worker waits for its completed build log and compile
+result before advancing; a structured admission or dispatch refusal stops it at
+once.
+
+This candidate's add-in identity, `6.0.0-up009.1`, is a provisional unpublished
+development version. The add-in checks only protocol `msaccess-vcs.session/1`;
+the server owns version compatibility. See
+[compatibility sessions](automation-contract.md#compatibility-sessions).

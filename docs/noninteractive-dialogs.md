@@ -276,10 +276,35 @@ helper launched. Separate rebuild recovery remains outside this contract.
 
 Native Access save/discard, compile, trust, and error dialogs, VBA `MsgBox`, and
 End/Debug dialogs remain outside decision policies. Native object-close behavior and named build destinations are described above.
-Migration recovery and mutual compatibility sessions remain separate work.
+Migration recovery remains separate work.
 
 Use the [automation contract](automation-contract.md) for entry-point details and
 [disposable test workflow](agent-test-runs.md) for add-in qualification.
+
+## Compatibility session admission
+
+Automation uses `APIExecute`, `APIExecuteAsync` and `APIExecuteMCP` with an
+accepted session envelope. `APIExecuteMCP(envelope, operation_id, method, ...)`
+runs synchronous work under the caller's public operation ID. `APIExecuteAsync`
+forwards up to three method arguments, so a request policy in the third
+method argument survives asynchronous forwarding. A missing, stale or foreign envelope
+fails before operation, policy, mode or timer state changes, and deferred
+dispatch validates again before it starts. Handshake approval does not replace
+per-call policy and mode acknowledgments. `APIIdentity` advertises
+`request_policy_contract: "msaccess-vcs.request-policy/1"`: decision policies
+are request arguments, `SetOperationPolicy` is refused as
+`policy_activation_retired`, and no session owns policy state, so disconnect and
+idle expiry apply to every session alike.
+
+`API` and `APIAsync` without an envelope are legacy calls on the upstream 5.1.0
+surface and run with `edpAsk`; a method, argument or session-owned state 5.1.0
+did not have is refused with `compatibility_session_required`. A legacy call
+cannot borrow the envelope of a session that is already entered. Version and
+capability metadata stay answerable without a session. Trusted manual, ribbon,
+direct VCS VBA and admitted raw VBA routes do not require sessions, and
+admission is not a VBA sandbox. See
+[compatibility sessions](automation-contract.md#compatibility-sessions) for the
+envelope rules and the shared option-override limitation.
 
 ## Native close cancellation
 
