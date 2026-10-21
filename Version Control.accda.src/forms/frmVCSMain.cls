@@ -444,6 +444,9 @@ Public Sub cmdExport_Click()
     txtLog.ScrollBars = 2
     Log.Flush
 
+    ' An MCP cancel request stops the export the same way closing this form does.
+    If Operation.CancelRequested Then m_blnCancelRequested = True
+
     ' Don't attempt to access controls if we are in the process of closing the form.
     If FormLoaded(Me) Then
         If m_blnCancelRequested Then
@@ -778,8 +781,13 @@ Private Sub Form_Unload(Cancel As Integer)
             ' Operation.Finish after the loop exits cleanly with results intact.
             TestRunner.Cancel
         Else
+            ' The root records the request, so its wrap-up reports a cancel rather
+            ' than a plain failure. RequestCancel logs the critical error the loops
+            ' stop on. A root that cannot take the request gets the error here.
             m_blnCancelRequested = True
-            Log.Error eelCritical, T("Canceled Operation"), Me.Name & ".Form_Unload"
+            If Not Operation.RequestCancel(Me.Name & ".Form_Unload") Then
+                Log.Error eelCritical, T("Canceled Operation"), Me.Name & ".Form_Unload"
+            End If
         End If
     End If
 

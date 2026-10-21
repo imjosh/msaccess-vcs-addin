@@ -450,6 +450,7 @@ Public Sub RunSelected(colTestKeys As Collection)
         DoEvents
         modTestRunnerUI.PollBridgeCancel
         ' An MCP cancel request arrives through Cancel, like a form close.
+        Operation.CheckCancelRequest
 
         ' Check both internal flag and operation-level cancellation
         If this.CancelRequested Or (Operation.Status <> eosRunning) Then
