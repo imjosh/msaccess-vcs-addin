@@ -25,6 +25,7 @@ Private Const MCP_TEMP_MODULE_PREFIX As String = "MCP_Temp_"
 Private m_lngFaultAfterBegin As Long
 Private m_blnCancelAfterBegin As Boolean
 Private m_blnRequestCancelAfterBegin As Boolean
+Private m_blnBlockAfterBegin As Boolean
 Private m_RebuildLauncherForTest As Object
 
 
@@ -1530,6 +1531,7 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     Dim strLogPath As String
     Dim blnFound As Boolean
     Dim blnBegun As Boolean
+    Dim blnCanceled As Boolean
     Dim dResult As Dictionary
     Dim intPolicy As eDecisionPolicy
 
@@ -1645,8 +1647,8 @@ Public Function ImportObject(ByVal strObjectType As String, Optional ByVal strOb
     ' back through the out-param, and the error journal has to be read before it.
     LoadSingleObject cComponent, strObjectName, strSourceFile, _
         blnNoIndex:=(Operation.Source = eosMCPTool) Or (Operation.Source = eosExternalAPI), _
-        strSavedLogPath:=strLogPath, dTransferResult:=dResult
-    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0), dResult)
+        strSavedLogPath:=strLogPath, dTransferResult:=dResult, blnCanceled:=blnCanceled
+    ImportObject = FinishSingleObjectImport(Operation, strLogPath, Log.GetErrorJournalSince(0), dResult, blnCanceled)
     Exit Function
 
 ErrHandler:
@@ -1773,6 +1775,7 @@ Public Function ExportByType(ByVal varTypes As Variant, _
     BeginScopedSyncLog T("Beginning Category Export")
     If m_blnRequestCancelAfterBegin Then Operation.RequestCancel "clsVersionControl.RequestCancelAfterBegin"
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
+    If m_blnBlockAfterBegin Then Operation.DecisionBlocked = True
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
     ElseIf Not m_blnRequestCancelAfterBegin Then
@@ -1861,6 +1864,7 @@ Public Function ImportByType(ByVal varTypes As Variant, _
     BeginScopedSyncLog T("Beginning Category Import")
     If m_blnRequestCancelAfterBegin Then Operation.RequestCancel "clsVersionControl.RequestCancelAfterBegin"
     If m_lngFaultAfterBegin <> 0 Then Err.Raise m_lngFaultAfterBegin
+    If m_blnBlockAfterBegin Then Operation.DecisionBlocked = True
     If m_blnCancelAfterBegin Then
         VCSIndex.Conflicts.UserCanceled = True
     ElseIf Not m_blnRequestCancelAfterBegin Then
@@ -1971,7 +1975,7 @@ Private Function FinishScopedSync(dResult As Dictionary, colContainers As Collec
     Operation.SetTransferOutcome VCSIndex.TransferOutcome
 
     ' The conflict dialog records a confirmed user cancellation.
-    blnUserCanceled = VCSIndex.Conflicts.UserCanceled
+    blnUserCanceled = VCSIndex.Conflicts.UserCanceled Or Operation.NativeCloseCanceled
     ' A cancel request the root accepted is a cancel too, unless a runtime error
     ' ended the root.
     blnRequested = Operation.CancelRequested And Not Operation.HasRootRuntimeError
@@ -4437,3 +4441,8 @@ Private Function ImportSourceExists(ByVal cComponent As IDbComponent, ByRef strP
         End If
     End If
 End Function
+
+
+Friend Property Let BlockAfterBegin(ByVal blnBlock As Boolean)
+    m_blnBlockAfterBegin = blnBlock
+End Property

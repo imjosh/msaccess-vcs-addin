@@ -60,6 +60,7 @@ Private Type udtRoot
     RuntimeError As String
     RuntimeErrorNumber As Long
     CancelRequested As Boolean
+    NativeCloseCanceled As Boolean
 End Type
 Private m_Root As udtRoot
 
@@ -725,6 +726,7 @@ Private Sub InitializeRoot(intType As eOperationType, ByVal intPolicy As eDecisi
     m_Root.RuntimeError = vbNullString
     m_Root.RuntimeErrorNumber = 0
     m_Root.CancelRequested = False
+    m_Root.NativeCloseCanceled = False
     Set m_TransferOutcome = Nothing
     Set m_PolicyComparisonRefusal = Nothing
 
@@ -1520,4 +1522,14 @@ End Sub
 '
 Public Property Get RebuildHandoffHeld() As Boolean
     RebuildHandoffHeld = m_Root.RebuildHandoffHold
+End Property
+
+
+Public Property Get NativeCloseCanceled() As Boolean
+    NativeCloseCanceled = m_Root.NativeCloseCanceled
+End Property
+
+
+Public Property Let NativeCloseCanceled(ByVal blnCanceled As Boolean)
+    m_Root.NativeCloseCanceled = blnCanceled
 End Property

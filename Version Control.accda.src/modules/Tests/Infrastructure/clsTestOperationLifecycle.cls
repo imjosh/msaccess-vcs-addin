@@ -809,6 +809,13 @@ Public Sub TestAnsweredPromptsAreInSingleObjectImportResult()
         ClearSessionPolicy cOp
 
         ' So does a cancel.
+        ' Native cancellation retains the answered decision journal and owned log.
+        Set cOp = BeginWithAnsweredPrompt(CStr(varScenario), eotMerge, strResolution)
+        cOp.ErrorLevel = eelCritical
+        strJson = FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, blnCanceled:=True)
+        AssertJournalCarried strJson, strResolution, "import cancel, " & varScenario
+        TestAssert ParseJson(strJson)("cancelled") = True, varScenario & ": the cancel is kept"
+        ClearSessionPolicy cOp
     Next varScenario
 
 CleanUp:
@@ -1547,4 +1554,141 @@ End Sub
 ' except what the operation itself keeps.
 Private Sub ClearPolicyInOneCall(ByVal cOp As clsOperation)
     TestAssert InStr(ClearSessionPolicy(cOp), """success"":true") > 0, "clearing succeeds"
+End Sub
+
+
+Public Sub TestCloseOutcomeSeamReportsCanceledClose()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
+
+    Dim blnCanceled As Boolean
+
+    ' The seam stands in for DoCmd.Close, which would raise the native save/discard prompt.
+    SetCloseOutcomeForTest ecoCanceled
+    TestAssert Not CloseObjectBeforeOperation(acForm, "frmNone", blnCanceled), "a canceled close leaves the object open"
+    TestAssert blnCanceled, "the cancel is reported"
+
+    SetCloseOutcomeForTest ecoFailed
+    TestAssert Not CloseObjectBeforeOperation(acForm, "frmNone", blnCanceled), "a failed close leaves the object open"
+    TestAssert Not blnCanceled, "a failed close is not a cancel"
+
+    SetCloseOutcomeForTest ecoClosed
+    TestAssert CloseObjectBeforeOperation(acForm, "frmNone", blnCanceled), "a close that worked reports closed"
+    TestAssert Not blnCanceled, "no cancel is reported"
+
+    SetCloseOutcomeForTest ecoReal
+    TestAssert CloseObjectBeforeOperation(acForm, "frmNone", blnCanceled), "a closed object needs no close"
+    TestAssert Not blnCanceled, "no cancel is reported for a closed object"
+
+CleanUp:
+    On Error Resume Next
+    SetCloseOutcomeForTest ecoReal
+    If lngTestErr <> 0 Then TestAssert False, "TestCloseOutcomeSeamReportsCanceledClose " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestCanceledCloseStopsSingleObjectExport()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
+
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim strJson As String
+
+    ' ExportSingleObject builds this result when the close leaves the object open.
+    Set cOp = NewUnattendedOperation
+    TestAssert cOp.Begin(eotExport, edpBlock), "the export begins under the session policy"
+    cOp.ErrorLevel = eelCritical
+
+    strJson = FinishSingleObjectExport(cOp, "C:\src\logs\Export_1.log", OpenObjectRefusal("frmOrders", True))
+    Set dResult = ParseJson(strJson)
+    TestAssert dResult("success") = False, "a canceled close is not a success"
+    TestAssert dResult("cancelled") = True, "the native cancel is reported"
+    TestAssert InStr(dResult("error"), "frmOrders") > 0, "the error names the object"
+    TestAssert InStr(dResult("error"), "canceled") > 0, "the error gives the reason"
+    TestAssert InStr(strJson, "Export_1.log") > 0, "the result names the log"
+
+CleanUp:
+    On Error Resume Next
+    SetCloseOutcomeForTest ecoReal
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If lngTestErr <> 0 Then TestAssert False, "TestCanceledCloseStopsSingleObjectExport " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestFailedCloseStopsSingleObjectExportWithoutCancelFlag()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
+
+    Dim dResult As Dictionary
+
+    Set dResult = OpenObjectRefusal("frmOrders", False)
+    TestAssert dResult("success") = False, "a failed close is not a success"
+    TestAssert Not dResult.Exists("cancelled"), "only a native cancel sets cancelled"
+    TestAssert InStr(dResult("error"), "frmOrders") > 0, "the error names the object"
+    TestAssert InStr(dResult("error"), "could not be closed") > 0, "the error gives the reason"
+
+CleanUp:
+    On Error Resume Next
+    SetCloseOutcomeForTest ecoReal
+    If lngTestErr <> 0 Then TestAssert False, "TestFailedCloseStopsSingleObjectExportWithoutCancelFlag " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
+End Sub
+
+
+Public Sub TestCanceledCloseStopsSingleObjectImportWithCancelFlag()
+    On Error GoTo ErrHandler
+    Dim lngTestErr As Long
+    Dim strTestErr As String
+
+    Dim cOp As clsOperation
+    Dim dResult As Dictionary
+    Dim colErrors As Collection
+    Dim dEntry As Dictionary
+
+    Set cOp = NewUnattendedOperation
+    TestAssert cOp.Begin(eotMerge, edpBlock), "the import begins under the session policy"
+    cOp.ErrorLevel = eelCritical
+    Set dEntry = New Dictionary
+    dEntry.Add "level", "error"
+    dEntry.Add "message", "frmOrders is open and closing it was canceled, so it was not replaced from source."
+    Set colErrors = New Collection
+    colErrors.Add dEntry
+
+    Set dResult = ParseJson(FinishSingleObjectImport(cOp, "C:\src\logs\Merge_1.log", colErrors, blnCanceled:=True))
+    TestAssert dResult("success") = False, "a canceled close is not a success"
+    TestAssert dResult("cancelled") = True, "import reports the cancel as export does"
+    TestAssert InStr(dResult("error"), "frmOrders") > 0, "the error names the object"
+
+CleanUp:
+    On Error Resume Next
+    SetCloseOutcomeForTest ecoReal
+    If Not cOp Is Nothing Then
+        If cOp.IsActive Then cOp.Finish eorFailed
+    End If
+    If lngTestErr <> 0 Then TestAssert False, "TestCanceledCloseStopsSingleObjectImportWithCancelFlag " & lngTestErr & ": " & strTestErr
+    Exit Sub
+ErrHandler:
+    lngTestErr = Err.Number
+    strTestErr = Err.Description
+    Resume CleanUp
 End Sub
