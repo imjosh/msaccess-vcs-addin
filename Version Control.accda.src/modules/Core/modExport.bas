@@ -14,6 +14,7 @@ Option Explicit
 '@Folder("Core")
 
 Private Const ModuleName As String = "modExport"
+Private m_strMigrationWarningForTest As String
 
 
 '---------------------------------------------------------------------------------------
@@ -373,6 +374,16 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
                     End If
                     cDbObject.Export
                 End If
+                If cCategory.ComponentType = edbForm And blnFullForCategory _
+                    And Len(m_strMigrationWarningForTest) > 0 Then
+                    If m_strMigrationWarningForTest = "incomplete" Then
+                        If FSO.FileExists(SwapExtension(cDbObject.SourceFile, "svg")) Then _
+                            DeleteFile SwapExtension(cDbObject.SourceFile, "svg")
+                    End If
+                    Log.Error eelWarning, "UP-008 disposable migration warning: " & _
+                        m_strMigrationWarningForTest, ModuleName & ".ExportSource"
+                    m_strMigrationWarningForTest = vbNullString
+                End If
                 If cCategory.ComponentType = edbForm Or cCategory.ComponentType = edbReport Then
                     blnObjectOutputComplete = FormReportMigrationOutputComplete(cDbObject)
                     If Not blnObjectOutputComplete Then blnCategoryOutputComplete = False
@@ -533,6 +544,18 @@ CleanUp:
 
     If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
 
+End Sub
+
+Public Sub SetMigrationWarningForTest(ByVal strMode As String)
+    ' Only a disposable UP-008 host may arm this deterministic warning seam.
+    If Left$(CurrentProject.Name, 6) <> "UP008_" _
+        Or CurrentProject.FullName = CodeProject.FullName Then
+        Err.Raise 5, ModuleName, "Migration warning hook requires a disposable UP008 host"
+    End If
+    If strMode <> vbNullString And strMode <> "complete" And strMode <> "incomplete" Then
+        Err.Raise 5, ModuleName, "Unknown migration warning mode"
+    End If
+    m_strMigrationWarningForTest = strMode
 End Sub
 
 

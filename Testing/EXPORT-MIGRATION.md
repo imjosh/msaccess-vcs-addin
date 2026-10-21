@@ -7,8 +7,9 @@ fixture creates forms and a query only in the disposable host. Use a supported
 source build of the committed add-in under test, and record its commit, source
 tree, and binary SHA-256 before opening Access.
 
-The seven case arguments are `blocked`, `scan_cancel`, `partial_cancel`,
-`success`, `global`, `filtered`, and `skip`. Call the function through
+The case arguments are `blocked`, `scan_cancel`, `partial_cancel`,
+`success`, `global`, `filtered`, `skip`, `warning_complete`, and
+`warning_incomplete`. Call the function through
 `Application.Run` with the loaded library name and one case argument. It returns
 JSON with the initial public outcome, persisted index snapshots, retry outcome,
 and failed assertions. Each call creates its own host, makes a baseline full
@@ -25,6 +26,9 @@ The persisted index is the authority; a log message alone is not completion.
 The driver must record the selected and completed object counts for each
 category and identify which categories were complete before retry. A category
 that was already complete must not be exported again without a declared reason.
+The warning cases arm a test seam only in a `UP008_` disposable host. The
+complete case retains the SVG despite a warning; the incomplete case removes
+one SVG before completion accounting. Both use the later public fast export.
 
 Run each case in a new directory. Do not run the fixture in a user database,
 the development library itself, or a sample database. Watch for Access modal

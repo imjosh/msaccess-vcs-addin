@@ -26,6 +26,8 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     Dim cObject As IDbComponent
     Dim varKey As Variant
     Dim dObjects As Dictionary
+    Dim dAttemptArtifacts As Dictionary
+    Dim dRetryArtifacts As Dictionary
     Dim strDecisionPolicy As String
 
     On Error GoTo ErrHandler
@@ -102,6 +104,10 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
             Next cCategory
             Operation.SetCancelPollForTest lngCancelCheck + 1
         Case "success", "filtered"
+        Case "warning_complete"
+            SetMigrationWarningForTest "complete"
+        Case "warning_incomplete"
+            SetMigrationWarningForTest "incomplete"
         Case Else
             colFailures.Add "Unknown regression case"
             GoTo CleanUp
@@ -118,7 +124,8 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     Set dCurrent = Options.GetCategoryHashes
     Set dReport("afterAttempt") = dAfter
     Set dReport("attemptArtifacts") = MigrationArtifacts(strFolder)
-    If strCase = "success" Or strCase = "skip" Or strCase = "filtered" Then
+    If strCase = "success" Or strCase = "skip" Or strCase = "filtered" _
+        Or strCase = "warning_complete" Then
         CheckMigration colFailures, OutcomeSucceeded(dResult), "completed export succeeds"
         CheckMigration colFailures, FSO.FileExists(strFolder & "forms\frmUP008First.svg"), "completed form migration writes SVG"
         CheckMigration colFailures, dAfter("CategoryHashes")("Forms") = dCurrent("Forms"), "completed forms record option hash"
@@ -129,10 +136,20 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
         If strCase = "filtered" Then
             CheckMigration colFailures, dAfter("FullExportDate") = dBefore("FullExportDate"), "VBA export does not claim full project completion"
             CheckMigration colFailures, dAfter("CategoryHashes")("_Global") = dBefore("CategoryHashes")("_Global"), "VBA export leaves global migration pending"
-        ElseIf strCase = "success" Then
+        ElseIf strCase = "success" Or strCase = "warning_complete" Then
             CheckMigration colFailures, dAfter("FullExportDate") <> dBefore("FullExportDate"), "successful full export advances completion date"
             CheckMigration colFailures, dAfter("CategoryHashes")("_Global") = dCurrent("_Global"), "successful full export records global hash"
         End If
+        If strCase = "warning_complete" Then
+            CheckMigration colFailures, Log.WarningCount > 0, "complete output emitted a warning"
+        End If
+    ElseIf strCase = "warning_incomplete" Then
+        CheckMigration colFailures, OutcomeSucceeded(dResult), "incomplete output warning is publicly recorded"
+        CheckMigration colFailures, Log.WarningCount > 0, "incomplete output emitted a warning"
+        CheckMigration colFailures, Not FSO.FileExists(strFolder & "forms\frmUP008First.svg"), "warning left first SVG missing"
+        CheckMigration colFailures, dAfter("CategoryHashes")("Forms") = dBefore("CategoryHashes")("Forms"), "missing SVG leaves form migration pending"
+        CheckMigration colFailures, dAfter("FullExportDate") = dBefore("FullExportDate"), "missing SVG does not claim full completion"
+        CheckMigration colFailures, dAfter("ExportDate") = dBefore("ExportDate"), "missing SVG does not claim export completion"
     Else
         CheckMigration colFailures, Not OutcomeSucceeded(dResult), "aborted export fails publicly"
         If strCase = "blocked" Then
@@ -164,12 +181,24 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     ' Resolve the external conflict by restoring the original source, then fast
     ' export through the same public entry point. Artifacts are the primary oracle.
     If strCase = "blocked" Or strCase = "skip" Then WriteFile strOriginalQuery, strQuery
+    ' Separate timestamps enough to detect an unnecessary repeat of completed SVGs.
+    Pause 1.2
     VCS.Export "block"
     Set dResult = Operation.LastCompletion
     Set dReport("retryOutcome") = dResult
     Set dAfter = MigrationSnapshot
     Set dReport("afterRetry") = dAfter
     Set dReport("retryArtifacts") = MigrationArtifacts(strFolder)
+    If strCase = "warning_complete" Then
+        Set dAttemptArtifacts = dReport("attemptArtifacts")
+        Set dRetryArtifacts = dReport("retryArtifacts")
+        CheckMigration colFailures, _
+            dAttemptArtifacts("frmUP008First")("sha256") = dRetryArtifacts("frmUP008First")("sha256"), _
+            "complete warning SVG bytes unchanged on retry"
+        CheckMigration colFailures, _
+            dAttemptArtifacts("frmUP008First")("modified") = dRetryArtifacts("frmUP008First")("modified"), _
+            "complete warning SVG was not rewritten on retry"
+    End If
     CheckMigration colFailures, dAfter("CategoryHashes")("Forms") = dCurrent("Forms"), "retry completes form option migration"
     CheckMigration colFailures, dAfter("CategoryHashes")("Queries") = dCurrent("Queries"), "retry completes query option migration"
     CheckMigration colFailures, dAfter("CategoryHashes")("_Global") = dCurrent("_Global"), "retry completes global option migration"
@@ -181,6 +210,7 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
 CleanUp:
     On Error Resume Next
     Operation.SetCancelPollForTest 0
+    SetMigrationWarningForTest vbNullString
     If IsLoaded(acForm, "frmVCSMain", False) Then DoCmd.Close acForm, "frmVCSMain", acSaveNo
     Set frmNew = Nothing
     If lngErr <> 0 Then colFailures.Add "ERROR " & lngErr & ": " & strErr
