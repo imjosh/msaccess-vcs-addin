@@ -41,7 +41,8 @@ Run these modules through the installed runner:
 modTestDialogPolicy,clsTestInteractionScope,clsTestFormPolicyOverride,clsTestPromptSites,
 clsTestOperationLifecycle,modTestModeOnlyScope,modTestOperationLifecycle,modTestScopedSync,
 modTestExportFormPolicy,clsTestResultsPersistence,modTestBlockedCompile,
-clsTestCallerErrorTranslation,modTestFileAccess,modTestHeadlessBuild,modTestRequestPolicy
+clsTestCallerErrorTranslation,modTestFileAccess,modTestHeadlessBuild,modTestRequestPolicy,
+modTestCancelRequest,modTestAsyncCallerIdentity
 ```
 
 Then run the unfiltered suite on a fresh host. Require passing assertions from
@@ -97,7 +98,10 @@ user decision when ownership remains unresolved. Removing the policy is not
 recovery for a blocked deletion.
 
 The completion driver exercises direct VBA, synchronous API, asynchronous API,
-and MCP result paths. The refusal driver retains an active owner while other
+and MCP result paths. Its `cancel_poll` case polls the driver's own endpoint through
+`CancelPollProbe` on a private MCP. It requires a first poll that answers false, no
+new request inside the 500 ms throttle, an uncached poll that sees the switched answer,
+and a poll after a last check just before midnight. The refusal driver retains an active owner while other
 requests are refused. Require unchanged owner state, zero refusal terminal attempts,
 and exactly one owner completion. These drivers retain disposable user databases.
 The translation driver edits only a disposable library copy and preserves its files.

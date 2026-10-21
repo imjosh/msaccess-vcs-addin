@@ -26,6 +26,9 @@ Private Const UNREACHABLE_CALLBACK As String = "http://invalid..host/callback"
 ' A last poll 100 ms before midnight. Timer has since restarted near zero.
 Private Const BEFORE_MIDNIGHT_MS As Double = 86399900#
 
+' The private MCP that CancelPollProbe keeps between its steps.
+Private m_cPollProbe As clsMCP
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : NewOperation
@@ -420,3 +423,77 @@ Public Sub TestCancelPollThrottleHoldsAndSurvivesMidnight()
     TestAssert Operation.ErrorLevel = eelBefore, "a failed poll leaves the run's outcome alone"
 
 End Sub
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : PollStep
+' Author    : Josh
+' Date      : 10/21/2026
+' Purpose   : One check of the probe's MCP, with its result and poll counters.
+'---------------------------------------------------------------------------------------
+'
+Private Function PollStep() As Dictionary
+    Dim dStep As New Dictionary
+    dStep.Add "result", m_cPollProbe.CheckCancelled
+    dStep.Add "cancelPolls", McpCounter(m_cPollProbe, "cancelPolls")
+    dStep.Add "cancelPollErrors", McpCounter(m_cPollProbe, "cancelPollErrors")
+    Set PollStep = dStep
+End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : CancelPollProbe
+' Author    : Josh
+' Date      : 10/21/2026
+' Purpose   : Parameterized probe for the live cancel_poll case in
+'           : Testing/check_noninteractive_policies.py. It is not discovered as a test.
+'           : It polls the harness endpoint through a private MCP, never the session
+'           : one, so no running operation can see the answer. The steps run in order,
+'           : one call each, so the harness can switch its answer between them.
+'           :   first    : register strCallbackInfo, then check twice at once. The
+'           :              second check falls inside the throttle.
+'           :   uncached : skip the throttle and check again.
+'           :   midnight : set the last check just before midnight and check again.
+'           :              This step releases the probe's MCP.
+'           : Returns JSON with the step, one entry per check, and any probe error.
+'---------------------------------------------------------------------------------------
+'
+Public Function CancelPollProbe(ByVal strCallbackInfo As String, ByVal strStep As String) As String
+
+    Dim dResult As New Dictionary
+    Dim colChecks As New Collection
+    Dim lngErr As Long
+    Dim strErr As String
+
+    On Error GoTo ErrHandler
+    dResult.Add "step", strStep
+    dResult.Add "checks", colChecks
+    If strStep = "first" Then
+        Set m_cPollProbe = New clsMCP
+        m_cPollProbe.RegisterCallback strCallbackInfo
+        dResult.Add "active", m_cPollProbe.IsActive
+        colChecks.Add PollStep()
+        colChecks.Add PollStep()
+    ElseIf m_cPollProbe Is Nothing Then
+        Err.Raise vbObjectError + 1, , "Run the first step before " & strStep
+    ElseIf strStep = "uncached" Then
+        m_cPollProbe.SkipCancelThrottleForTest
+        colChecks.Add PollStep()
+    ElseIf strStep = "midnight" Then
+        m_cPollProbe.SetLastCancelCheckForTest BEFORE_MIDNIGHT_MS
+        colChecks.Add PollStep()
+        Set m_cPollProbe = Nothing
+    Else
+        Err.Raise vbObjectError + 2, , "Unknown step " & strStep
+    End If
+
+CleanUp:
+    On Error Resume Next
+    If lngErr <> 0 Then dResult.Add "probe_error", CStr(lngErr) & ": " & strErr
+    CancelPollProbe = ConvertToJson(dResult)
+    Exit Function
+ErrHandler:
+    lngErr = Err.Number
+    strErr = Err.Description
+    Resume CleanUp
+End Function

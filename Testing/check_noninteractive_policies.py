@@ -28,6 +28,8 @@ class Endpoint:
     def __init__(self, cancelled=False):
         self.callbacks = []
         self.polls = []
+        # The cancel-status answer. A case may switch it while the server runs.
+        self.cancelled = cancelled
         endpoint = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -48,7 +50,7 @@ class Endpoint:
 
             def do_GET(self):
                 endpoint.polls.append(self.path)
-                self.reply({"cancelled": cancelled})
+                self.reply({"cancelled": endpoint.cancelled})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -241,6 +243,53 @@ def live(label):
             save_live()
             print(name, 'PASS' if not failures else failures, flush=True)
             return failures
+
+        def cancel_poll_case():
+            # The real poll against this endpoint, through a private MCP in the driver.
+            # The answer switches between probe calls, so a cached GET would show.
+            name = 'cancel_poll'
+            operation_id = 'policy-' + name + '-' + uuid.uuid4().hex
+            info = endpoint.info(operation_id)
+            path = '/cancel-status/' + operation_id
+            item = {'operation_id': operation_id, 'steps': {}}
+            result['cases'][name] = item
+            def step(label):
+                value = parse_run(app.Run(driver + '.CancelPollProbe', info, label))
+                value['gets'] = sum(p == path for p in endpoint.polls)
+                item['steps'][label] = value
+                return value
+            endpoint.cancelled = False
+            try:
+                first = step('first')
+                endpoint.cancelled = True
+                uncached = step('uncached')
+                midnight = step('midnight')
+            finally:
+                endpoint.cancelled = False
+            save_live()
+            failures = []
+            def check(condition, message):
+                if not condition:
+                    failures.append(message)
+            steps = (first, uncached, midnight)
+            check(not any('probe_error' in s for s in steps), 'probe ran')
+            check(first.get('active') is True, 'private callback registered')
+            checks = [c for s in steps for c in s['checks']]
+            check(len(checks) == 4, 'four checks reported')
+            if len(checks) == 4:
+                poll, throttled, fresh, wrapped = checks
+                check(poll['result'] is False and poll['cancelPolls'] == 1, 'first poll answers false')
+                check(throttled['result'] is False and throttled['cancelPolls'] == 1, 'immediate check is throttled')
+                check(first['gets'] == 1, 'one GET for the first two checks')
+                check(fresh['result'] is True and fresh['cancelPolls'] == 2 and uncached['gets'] == 2,
+                    'switched answer reaches the add-in uncached')
+                check(wrapped['result'] is True and wrapped['cancelPolls'] == 3 and midnight['gets'] == 3,
+                    'check after the midnight wrap polls')
+                check(all(c['cancelPollErrors'] == 0 for c in checks), 'no failed polls')
+            item['failures'] = failures
+            save_live()
+            print(name, 'PASS' if not failures else failures, flush=True)
+            return failures
         fixture = Path(scratch.name) / 'fixture.accdb'
         print('fixture', str(fixture), 'PID', pid, flush=True)
         app.NewCurrentDatabase(str(fixture))
@@ -348,6 +397,9 @@ def live(label):
         result['locked_existing_bytes_preserved']=existing.read_bytes()==original
         save_live()
         assert not failures and result['locked_existing_bytes_preserved']
+        failures = cancel_poll_case()
+        if failures:
+            raise AssertionError(failures)
         result['verified'] = True
         save_live()
     finally:
