@@ -33,6 +33,8 @@ Private Type udtThis
     FailedPostAttempts As Long
     RequestsPruned As Long
     MaxInFlight As Long
+    CancelPolls As Long
+    CancelPollErrors As Long
 End Type
 Private this As udtThis
 
@@ -311,6 +313,8 @@ Public Function GetDiagnosticData() As Dictionary
     dData.Add "requestsPruned", this.RequestsPruned
     dData.Add "pendingRequests", lngPending
     dData.Add "maxInFlight", this.MaxInFlight
+    dData.Add "cancelPolls", this.CancelPolls
+    dData.Add "cancelPollErrors", this.CancelPollErrors
 
     Set GetDiagnosticData = dData
 
@@ -330,6 +334,8 @@ Private Sub ResetDiagnostics()
     this.TerminalPostAttempts = 0
     this.FailedPostAttempts = 0
     this.RequestsPruned = 0
+    this.CancelPolls = 0
+    this.CancelPollErrors = 0
     If m_colInFlight Is Nothing Then Set m_colInFlight = New Collection
     this.MaxInFlight = m_colInFlight.Count
 End Sub
@@ -353,7 +359,9 @@ End Sub
 ' Author    : Adam Waller
 ' Date      : 1/23/2026
 ' Purpose   : Check if operation should be cancelled by polling MCP server.
-'           : Uses throttling to avoid excessive HTTP requests.
+'           : Uses throttling to avoid excessive HTTP requests. A failed poll reads as
+'           : not cancelled and is logged once per registered callback, so an
+'           : unreachable server neither stops the operation nor floods its log.
 '---------------------------------------------------------------------------------------
 '
 Public Function CheckCancelled() As Boolean
@@ -368,7 +376,9 @@ Public Function CheckCancelled() As Boolean
     Dim dblNow As Double
     dblNow = Timer * 1000  ' Convert to milliseconds
 
-    If dblNow - this.LastCancelCheck < CANCEL_CHECK_INTERVAL_MS Then
+    ' Timer restarts at midnight, which makes the last check look like the future.
+    If dblNow >= this.LastCancelCheck _
+        And dblNow - this.LastCancelCheck < CANCEL_CHECK_INTERVAL_MS Then
         CheckCancelled = False
         Exit Function
     End If
@@ -383,6 +393,8 @@ Public Function CheckCancelled() As Boolean
     Dim strCancelUrl As String
     Dim http As Object
     Dim dResponse As Dictionary
+    Dim lngStatus As Long
+    Dim strError As String
 
     strCancelUrl = Replace(this.CallbackUrl, "/callback", "/cancel-status/" & this.OperationId)
 
@@ -390,29 +402,65 @@ Public Function CheckCancelled() As Boolean
     ' than disappearing into whichever operation happened to be running. Timed after the
     ' throttle above, so the calls that return early cost nothing and count nothing.
     Perf.OperationStart "MCP Cancel Check"
+    this.CancelPolls = this.CancelPolls + 1
 
-    ' Check cancel status
+    ' Check cancel status. Each step runs only if the last one succeeded. The first
+    ' error is the one reported, and under Resume Next a failing If condition runs the
+    ' Then branch.
+    ' XMLHTTP reads through the WinINet cache, which answers every later GET of this URL
+    ' with the first response. The two headers make each check reach the server.
+    ' Without them a request made after the first check is never seen. Keep XMLHTTP.
+    ' ServerXMLHTTP skips the cache but cannot connect while one of the async log posts
+    ' above is in flight, because that post finishes on this thread, which is blocked
+    ' here, and the single-threaded callback server is left waiting on it.
     Set http = CreateObject("MSXML2.XMLHTTP")
-    http.Open "GET", strCancelUrl, False
-    http.send
-
-    If http.Status = 200 Then
+    If Err.Number = 0 Then http.Open "GET", strCancelUrl, False
+    If Err.Number = 0 Then http.setRequestHeader "Cache-Control", "no-cache"
+    If Err.Number = 0 Then http.setRequestHeader "If-Modified-Since", "Sat, 1 Jan 2000 00:00:00 GMT"
+    If Err.Number = 0 Then http.send
+    If Err.Number = 0 Then lngStatus = http.Status
+    If Err.Number <> 0 Then
+        strError = Err.Description
+    ElseIf lngStatus <> 200 Then
+        strError = "HTTP " & lngStatus
+    Else
         Set dResponse = modJsonConverter.ParseJson(http.responseText)
-        If dResponse.Exists("cancelled") Then
-            CheckCancelled = CBool(dResponse("cancelled"))
-        Else
+        If Err.Number = 0 Then
+            If dResponse.Exists("cancelled") Then CheckCancelled = CBool(dResponse("cancelled"))
+        End If
+        If Err.Number <> 0 Then
+            strError = Err.Description
             CheckCancelled = False
         End If
-    Else
-        ' If request fails, assume not cancelled
-        CheckCancelled = False
     End If
+    Err.Clear
 
     Perf.OperationEnd
 
     On Error GoTo 0
 
+    ' Inside this class, Log is the MCP Log method above, so qualify the global log.
+    If Len(strError) Then
+        this.CancelPollErrors = this.CancelPollErrors + 1
+        If this.CancelPollErrors = 1 Then
+            modObjects.Log.Add T("MCP cancel check failed, continuing: {0}", var0:=strError), False
+        End If
+    End If
+
 End Function
+
+
+'---------------------------------------------------------------------------------------
+' Procedure : SkipCancelThrottleForTest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Test seam. The next CheckCancelled polls at once instead of waiting out
+'           : the throttle interval. Friend scope keeps it off the API.
+'---------------------------------------------------------------------------------------
+'
+Friend Sub SkipCancelThrottleForTest()
+    this.LastCancelCheck = -CANCEL_CHECK_INTERVAL_MS
+End Sub
 
 
 '---------------------------------------------------------------------------------------

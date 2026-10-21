@@ -59,6 +59,7 @@ Private Type udtRoot
     PauseDepth As Long
     RuntimeError As String
     RuntimeErrorNumber As Long
+    CancelRequested As Boolean
 End Type
 Private m_Root As udtRoot
 
@@ -82,7 +83,10 @@ Private m_cSyncLease As clsRootOperationLease
 ' Instance-owned, one-shot completion-construction fault for lifecycle regressions.
 Private m_lngCompletionFaultForTest As Long
 
-
+' Test seam for the cancel poll (see SetCancelPollForTest). Zero when disarmed. Roots
+' do not reset it, so a test can arm it before the run it is meant to stop.
+Private m_lngFakeCancelOnCheck As Long
+Private m_lngFakeCancelChecks As Long
 
 
 '---------------------------------------------------------------------------------------
@@ -388,15 +392,118 @@ Public Function Pulse()
 End Function
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : CheckCancelRequest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The one checkpoint for an MCP cancel request. The test loop and the
+'           : per-object loops of export and build call it at their safe points. A
+'           : request goes to RequestCancel, which sends the signal that closing the
+'           : main form sends. Only a running root polls. A paused root is running
+'           : foreign code. Returns True once this root has seen a request.
+'---------------------------------------------------------------------------------------
+'
+Public Function CheckCancelRequest() As Boolean
+
+    If m_Root.CancelRequested Then
+        CheckCancelRequest = True
+        Exit Function
+    End If
+    If m_Root.State <> eosRunning Then Exit Function
+    If Not CancelPolled() Then Exit Function
+
+    CheckCancelRequest = RequestCancel("clsOperation.CheckCancelRequest")
+
+End Function
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : RequestCancel
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : The one owner of a cancel request for this root. A request can come from
+'           : the MCP poll, from closing the main form, or from a dismiss cancel. This
+'           : records it and sends the signal the loops stop on. A test run gets
+'           : TestRunner.Cancel. Export, build and merge get a critical error. Only a
+'           : running root accepts a request. With no root, a finished one, or a
+'           : staged or paused one, nothing changes and the result is False. A request
+'           : already recorded returns True and is not sent again. A request is not a
+'           : result. Finish reports the root cancelled unless a blocked decision or a
+'           : runtime error takes precedence.
+'---------------------------------------------------------------------------------------
+'
+Public Function RequestCancel(Optional ByVal strSource As String = "clsOperation.RequestCancel") As Boolean
+
+    If m_Root.Completed Then Exit Function
+    If m_Root.CancelRequested Then
+        RequestCancel = True
+        Exit Function
+    End If
+    If m_Root.State <> eosRunning Then Exit Function
+
+    m_Root.CancelRequested = True
+    RequestCancel = True
+    If m_Root.OperationType = eotTestRun Then
+        If IsSessionSingleton Then TestRunner.Cancel
+    ElseIf IsSessionSingleton Then
+        Log.Error eelCritical, T("Canceled Operation"), strSource
+    Else
+        ' A private instance must not write to the running operation's log.
+        Me.ErrorLevel = eelCritical
+    End If
+
+End Function
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : CancelRequested
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : True once RequestCancel has accepted a cancel request for this root. Kept
+'           : after Finish until the next root begins.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get CancelRequested() As Boolean
+    CancelRequested = m_Root.CancelRequested
+End Property
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : HasRootRuntimeError
+' Author    : Josh
+' Date      : 10/19/2026
+' Purpose   : True once RecordRootRuntimeError has kept an error for this root. A
+'           : wrap-up that reports its own result reads it, so a runtime error keeps
+'           : precedence over a cancel request as it does in Finish.
+'---------------------------------------------------------------------------------------
+'
+Public Property Get HasRootRuntimeError() As Boolean
+    HasRootRuntimeError = (Len(m_Root.RuntimeError) > 0)
+End Property
 
 
+'---------------------------------------------------------------------------------------
+' Procedure : CancelPolled
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : The seam around the cancel poll. An armed fake answers in place of MCP.
+'           : Otherwise only the session operation asks, through the emitter that
+'           : holds its callback. CheckCancelled returns at once, with no HTTP
+'           : request, when that emitter holds no callback.
+'---------------------------------------------------------------------------------------
+'
+Private Function CancelPolled() As Boolean
 
+    If m_lngFakeCancelOnCheck > 0 Then
+        m_lngFakeCancelChecks = m_lngFakeCancelChecks + 1
+        If m_lngFakeCancelChecks < m_lngFakeCancelOnCheck Then Exit Function
+        SetCancelPollForTest 0
+        CancelPolled = True
+    ElseIf IsSessionSingleton Then
+        If Not m_RootEmitter Is Nothing Then CancelPolled = m_RootEmitter.CheckCancelled
+    End If
+
+End Function
 
 
 '---------------------------------------------------------------------------------------
@@ -411,10 +518,19 @@ Friend Property Let CompletionFaultForTest(ByVal lngNumber As Long)
 End Property
 
 
-
-
-
-
+'---------------------------------------------------------------------------------------
+' Procedure : SetCancelPollForTest
+' Author    : Josh
+' Date      : 09/30/2026
+' Purpose   : Test seam. The cancel poll reports a request on the Nth check from now,
+'           : once, in place of asking MCP. Pass 0 to disarm. Arm a private instance
+'           : unless the test means to cancel the session's running operation.
+'---------------------------------------------------------------------------------------
+'
+Friend Sub SetCancelPollForTest(ByVal lngCancelOnCheck As Long)
+    m_lngFakeCancelOnCheck = IIf(lngCancelOnCheck > 0, lngCancelOnCheck, 0)
+    m_lngFakeCancelChecks = 0
+End Sub
 
 
 '---------------------------------------------------------------------------------------
@@ -608,6 +724,7 @@ Private Sub InitializeRoot(intType As eOperationType, ByVal intPolicy As eDecisi
     m_Root.AppHwnd = hWndAccessApp
     m_Root.RuntimeError = vbNullString
     m_Root.RuntimeErrorNumber = 0
+    m_Root.CancelRequested = False
     Set m_TransferOutcome = Nothing
     Set m_PolicyComparisonRefusal = Nothing
 
@@ -663,6 +780,10 @@ Private Sub FinishRootInternal(Optional intResult As eOperationResult = eorUnkno
     ' An unresolved prompt is not a successful or merely cancelled run.
     If Not ApplyBlockedResult() Then
         If intResult > eorUnknown Then Me.Result = intResult
+        ' A cancel request is a result only when no runtime error took precedence.
+        ' A test run keeps the result its runner reports, with the partial results.
+        If m_Root.CancelRequested And m_Root.OperationType <> eotTestRun _
+            And Len(m_Root.RuntimeError) = 0 Then Me.Result = eorCanceled
         If Me.Result = eorUnknown Then
             Me.Result = IIf(Me.ErrorLevel >= eelError, eorFailed, eorSuccess)
         End If
