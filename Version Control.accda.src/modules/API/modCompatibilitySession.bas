@@ -381,17 +381,19 @@ Public Function APIExecute(ByVal envelope As String, ByVal method As String, _
     Exit Function
 Failed:
     LeaveCompatibilitySession
-    APIExecute = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
+    APIExecute = RefusalJson("api_error", Err.Description, False)
 End Function
 
 ' Synchronous MCP work under the caller's public operation ID. The session is validated
 ' as for APIExecute, and the request is dispatched in this library, which admitted the
-' session.
+' session. This replaces APIMCP, which had no session.
 Public Function APIExecuteMCP(ByVal envelope As String, ByVal operationId As String, ByVal method As String, _
     Optional arg1 As Variant, Optional arg2 As Variant, Optional arg3 As Variant) As Variant
     Dim refused As String
     Dim request As clsOperationRequest
     Dim args As New Collection
+    ' Re-admission failures must not log into another operation.
+    InitializeRequestErrors "APIExecuteMCP"
     ' Automation must never stop at a debugger break, as in API.
     SuppressErrorBreaks
     LogUnhandledErrors
@@ -419,7 +421,7 @@ Finished:
     Exit Function
 Failed:
     LeaveCompatibilitySession
-    APIExecuteMCP = AsyncRequestFailure(vbNullString, Err.Description, lngNumber:=Err.Number)
+    APIExecuteMCP = RefusalJson("api_error", Err.Description, False)
     RestoreErrorBreaks
 End Function
 
@@ -447,7 +449,7 @@ Public Function APIExecuteAsync(ByVal envelope As String, ByVal callback As Stri
     Exit Function
 Failed:
     LeaveCompatibilitySession
-    APIExecuteAsync = AsyncRequestFailure(callback, Err.Description, lngNumber:=Err.Number)
+    APIExecuteAsync = PostCompatibilityRefusal(callback, RefusalJson("api_error", Err.Description, False))
 End Function
 
 Public Function PostCompatibilityRefusal(ByVal callback As String, ByVal refused As String) As String

@@ -109,7 +109,7 @@ End Sub
 ' Procedure : TestAutomationEntryPointsBalanceErrorBreaks
 ' Author    : Codex
 ' Date      : 10/20/2026
-' Purpose   : APIMCP and the queued timer dispatch suppress debugger breaks while they
+' Purpose   : APIExecuteMCP and the queued timer dispatch suppress debugger breaks while they
 '           : run and restore the exact depth on their refusal and failure exits.
 '---------------------------------------------------------------------------------------
 '
@@ -118,10 +118,10 @@ Public Sub TestAutomationEntryPointsBalanceErrorBreaks()
     Dim strResult As String
 
     lngBefore = ErrorBreakSuppressionDepth
-    strResult = APIMCP(vbNullString, "GetVCSVersion")
-    TestAssert InStr(strResult, "invalid_operation_id") > 0, "APIMCP refuses an empty operation ID"
+    strResult = APIExecuteMCP(vbNullString, vbNullString, "GetVCSVersion")
+    TestAssert InStr(strResult, "compatibility_session") > 0, "APIExecuteMCP refuses a missing session"
     TestAssert ErrorBreakSuppressionDepth = lngBefore, _
-        "APIMCP restores the exact break-suppression depth on refusal"
+        "APIExecuteMCP restores the exact break-suppression depth on refusal"
 
     HandleAPIAsyncOperation "Export", "[]", "not json"
     TestAssert ErrorBreakSuppressionDepth = lngBefore, _

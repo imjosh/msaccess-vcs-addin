@@ -278,8 +278,17 @@ def run(evidence, label, case_set="all", probe_bridge=False):
                 "backups": sorted(str(p.relative_to(folder)) for p in folder.rglob("*_VCSBackup*")),
             }
 
+        # A51: requests with policy or session-owned state need a session/1 envelope.
+        identity = decode(app.Run(library + ".APIIdentity"))
+        envelope = json.dumps({
+            "session_id": str(uuid.uuid4()), "server_instance": str(uuid.uuid4()),
+            "connection_id": str(uuid.uuid4()), "server_version": "0.3.0-dev.18",
+            "protocol": "msaccess-vcs.session/1", "addin_instance": identity["addin_instance"]})
+        record["compatibility_handshake"] = decode(app.Run(library + ".APIHandshake", envelope))
+        require(record["compatibility_handshake"].get("success") is True, record["compatibility_handshake"])
+
         def api(method, *arguments):
-            raw = app.Run(library + ".API", method, *arguments)
+            raw = app.Run(library + ".APIExecute", envelope, method, *arguments)
             raw = raw[0] if isinstance(raw, tuple) else raw
             return json.loads(raw) if isinstance(raw, str) and raw.startswith("{") else raw
 
@@ -439,7 +448,7 @@ def run(evidence, label, case_set="all", probe_bridge=False):
             options_path.replace(held_options)
             missing["source_options_absent_before_dispatch"] = not options_path.exists()
             try:
-                missing["admission"] = decode(app.Run(library + ".APIAsync", endpoint.info(missing_id), "MergeBuild", "block"))
+                missing["admission"] = decode(app.Run(library + ".APIExecuteAsync", envelope, endpoint.info(missing_id), "MergeBuild", "block"))
                 require(missing["admission"].get("async") is True, missing)
                 deadline = time.monotonic() + 30
                 terminals = []
@@ -579,15 +588,15 @@ def run(evidence, label, case_set="all", probe_bridge=False):
                 require(statements[key].get("errorNumber") == -2147219094, statements)
 
             sync_id = "sync-mcp-" + uuid.uuid4().hex
-            sync = decode(app.Run(library + ".APIMCP", sync_id, "ExportObject", "queries", "qryF3RequestFixture", "block"))
-            reused = decode(app.Run(library + ".APIMCP", sync_id, "ExportObject", "queries", "qryF3RequestFixture", "block"))
+            sync = decode(app.Run(library + ".APIExecuteMCP", envelope, sync_id, "ExportObject", "queries", "qryF3RequestFixture", "block"))
+            reused = decode(app.Run(library + ".APIExecuteMCP", envelope, sync_id, "ExportObject", "queries", "qryF3RequestFixture", "block"))
             record["sync_mcp"] = {"id": sync_id, "outcome": sync, "reused": reused}
             require(sync["operation_id"] == sync_id and sync["initiating_source"] == "mcp", sync)
             require(reused["error_pattern"] == "operation_id_reused", reused)
 
             typed_id = "typed-async-" + uuid.uuid4().hex
             start = len(endpoint.callbacks)
-            admission = decode(app.Run(library + ".APIAsync", endpoint.info(typed_id), "ExportByType", ["queries"], False, "block"))
+            admission = decode(app.Run(library + ".APIExecuteAsync", envelope, endpoint.info(typed_id), "ExportByType", ["queries"], False, "block"))
             require(admission.get("async") is True, admission)
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
@@ -716,7 +725,7 @@ def run(evidence, label, case_set="all", probe_bridge=False):
                     cleanup_library = str(Path(os.environ["APPDATA"]) / "MSAccessVCS" / "Version Control")
                     try:
                         cleanup_checkpoint("addin_form_close_started")
-                        dismissed = decode(app.Run(cleanup_library + ".API", "DismissAddinDialog", "frmVCSMain", "close"))
+                        dismissed = decode(app.Run(cleanup_library + ".APIExecute", envelope, "DismissAddinDialog", "frmVCSMain", "close"))
                         record["addin_form_close_result"] = dismissed
                         cleanup_checkpoint("addin_form_close_returned")
                         require((dismissed.get("success") is True and dismissed.get("closed") is True)
