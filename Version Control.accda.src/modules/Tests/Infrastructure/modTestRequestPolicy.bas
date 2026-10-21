@@ -186,6 +186,8 @@ ErrHandler:
     Resume CleanUp
 End Sub
 
+' API calls forward the envelope of the session that invoked the probe. Without one
+' they are legacy calls on the 5.1.0 surface (A51).
 Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCallbackInfo As String) As String
     Dim cRoot As clsRootOperationLease
     Dim cPrior As clsOperationRequest
@@ -225,16 +227,16 @@ Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCa
             Set d("before") = ParseJson(ModeOnlyScopeProbe("snapshot"))
             Select Case strCase
                 Case "active_isolation"
-                    d("inspection") = API("ListAddinDialogs")
-                    d("setter") = API("SetOperationPolicy", "decline")
-                    d("mode") = API("SetInteractionMode", 2)
-                    d("test") = API("RunFilteredTests", "skip")
-                    d("async") = APIAsync(strCallbackInfo, "Export", "skip")
+                    d("inspection") = API("ListAddinDialogs", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+                    d("setter") = API("SetOperationPolicy", "decline", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+                    d("mode") = API("SetInteractionMode", 2, strSessionEnvelope:=CurrentCompatibilityEnvelope())
+                    d("test") = API("RunFilteredTests", "skip", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+                    d("async") = APIAsync(strCallbackInfo, "Export", "skip", strSessionEnvelope:=CurrentCompatibilityEnvelope())
                     d("manual") = HandleRibbonCommand("btnShowOptions")
                     d("dynamic") = RunInAddIn("RequestPolicyNoop", True)
                 Case "cancel_target"
-                    d("missing") = API("DismissAddinDialog", "frmVCSMain", "cancel")
-                    d("mismatch") = API("DismissAddinDialog", "frmVCSMain", "cancel", "foreign-operation")
+                    d("missing") = API("DismissAddinDialog", "frmVCSMain", "cancel", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+                    d("mismatch") = API("DismissAddinDialog", "frmVCSMain", "cancel", "foreign-operation", strSessionEnvelope:=CurrentCompatibilityEnvelope())
                 Case "stale_continuation"
                     RunBuildFromContinuation "foreign-token", "C:\missing\", False
                 Case "recreation"
@@ -258,7 +260,7 @@ Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCa
             d("queue") = strQueue
             Set d("before") = RequestTimerSnapshot()
             d("refusal") = SetTimer("RequestPolicyNoop", "foreign", "changed")
-            d("async_refusal") = APIAsync(strCallbackInfo, "Export", "block")
+            d("async_refusal") = APIAsync(strCallbackInfo, "Export", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
             Set d("after") = RequestTimerSnapshot()
             DispatchReservedTimerForTest
         Case "stale_timer_event"
@@ -273,7 +275,7 @@ Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCa
             d("queue") = SetTimer("RequestPolicyNoop")
             d("pending") = TimerIsPending
         Case "queue_recheck"
-            d("queue") = APIAsync(strCallbackInfo, "Export", "block")
+            d("queue") = APIAsync(strCallbackInfo, "Export", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
             Set cRequest = CreateOperationRequest(eosExternalAPI)
             Set IncomingOperationRequest = cRequest
             Set cRoot = Operation.TryBeginRoot(eotOther, edpSkip)
@@ -291,7 +293,7 @@ Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCa
             Set IncomingOperationRequest = cRequest
             Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
             Operation.Heartbeat = DateAdd("n", -11, Now)
-            d("inspection") = API("ListAddinDialogs")
+            d("inspection") = API("ListAddinDialogs", strSessionEnvelope:=CurrentCompatibilityEnvelope())
             d("result") = Operation.Result
             Set d("completion") = Operation.LastCompletion
             d("active") = Operation.IsActive
@@ -321,9 +323,9 @@ Public Function RequestPolicyProbe(ByVal strCase As String, Optional ByVal strCa
             Set IncomingOperationRequest = cRequest
             Set cRoot = Operation.TryBeginRoot(eotOther, edpSkip)
             Set d("before") = ParseJson(ModeOnlyScopeProbe("snapshot"))
-            d("stale_cancel") = API("DismissAddinDialog", "frmVCSMain", "cancel", strOldId)
+            d("stale_cancel") = API("DismissAddinDialog", "frmVCSMain", "cancel", strOldId, strSessionEnvelope:=CurrentCompatibilityEnvelope())
             Set d("after_stale") = ParseJson(ModeOnlyScopeProbe("snapshot"))
-            d("matching_cancel") = API("DismissAddinDialog", "frmVCSMain", "cancel", Operation.PublicId)
+            d("matching_cancel") = API("DismissAddinDialog", "frmVCSMain", "cancel", Operation.PublicId, strSessionEnvelope:=CurrentCompatibilityEnvelope())
             d("matching_result") = Operation.Result
             cRoot.Complete eorCanceled
         Case "ribbon_queue_failure"

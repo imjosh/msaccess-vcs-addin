@@ -634,9 +634,9 @@ Public Function NativeCloseLiveCall(ByVal strCase As String) As String
         Case "single-export", "single-import"
             Operation.Source = eosExternalAPI
             If strCase = "single-export" Then
-                NativeCloseLiveCall = API("ExportObject", "form", "frmNativeCloseProbe", "block")
+                NativeCloseLiveCall = API("ExportObject", "form", "frmNativeCloseProbe", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
             Else
-                NativeCloseLiveCall = API("ImportObject", "form", "frmNativeCloseProbe", "block")
+                NativeCloseLiveCall = API("ImportObject", "form", "frmNativeCloseProbe", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
             End If
         Case Else
             NativeCloseLiveCall = "Not run: unknown native-close case."

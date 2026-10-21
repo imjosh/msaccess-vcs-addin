@@ -308,6 +308,7 @@ Private Function BuildAsAdmissionState() As Dictionary
     dState.Add "log_active", Log.Active
     dState.Add "export_folder", Options.GetExportFolder
     dState.Add "timer_pending", TimerIsPending
+    dState.Add "compatibility_envelope", CurrentCompatibilityEnvelope()
     For Each frm In Forms
         Set dForm = New Dictionary
         dForm.Add "name", frm.Name

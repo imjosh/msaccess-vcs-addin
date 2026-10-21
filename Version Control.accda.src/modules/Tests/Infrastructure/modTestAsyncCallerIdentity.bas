@@ -44,8 +44,10 @@ Public Function ProbePendingAsyncCallers(ByVal strOwnerCallback As String, _
     intPrior = Operation.InteractionMode
     Operation.InteractionMode = eimSilent
     m_blnExpectPendingPolicy = True
-    dResult.Add "owner_start", APIAsync(strOwnerCallback, "RunFilteredTests", "block")
-    dResult.Add "refused_start", APIAsync(strRefusedCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE)
+    dResult.Add "owner_start", APIAsync(strOwnerCallback, "RunFilteredTests", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    dResult.Add "refused_start", APIAsync(strRefusedCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE, strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    ' Dispatch enters its own queued session, after both launches unwind.
+    LeaveCompatibilitySession
     ' Dispatch runs after both launches return.
     If TimerIsPending Then RunPendingTimerRequest
 
@@ -69,7 +71,7 @@ End Function
 Public Function ProbeAsyncAdmissionError(ByVal strCallbackInfo As String) As String
     Dim dResult As New Dictionary
     On Error GoTo ErrHandler
-    dResult.Add "launch", APIAsync(strCallbackInfo, "RunFilteredTests", Null)
+    dResult.Add "launch", APIAsync(strCallbackInfo, "RunFilteredTests", Null, strSessionEnvelope:=CurrentCompatibilityEnvelope())
     ProbeAsyncAdmissionError = ConvertToJson(dResult)
     Exit Function
 ErrHandler:
@@ -86,8 +88,8 @@ Public Function ProbePendingBeforeSync(ByVal strRefusedCallback As String) As St
     Dim strErr As String
     On Error GoTo ErrHandler
     m_blnDispatchPending = True
-    dResult.Add "pending_start", APIAsync(strRefusedCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE)
-    dResult.Add "owner_result", API("RunFilteredTests", "block")
+    dResult.Add "pending_start", APIAsync(strRefusedCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE, strSessionEnvelope:=CurrentCompatibilityEnvelope())
+    dResult.Add "owner_result", API("RunFilteredTests", "block", strSessionEnvelope:=CurrentCompatibilityEnvelope())
     dResult.Add "running_probe", ParseJson(m_strLastProbe)
 CleanUp:
     On Error Resume Next
@@ -128,6 +130,7 @@ Public Function ProbeRunningAsyncCaller(ByVal blnUnused As Boolean) As String
     Dim dLaunch As Dictionary
     Dim cOutcome As clsPromptOutcome
     Dim strCallback As String
+    Dim strEnvelope As String
     Dim lngErr As Long
     Dim strErr As String
 
@@ -142,11 +145,19 @@ Public Function ProbeRunningAsyncCaller(ByVal blnUnused As Boolean) As String
         dResult.Add "deferred_dispatch", TimerIsPending
         If TimerIsPending Then
             ' Keep the API root busy while the timer repeats its admission.
+            ' The timer validates its own envelope, so leave the ambient session around it.
+            strEnvelope = CurrentCompatibilityEnvelope()
+            LeaveCompatibilitySession
             RunPendingTimerRequest
+            If Len(strEnvelope) > 0 Then
+                strErr = EnterCompatibilitySession(strEnvelope)
+                If Len(strErr) > 0 Then dResult.Add "probe_error", strErr
+                strErr = vbNullString
+            End If
         End If
         dResult.Add "timer_pending_after", TimerIsPending
     Else
-        Set dLaunch = ParseJson(APIAsync(strCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE))
+        Set dLaunch = ParseJson(APIAsync(strCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE, strSessionEnvelope:=CurrentCompatibilityEnvelope()))
         dResult.Add "launch", dLaunch
         ' An older add-in admitted this timer and overwrote MCP before the API refused it.
         If dLaunch.Exists("async") Then RunPendingTimerRequest
@@ -260,7 +271,7 @@ Public Function ProbeDeferredBusyRoot(ByVal strOwnerCallback As String, _
     Dim strErr As String
     On Error GoTo ErrHandler
     If Operation.IsActive Or TimerIsPending Then Err.Raise 5, , "Probe requires an idle host"
-    dResult.Add "pending_start", APIAsync(strRefusedCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE)
+    dResult.Add "pending_start", APIAsync(strRefusedCallback, MUST_NOT_RUN_METHOD, MUST_NOT_RUN_TYPE, strSessionEnvelope:=CurrentCompatibilityEnvelope())
     Set cRoot = Operation.TryBeginRoot(eotOther, edpBlock)
     If cRoot Is Nothing Then Err.Raise 5, , "Probe root was refused"
     ' The root registers its own request's callback, so the owner's comes after it.
@@ -269,6 +280,7 @@ Public Function ProbeDeferredBusyRoot(ByVal strOwnerCallback As String, _
     Log.Add "Deferred timer owner", False
     Log.SaveFile strLogPath
     dResult.Add "before", RunningCallerSnapshot()
+    LeaveCompatibilitySession
     If TimerIsPending Then RunPendingTimerRequest
     dResult.Add "timer_pending_after", TimerIsPending
     dResult.Add "after", RunningCallerSnapshot()
