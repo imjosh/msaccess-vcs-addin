@@ -263,3 +263,40 @@ Public Sub LegacyCannotBorrowAmbientAdmission()
     LeaveCompatibilitySession
     APIDisconnectSession ConvertToJson(request)
 End Sub
+
+Public Sub LegacyOptionOverridesLeaveSessionIntact()
+    ' RegisterSession and EndSession manage the 5.1.0 option overrides, which stay
+    ' instance-wide. Legacy calls to them, even EndSession with an admitted session's
+    ' id, leave that compatibility session unchanged and its next envelope admitted.
+    Dim request As Dictionary
+    Dim admitted As String
+    Dim counters As Dictionary
+    Dim envelope As String
+    Dim prior As String
+    Dim value As Variant
+    Dim legacy As Variant
+    Set request = NewRequest("0.1.0")
+    TestAssert ParseJson(APIHandshake(ConvertToJson(request)))("success") = True
+    request.Remove "server_version"
+    request.Remove "protocol"
+    envelope = ConvertToJson(request)
+    Set counters = ParseJson(APICompatibilityCounters())
+    prior = modObjects.SessionId
+    value = API("GetOption", "ShowDebug")
+    For Each legacy In Array(API("RegisterSession", request("session_id")), _
+        API("SetOption", "ShowDebug", value), API("GetOption", "ShowDebug"), _
+        API("EndSession", request("session_id")))
+        ' Each passes the A51 gate as a 5.1.0 call; its own outcome is not at issue.
+        TestAssert InStr(1, CStr(legacy), "compatibility_session", vbTextCompare) = 0
+    Next
+    modObjects.SessionId = prior
+    TestAssert ParseJson(APIValidateSession(envelope))("success") = True
+    TestAssert ParseJson(APICompatibilityCounters())("sessions") = counters("sessions")
+    TestAssert ParseJson(APICompatibilityCounters())("handshakes") = counters("handshakes")
+    TestAssert EnterCompatibilitySession(envelope) = vbNullString
+    admitted = CStr(API("GetOption", "ExportFolder", strSessionEnvelope:=CurrentCompatibilityEnvelope()))
+    LeaveCompatibilitySession
+    TestAssert InStr(1, admitted, "compatibility_session", vbTextCompare) = 0
+    TestAssert ParseJson(APICompatibilityCounters())("dispatches") = counters("dispatches") + 1
+    APIDisconnectSession envelope
+End Sub
