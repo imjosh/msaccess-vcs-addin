@@ -83,7 +83,7 @@ def live(label):
     pid=stamp=None
     initial_trapping=None
     fixture=folder/'fixture.accdb'
-    result={'cases':{}}
+    result={'cases':{}, 'seam_mode': SEAM_MODE}
     try:
         endpoint = Endpoint()
         wire_errors = []
@@ -364,7 +364,7 @@ def live(label):
             saved = item.get('saved_results', {})
             item['tests_run'] = saved.get('summary', {}).get('subs')
             found += [m for c, m in (
-                (item['terminals'] and item['terminals'][0].get('cancelled') is True, 'test run reports cancelled'),
+                (saved.get('cancelled') is True, 'saved test run reports cancelled'),
                 (saved.get('allPassed') is False, 'cancelled run is not allPassed'),
                 (item['tests_run'] == 1, 'partial results keep the test that ran')) if not c]
             failures += found
@@ -389,17 +389,33 @@ def live(label):
             failures += found
             item, found = seam_case('seam_export_after', 'FullExport', ('block',), 0, 'complete')
             failures += found
+            if SEAM_MODE == 'build':
+                # A full build runs the regular loop for project files and the
+                # fast loop for modules. Its cancelled host is disposable.
+                before_modules = sum((source / n).is_file() for n in
+                    ('project.json', 'vbe-project.json', 'vbe-references.json', 'proj-properties.json'))
+                item, found = seam_case('seam_build_regular', 'Build', (str(source), 'block'), 1)
+                found += [] if not stage(item, 'Importing ').startswith('Importing modules') and item['stage'] else ['build stopped in its regular loop']
+                failures += found
+                item, found = seam_case('seam_build_fast', 'Build', (str(source), 'block'), before_modules + 2)
+                item['files_before_modules'] = before_modules
+                found += [] if stage(item, 'Importing ').startswith('Importing modules') else ['build stopped in its fast loop']
+                failures += found
+                save_live()
+                return failures
             # The completed full export is the merge baseline. MergeBuild reads merge
             # availability from frmVCSMain, which sets it on load, so close a hidden
             # copy an earlier operation left loaded.
             app.DoCmd.Close(2, 'frmVCSMain')
             # A merge imports only changed files, so change one module's source.
             changed = next(source.rglob('modTestPolicyFixture.bas'))
-            changed.write_bytes(changed.read_bytes() + b"' Seam merge marker\r\n")
-            item, found = seam_case('seam_merge_loop', 'MergeBuild', ('block',), 1)
+            original = changed.read_bytes()
+            changed.write_bytes(original + b"' Seam merge marker\r\n")
+            try:
+                item, found = seam_case('seam_merge_loop', 'MergeBuild', ('block',), 1)
+            finally:
+                changed.write_bytes(original)
             found += [] if stage(item, 'Merging ').startswith('Merging modules') else ['merge stopped in its file loop']
-            failures += found
-            item, found = seam_case('seam_merge_after', 'MergeBuild', ('block',), 0, 'complete')
             failures += found
             # ExportByType and ImportByType: a cancel and an accepted request after Begin,
             # outside the runner's root, in this library host.
@@ -414,20 +430,6 @@ def live(label):
                         failures.append(key + ': ' + str(checks[key]))
             save_live()
             print('scoped_sync', checks, flush=True)
-            # A full build runs the regular loop for project files and the fast loop
-            # for modules. Last: a build replaces this fixture. An unarmed full build
-            # of this host's own project stops in FinalizeImports ('Imported module
-            # not found after import'), so these cases have no completing build.
-            before_modules = sum((source / n).is_file() for n in
-                ('project.json', 'vbe-project.json', 'vbe-references.json', 'proj-properties.json'))
-            item, found = seam_case('seam_build_regular', 'Build', (str(source), 'block'), 1)
-            found += [] if not stage(item, 'Importing ').startswith('Importing modules') and item['stage'] else ['build stopped in its regular loop']
-            failures += found
-            # The fast loop checks before each module: the second check is after the first module.
-            item, found = seam_case('seam_build_fast', 'Build', (str(source), 'block'), before_modules + 2)
-            item['files_before_modules'] = before_modules
-            found += [] if stage(item, 'Importing ').startswith('Importing modules') else ['build stopped in its fast loop']
-            failures += found
             save_live()
             return failures
         fixture = Path(scratch.name) / 'fixture.accdb'
@@ -572,7 +574,9 @@ if __name__ == '__main__':
     parser.add_argument('--evidence',type=Path,required=True)
     parser.add_argument('--label',required=True)
     parser.add_argument('--client-source',type=Path,required=True)
+    parser.add_argument('--seam-mode',choices=('merge', 'build'),default='merge')
     args=parser.parse_args()
+    SEAM_MODE=args.seam_mode
     OUT=args.evidence.resolve()
     assert not OUT.is_relative_to(Path(__file__).resolve().parents[1])
     assert Path(args.label).name==args.label

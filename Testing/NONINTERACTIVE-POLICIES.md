@@ -104,10 +104,11 @@ new request inside the 500 ms throttle, an uncached poll that sees the switched 
 and a poll after a last check just before midnight. Its `seam_*` cases arm
 `SetCancelPollForTest` before an asynchronous run, so the Nth cancel check sees a
 request. They stop the test loop, the export scan and object loops, the merge loop,
-and the regular and fast build loops. Each needs one `cancelled` terminal, a ready
-root, and, except for the builds, an unarmed run of the same method that completes.
-An unarmed full build of the checker host's own project stops after its module
-imports, so the build cases check only where the cancel stopped.
+and the regular and fast build loops. Each needs one `cancelled` terminal and a
+ready root. Export and test cases also have an unarmed run that completes.
+An unarmed build or merge of this checker host stops after importing its own
+module, so those cases check where the cancel stopped. Build and merge seams
+run in separate disposable hosts because a cancelled build changes its host.
 The refusal driver retains an active owner while other requests are refused.
 Require unchanged owner state, zero refusal terminal attempts,
 and exactly one owner completion. These drivers retain disposable user databases.
