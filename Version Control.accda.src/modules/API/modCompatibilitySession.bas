@@ -18,6 +18,7 @@ Private m_dSessions As Dictionary
 Private m_lngHandshakes As Long
 Private m_lngValidations As Long
 Private m_lngDispatches As Long
+Private m_blnDispatchAdmitted As Boolean
 
 Private Type GUID
     Data1 As Long
@@ -414,7 +415,7 @@ Public Function APIExecuteMCP(ByVal envelope As String, ByVal operationId As Str
     If Not IsMissing(arg2) Then args.Add arg2
     If Not IsMissing(arg3) Then args.Add arg3
     CountCompatibilityDispatch
-    APIExecuteMCP = DispatchOperationRequest(request, method, args)
+    APIExecuteMCP = DispatchOperationRequest(request, method, args, True)
 Finished:
     LeaveCompatibilitySession
     RestoreErrorBreaks
@@ -463,10 +464,19 @@ End Function
 
 ' An admitted rebuild delegates to a fresh connection in a fresh Access instance.
 ' Carry versions only on this new handshake, never on ordinary commands.
+' A51: whether the dispatch in progress was admitted by its own envelope. Returns the
+' prior value so DispatchOperationRequest can restore it. A legacy dispatch made
+' while another call's session is entered is not admitted.
+Public Function SetDispatchAdmission(ByVal admitted As Boolean) As Boolean
+    SetDispatchAdmission = m_blnDispatchAdmitted
+    m_blnDispatchAdmitted = admitted
+End Function
+
+' The worker inherits only the admission of the dispatch that launched it.
 Public Function WorkerCompatibilityArguments() As Variant
     Dim incoming As Dictionary
     Dim entry As Dictionary
-    If Not CompatibilityDispatchAllowed Then Exit Function
+    If Not m_blnDispatchAdmitted Or Not CompatibilityDispatchAllowed Then Exit Function
     Set incoming = ParseJson(m_strEnvelope)
     Set entry = m_dSessions(incoming("session_id"))
     WorkerCompatibilityArguments = Array(CStr(entry("server_version")), _

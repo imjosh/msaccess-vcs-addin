@@ -71,7 +71,12 @@ Public Function Run_BuildAndInstall(strSourcePath As String, _
     Optional strCallbackUrl As String, _
     Optional strOperationId As String) As Boolean
 
+    Dim admission As Variant
     Dim cJob As clsJob
+    ' Empty unless the dispatch that launched this rebuild was admitted (A51).
+    admission = WorkerCompatibilityArguments()
+    If IsEmpty(admission) Then admission = Array("", "", "", "", "")
+
     Set cJob = CallWorker(PROJECT_NAME, 300, "BuildAndInstall", _
         """" & strSourcePath & """", _
         IIf(blnUnattended, "1", "0"), _
@@ -80,7 +85,12 @@ Public Function Run_BuildAndInstall(strSourcePath As String, _
         modInstall.GetThisProcessId, _
         """" & strPhaseStarted & """", _
         """" & strCallbackUrl & """", _
-        """" & strOperationId & """")
+        """" & strOperationId & """", _
+        """" & admission(0) & """", _
+        """" & admission(1) & """", _
+        """" & admission(2) & """", _
+        """" & admission(3) & """", _
+        """" & admission(4) & """")
     Run_BuildAndInstall = Not cJob Is Nothing
 
 End Function
@@ -921,6 +931,7 @@ Sub Main()
     Dim strCallbackUrl
     Dim strOperationId
     Dim strResultFile
+    Dim strServerVersion, strServerInstance, strConnection, strSession, strExpectedAddin
 
 
     Set objFSO = CreateObject("Scripting.FileSystemObject")
@@ -1013,9 +1024,17 @@ Sub Main()
             If WScript.Arguments.Count >= 9 Then strPhaseStarted = WScript.Arguments(8)
             If WScript.Arguments.Count >= 10 Then strCallbackUrl = WScript.Arguments(9)
             If WScript.Arguments.Count >= 11 Then strOperationId = WScript.Arguments(10)
+            strServerVersion = "": strServerInstance = "": strConnection = "": strSession = "": strExpectedAddin = ""
+            If WScript.Arguments.Count >= 16 Then
+                strServerVersion = WScript.Arguments(11)
+                strServerInstance = WScript.Arguments(12)
+                strConnection = WScript.Arguments(13)
+                strSession = WScript.Arguments(14)
+                strExpectedAddin = WScript.Arguments(15)
+            End If
             BuildAndInstall WScript.Arguments(3), strUnattended, strStatusFile, _
                 strAccessPath, strLaunchPid, strPhaseStarted, strCallbackUrl, _
-                strOperationId
+                strOperationId, strServerVersion, strServerInstance, strConnection, strSession, strExpectedAddin
 
         Case "CheckDatabaseAccessible"
             ' Args: result file. The subject is the caller's current database, which
@@ -1390,7 +1409,8 @@ End Function
 '---------------------------------------------------------------------------------------
 '
 Function BuildAndInstall(strSourcePath, strUnattended, strStatusFile, _
-    strAccessPath, strLaunchPid, strPhaseStarted, strCallbackUrl, strOperationId)
+    strAccessPath, strLaunchPid, strPhaseStarted, strCallbackUrl, strOperationId, _
+    strServerVersion, strServerInstance, strConnection, strSession, strExpectedAddin)
 
     Dim objFSO
     Dim objNewAccess
@@ -1408,6 +1428,7 @@ Function BuildAndInstall(strSourcePath, strUnattended, strStatusFile, _
     Dim strCallbackInfo
     Dim strBuildResult
     Dim strInstallStatusFile
+    Dim strIdentity, strInstance, strRequest, strAdmission, strEnvelope
 
     Set objFSO = CreateObject("Scripting.FileSystemObject")
     Set WshShell = CreateObject("WScript.Shell")
@@ -1509,7 +1530,50 @@ Function BuildAndInstall(strSourcePath, strUnattended, strStatusFile, _
     ' launcher's public ID. The existing log/progress pump follows that child;
     ' the status-file watcher remains authoritative for the complete rebuild.
     On Error Resume Next
-    If Len(strCallbackUrl) > 0 And Len(strOperationId) > 0 Then
+    ' A51: an admitted parent passes its session id. The server owns version
+    ' compatibility, so an empty server_version is forwarded as given.
+    If Len(strSession) > 0 Then
+        strCallbackInfo = "{""callback_url"":""" & JsonEscape(strCallbackUrl) & _
+            """,""operation_id"":""" & JsonEscape(strOperationId) & _
+            """,""client"":""rebuild-worker""}"
+        ' Never inherit approval from the launching Access incarnation.
+        strIdentity = objNewAccess.Run(strInstalledLib & ".APIIdentity")
+        If JsonStringValue(strIdentity, "addin_version") <> strExpectedAddin Or _
+            JsonStringValue(strIdentity, "protocol") <> "msaccess-vcs.session/1" Then
+            Err.Raise 1001, "BuildAndInstall", "Rebuild worker compatibility is unconfirmed."
+        End If
+        strInstance = JsonStringValue(strIdentity, "addin_instance")
+        strEnvelope = "{""session_id"":""" & JsonEscape(strSession) & _
+            """,""server_instance"":""" & JsonEscape(strServerInstance) & _
+            """,""connection_id"":""" & JsonEscape(strConnection) & _
+            """,""addin_instance"":""" & JsonEscape(strInstance) & """}"
+        strRequest = Left(strEnvelope, Len(strEnvelope) - 1) & _
+            ",""server_version"":""" & JsonEscape(strServerVersion) & _
+            """,""protocol"":""msaccess-vcs.session/1""}"
+        strAdmission = objNewAccess.Run(strInstalledLib & ".APIHandshake", strRequest)
+        If Not JsonSuccess(strAdmission) Then
+            Err.Raise 1001, "BuildAndInstall", "Rebuild worker mutual handshake refused: " & strAdmission
+        End If
+        If Err.Number = 0 Then
+            If Len(strCallbackUrl) > 0 And Len(strOperationId) > 0 Then
+                strBuildResult = objNewAccess.Run(strInstalledLib & ".APIExecuteAsync", _
+                    strEnvelope, strCallbackInfo, "Build", strSourcePath)
+                If InStr(1, strBuildResult, """async""", vbTextCompare) = 0 Then
+                    Err.Raise 1001, "BuildAndInstall", _
+                        "The asynchronous build entry point did not accept the rebuild."
+                End If
+            Else
+                strBuildResult = objNewAccess.Run(strInstalledLib & ".APIExecute", _
+                    strEnvelope, "Build", strSourcePath)
+                ' Build is a Sub: Empty acknowledges dispatch. The completed build
+                ' log below remains the outcome gate; a structured refusal fails here.
+                If Len(CStr(strBuildResult)) > 0 And Not JsonSuccess(strBuildResult) Then
+                    Err.Raise 1001, "BuildAndInstall", "The admitted build failed: " & strBuildResult
+                End If
+            End If
+        End If
+    ElseIf Len(strCallbackUrl) > 0 And Len(strOperationId) > 0 Then
+        ' A legacy parent keeps the 5.1.0 child route: an envelope-less APIAsync Build.
         strCallbackInfo = "{""callback_url"":""" & JsonEscape(strCallbackUrl) & _
             """,""operation_id"":""" & JsonEscape(strOperationId) & _
             """,""client"":""rebuild-worker""}"
@@ -1986,4 +2050,21 @@ Function ReadTextFile(objFSO, strPath)
     If Not objStream.AtEndOfStream Then ReadTextFile = objStream.ReadAll
     objStream.Close
     Set objStream = Nothing
+End Function
+
+' X17: handshake fields are ASCII SemVer/UUID/protocol strings, without JSON escapes.
+Function JsonStringValue(text, key)
+    Dim expression, matches
+    Set expression = CreateObject("VBScript.RegExp")
+    expression.Pattern = """" & key & """\s*:\s*""([^""]*)"""
+    Set matches = expression.Execute(text)
+    JsonStringValue = ""
+    If matches.Count = 1 Then JsonStringValue = matches(0).SubMatches(0)
+End Function
+
+Function JsonSuccess(text)
+    Dim expression
+    Set expression = CreateObject("VBScript.RegExp")
+    expression.Pattern = """success""\s*:\s*true"
+    JsonSuccess = expression.Test(text)
 End Function

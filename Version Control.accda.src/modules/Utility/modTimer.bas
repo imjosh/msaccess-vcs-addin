@@ -584,7 +584,7 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
     Set colArgs = ParseJson(strArgs)
     If blnEntered Then CountCompatibilityDispatch
     Set cOwnerEmitter = MCP
-    varResult = DispatchOperationRequest(cRequest, strMethod, colArgs)
+    varResult = DispatchOperationRequest(cRequest, strMethod, colArgs, blnEntered)
     If cOwnerEmitter.TerminalPosted Then GoTo CleanUp
     If Operation.IsActive Then
         If Operation.PublicId = cRequest.PublicId Then GoTo CleanUp

@@ -458,7 +458,7 @@ Public Function API(strMethod As String, _
     If Not IsMissing(varArg3) Then colArgs.Add varArg3
     Set cRequest = CreateOperationRequest(eosExternalAPI)
     If blnAdmitted Then CountCompatibilityDispatch
-    API = DispatchOperationRequest(cRequest, strMethod, colArgs)
+    API = DispatchOperationRequest(cRequest, strMethod, colArgs, blnAdmitted)
 CleanUp:
     RestoreErrorBreaks
     Exit Function
@@ -560,7 +560,8 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
             dResult("timeout_ms") = lngTimeoutMs
         Case Else
             dResult("sync") = True
-            dResult("result") = DispatchOperationRequest(cRequest, strMethod, colArgs)
+            If blnAdmitted Then CountCompatibilityDispatch
+            dResult("result") = DispatchOperationRequest(cRequest, strMethod, colArgs, blnAdmitted)
     End Select
     APIAsync = ConvertToJson(dResult)
 CleanUp:
@@ -700,10 +701,12 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function DispatchOperationRequest(ByVal cRequest As clsOperationRequest, _
-    ByVal strMethod As String, ByVal colArgs As Collection) As Variant
+    ByVal strMethod As String, ByVal colArgs As Collection, _
+    Optional ByVal blnAdmitted As Boolean) As Variant
 
     Dim cPrior As clsOperationRequest
     Dim blnPriorBusy As Boolean
+    Dim blnPriorAdmitted As Boolean
     Dim strRefusal As String
     Dim blnInspection As Boolean
     Dim strError As String
@@ -723,6 +726,7 @@ Public Function DispatchOperationRequest(ByVal cRequest As clsOperationRequest, 
     blnPriorBusy = APIDispatchBusy
     Set IncomingOperationRequest = cRequest
     APIDispatchBusy = True
+    blnPriorAdmitted = SetDispatchAdmission(blnAdmitted)
     InitializeRequestErrors "DispatchOperationRequest"
     On Error GoTo Failed
     Select Case colArgs.Count
@@ -735,6 +739,7 @@ Public Function DispatchOperationRequest(ByVal cRequest As clsOperationRequest, 
 CleanUp:
     Set IncomingOperationRequest = cPrior
     APIDispatchBusy = blnPriorBusy
+    SetDispatchAdmission blnPriorAdmitted
     Exit Function
 Failed:
     strError = Err.Description
