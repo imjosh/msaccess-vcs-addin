@@ -486,6 +486,7 @@ Public Sub ExportScoped(colContainers As Collection, blnFullExport As Boolean)
     Dim strTempFile As String
     Dim intSave As AcCloseSave
     Dim blnGlobalChanged As Boolean
+    Dim blnCloseCanceled As Boolean
     Dim blnFullForCategory As Boolean
     Dim varHashKey As Variant
 
@@ -500,9 +501,10 @@ Public Sub ExportScoped(colContainers As Collection, blnFullExport As Boolean)
         intSave = acSaveYes
     End If
 
-    If Not CloseOpenObjectsForContainers(colContainers, intSave) Then
+    If Not CloseOpenObjectsForContainers(colContainers, intSave, blnCloseCanceled) Then
         Log.Spacer
         Log.Add T("Export Canceled"), , , "Red", True
+        Operation.NativeCloseCanceled = blnCloseCanceled
         Operation.ErrorLevel = eelCritical
         Exit Sub
     End If
@@ -712,6 +714,8 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     Dim cDisabledIndex As clsVCSIndex
     Dim strTempFile As String
     Dim blnPolicy As Boolean
+    Dim blnClosed As Boolean
+    Dim blnCanceled As Boolean
 
     ' Guard clause
     If objItem Is Nothing Then Exit Sub
@@ -719,15 +723,8 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     ' Use inline error handling functions to trap and log errors.
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
 
-    ' Make sure the object is currently closed
-    With objItem
-        Select Case .Type
-            Case acForm, acMacro, acModule, acQuery, acReport, acTable
-                If SysCmd(acSysCmdGetObjectState, .Type, .Name) <> adStateClosed Then
-                    DoCmd.Close .Type, .Name, acSavePrompt
-                End If
-        End Select
-    End With
+    ' Report the close outcome after Log.Clear below.
+    blnClosed = CloseObjectBeforeOperation(objItem.Type, objItem.Name, blnCanceled)
 
     blnPolicy = InteractionIsNonInteractive()
     blnNoIndex = blnNoIndex And Not blnPolicy
@@ -782,6 +779,17 @@ Public Sub ExportSingleObject(objItem As AccessObject, Optional frmMain As Form_
     ' Cache persistent connections to Access back-end databases
     CacheBackEndConnections
     PrepareTableDataSortExport
+
+    If Not blnClosed Then
+        Set dTransferResult = OpenObjectRefusal(objItem.Name, blnCanceled)
+        dTransferResult.Add "transferred", False
+        dTransferResult.Add "skipped", False
+        dTransferResult.Add "transferred_count", 0&
+        dTransferResult.Add "skipped_count", 0&
+        Log.Error eelError, CStr(dTransferResult("error")), ModuleName & ".ExportSingleObject"
+        Operation.ErrorLevel = eelCritical
+        GoTo CleanUp
+    End If
 
     ' Get a database component class from the item
     Set cDbObject = GetClassFromObject(objItem)
@@ -884,7 +892,7 @@ CleanUp:
 
     If blnNoIndex Then
         Set VCSIndex = Nothing
-    ElseIf Not VCSIndex.Conflicts.UserCanceled And Not Operation.DecisionBlocked _
+    ElseIf blnClosed And Not VCSIndex.Conflicts.UserCanceled And Not Operation.DecisionBlocked _
         And (Not blnPolicy Or CBool(dTransferResult("transferred"))) Then
         ' Save index file (don't change export date for single item export).
         ' Skipped if the user canceled a conflict dialog so the same conflicts
@@ -1444,3 +1452,20 @@ Private Sub ExecuteSingleObjectExportPlan(ByVal cPrimary As IDbComponent, ByRef 
     Next dPlan
     CatchAny eelCritical, T("Unable to export the requested component safely."), "modExport.ExecuteSingleObjectExportPlan", True, True
 End Sub
+
+
+Public Function OpenObjectRefusal(strName As String, blnCanceled As Boolean) As Dictionary
+
+    Dim dResult As Dictionary
+
+    Set dResult = New Dictionary
+    dResult.Add "success", False
+    If blnCanceled Then
+        dResult.Add "error", T("{0} is open and closing it was canceled, so it was not exported.", var0:=strName)
+        dResult.Add "cancelled", True
+    Else
+        dResult.Add "error", T("{0} is open and could not be closed, so it was not exported.", var0:=strName)
+    End If
+    Set OpenObjectRefusal = dResult
+
+End Function

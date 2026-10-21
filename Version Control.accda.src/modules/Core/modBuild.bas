@@ -28,6 +28,14 @@ Private m_blnInPlaceResetFailed As Boolean
 ' clients, so that a merge which then imports nothing can skip the post-merge check.
 Private m_blnVerifiedAccessible As Boolean
 
+Public Enum eCloseOutcome
+    ecoReal = 0
+    ecoClosed = 1
+    ecoCanceled = 2
+    ecoFailed = 3
+End Enum
+Private m_eCloseOutcome As eCloseOutcome
+
 
 '---------------------------------------------------------------------------------------
 ' Procedure : ShouldCheckBuildNameConflict
@@ -1296,7 +1304,8 @@ End Sub
 '
 Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, _
     strSourceFilePath As String, Optional blnNoIndex As Boolean = False, _
-    Optional ByRef strSavedLogPath As String, Optional ByRef dTransferResult As Dictionary)
+    Optional ByRef strSavedLogPath As String, Optional ByRef dTransferResult As Dictionary, _
+    Optional ByRef blnCanceled As Boolean)
 
     Dim dCategories As Dictionary
     Dim dCategory As Dictionary
@@ -1311,6 +1320,9 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     Dim dPlan As Dictionary
     Dim dMember As Dictionary
     Dim cTransfer As IDbComponent
+    Dim blnClosed As Boolean
+
+    blnCanceled = False
 
     ' Guard clauses
     If cComponentClass Is Nothing Then Exit Sub
@@ -1318,16 +1330,8 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
     ' Use inline error handling functions to trap and log errors.
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
 
-    ' Make sure the object is currently closed. (This is really important, since we
-    ' will be deleting the object before adding it from source.)
-    With cComponentClass
-        Select Case .ComponentType
-            Case acForm, acMacro, acModule, acQuery, acReport, acTable
-                If SysCmd(acSysCmdGetObjectState, .ComponentType, strName) <> adStateClosed Then
-                    DoCmd.Close .ComponentType, strName, acSavePrompt
-                End If
-        End Select
-    End With
+    ' Stop before replacing an object that Access leaves open.
+    blnClosed = CloseObjectBeforeOperation(cComponentClass.ComponentType, strName, blnCanceled)
 
     blnPolicy = InteractionIsNonInteractive()
     blnNoIndex = blnNoIndex And Not blnPolicy
@@ -1384,6 +1388,19 @@ Public Sub LoadSingleObject(cComponentClass As IDbComponent, strName As String, 
         Log.Error eelError, T("Source file not found: {0}", _
             var0:=Nz2(strSourceFilePath, T("(empty path)"))), _
             ModuleName & ".LoadSingleObject"
+        Operation.ErrorLevel = eelCritical
+        intResult = eorFailed
+        GoTo CleanUp
+    End If
+
+    If Not blnClosed Then
+        If blnCanceled Then
+            Log.Error eelError, T("{0} is open and closing it was canceled, so it was not replaced from source.", _
+                var0:=strName), ModuleName & ".LoadSingleObject"
+        Else
+            Log.Error eelError, T("{0} is open and could not be closed, so it was not replaced from source.", _
+                var0:=strName), ModuleName & ".LoadSingleObject"
+        End If
         Operation.ErrorLevel = eelCritical
         intResult = eorFailed
         GoTo CleanUp
@@ -1877,6 +1894,7 @@ Public Sub MergeScoped(colContainers As Collection, blnFullMerge As Boolean)
     Dim lngCurrent As Long
     Dim intSave As AcCloseSave
     Dim strPath As String
+    Dim blnCloseCanceled As Boolean
 
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
 
@@ -1901,9 +1919,10 @@ Public Sub MergeScoped(colContainers As Collection, blnFullMerge As Boolean)
         intSave = acSaveYes
     End If
 
-    If Not CloseOpenObjectsForContainers(colContainers, intSave) Then
+    If Not CloseOpenObjectsForContainers(colContainers, intSave, blnCloseCanceled) Then
         Log.Spacer
         Log.Add T("Merge Canceled"), , , "Red", True
+        Operation.NativeCloseCanceled = blnCloseCanceled
         Operation.ErrorLevel = eelCritical
         Exit Sub
     End If
@@ -2394,7 +2413,8 @@ End Sub
 '---------------------------------------------------------------------------------------
 '
 Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As String, _
-    colErrors As Collection, Optional ByVal dTransferResult As Dictionary) As String
+    colErrors As Collection, Optional ByVal dTransferResult As Dictionary, _
+    Optional blnCanceled As Boolean = False) As String
 
     Dim dResult As Dictionary
     Dim intLevel As eErrorLevel
@@ -2415,6 +2435,7 @@ Public Function FinishSingleObjectImport(cOp As clsOperation, strLogPath As Stri
         Set dResult = New Dictionary
         dResult.Add "success", (intLevel < eelError)
         If intLevel >= eelError Then dResult.Add "error", SingleObjectImportError(colErrors)
+        If blnCanceled Then dResult.Add "cancelled", True
     End If
     AddDecisionJournal dResult, cOp.LastDecisions
     CopyTransferOutcome dResult, dTransferResult, (cOp.Result <> eorDecisionRequired)
@@ -2607,4 +2628,53 @@ Private Sub CopyTransferOutcome(ByVal dTarget As Dictionary, ByVal dTransfer As 
             If dTransfer.Exists(varKey) Then dTarget(varKey) = dTransfer(varKey)
         Next varKey
     End If
+End Sub
+
+
+Public Function CloseObjectBeforeOperation(ByVal intType As AcObjectType, strName As String, _
+    Optional ByRef blnCanceled As Boolean) As Boolean
+
+    Dim lngErr As Long
+
+    blnCanceled = False
+
+    If m_eCloseOutcome <> ecoReal Then
+        blnCanceled = (m_eCloseOutcome = ecoCanceled)
+        CloseObjectBeforeOperation = (m_eCloseOutcome = ecoClosed)
+        Exit Function
+    End If
+
+    Select Case intType
+        Case acForm, acMacro, acModule, acQuery, acReport, acTable
+            ' Objects that can be open in the database
+        Case Else
+            CloseObjectBeforeOperation = True
+            Exit Function
+    End Select
+
+    If intType = acForm Then
+        If ObjectExists(acForm, strName, True) Then
+            CloseObjectBeforeOperation = True
+            Exit Function
+        End If
+    End If
+
+    If SysCmd(acSysCmdGetObjectState, intType, strName) <> adStateClosed Then
+        LogUnhandledErrors
+        On Error Resume Next
+        DoCmd.Close intType, strName, acSavePrompt
+        ' A canceled close (2501) or any other failure shows up in the state check.
+        lngErr = Err.Number
+        If Err Then Err.Clear
+        On Error GoTo 0
+    End If
+
+    CloseObjectBeforeOperation = (SysCmd(acSysCmdGetObjectState, intType, strName) = adStateClosed)
+    blnCanceled = (Not CloseObjectBeforeOperation) And (lngErr = 2501)
+
+End Function
+
+
+Public Sub SetCloseOutcomeForTest(ByVal eOutcome As eCloseOutcome)
+    m_eCloseOutcome = eOutcome
 End Sub

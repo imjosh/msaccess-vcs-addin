@@ -137,3 +137,16 @@ mutual compatibility sessions remain separately qualified work.
 
 Use the [automation contract](automation-contract.md) for entry-point details and
 [disposable test workflow](agent-test-runs.md) for add-in qualification.
+
+## Native close cancellation
+
+Single-object and category import/export stop if Access leaves an object open
+following a close attempt. A confirmed Cancel at Access's native save/discard
+prompt returns `success: false` and `cancelled: true`, with the operation's own
+`logPath` and decision journal. Other close failures remain failures without a
+cancellation flag. A blocked decision keeps `decision_required` precedence.
+Loaded add-in forms remain protected by the existing merge refusal.
+
+Request decision policies do not dismiss Access-owned prompts. Inspect a native
+prompt and confirm its Cancel button separately before choosing it. A failed close
+must leave database objects, source files and the change index untouched.
