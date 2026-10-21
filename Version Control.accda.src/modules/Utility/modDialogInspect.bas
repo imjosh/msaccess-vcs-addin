@@ -23,6 +23,7 @@ Private Const ERR_NOT_ADDIN_FORM As String = "not_addin_form"
 Private Const ERR_UNSUPPORTED_ACTION As String = "unsupported_action"
 Private Const ERR_OPERATION_IN_PROGRESS As String = "operation_in_progress"
 Private Const ERR_NOT_OPEN As String = "not_open"
+Private Const ERR_OPERATION_NOT_RUNNING As String = "operation_not_running"
 
 
 '---------------------------------------------------------------------------------------
@@ -76,8 +77,11 @@ End Function
 ' Author    : Josh
 ' Date      : 09/29/2026
 ' Purpose   : Close a finished add-in form, or request cancellation of a running
-'           : operation. Cancel sets the cancel flag or critical error level and does
-'           : not call Finish; the running operation stops at its next check.
+'           : operation. Cancel names the running operation by its public ID and goes
+'           : through Operation.RequestCancel. It does not call Finish. The operation
+'           : stops at its next check, and its own result reports whether it was
+'           : cancelled. A staged or paused root refuses the request and nothing
+'           : changes.
 '---------------------------------------------------------------------------------------
 '
 Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAction As String = ACTION_CLOSE, _
@@ -125,11 +129,17 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
             Exit Function
         End If
         dRoot("operation_id") = Operation.PublicId
-        RequestCancel
+        If Not Operation.RequestCancel("modDialogInspect.DismissAddinDialog") Then
+            dRoot.Add "requested", False
+            DismissAddinDialog = DismissRefusal(dRoot, ERR_OPERATION_NOT_RUNNING, _
+                T("The operation is paused or between steps and cannot take a request now. Nothing was changed."), True)
+            Exit Function
+        End If
         dRoot.Add "success", True
+        dRoot.Add "requested", True
         dRoot.Add "interrupted", True
         dRoot.Add "closed", False
-        dRoot.Add "message", T("Cancellation requested. The operation checks the request at its next cancellation check.")
+        dRoot.Add "message", T("Cancellation requested. This is only a request. The operation stops at its next check, and its own result reports whether it was cancelled.")
         DismissAddinDialog = ConvertToJson(dRoot)
         Exit Function
     End If
@@ -174,25 +184,6 @@ Private Function DismissRefusal(ByVal dRoot As Dictionary, ByVal strPattern As S
     DismissRefusal = ConvertToJson(dRoot)
 
 End Function
-
-
-'---------------------------------------------------------------------------------------
-' Procedure : RequestCancel
-' Author    : Josh
-' Date      : 09/29/2026
-' Purpose   : Ask the running operation to stop at its next check.
-'---------------------------------------------------------------------------------------
-'
-Private Sub RequestCancel()
-
-    If TestRunner.State = etrsRunning Then
-        TestRunner.Cancel
-    Else
-        Operation.ErrorLevel = eelCritical
-        Operation.Result = eorCanceled
-    End If
-
-End Sub
 
 
 '---------------------------------------------------------------------------------------
