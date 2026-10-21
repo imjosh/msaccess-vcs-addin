@@ -334,6 +334,9 @@ def live(label):
             if method != 'RunFilteredTests':
                 canceled = 'Canceled Operation' in item.get('log_excerpt', '')
                 check(canceled == (expect == 'cancelled'), 'cancel logged only when cancelled')
+                if expect == 'cancelled':
+                    before_cancel = item.get('log_excerpt', '').split('CRITICAL: Canceled Operation')[0]
+                    check('CRITICAL:' not in before_cancel, 'no prior critical error masked by cancellation')
             if expect == 'cancelled':
                 check(payload.get('success') is False, 'cancel is not success')
             check(after['status'] == 'ready' and not after['token'], 'root ready')
@@ -502,6 +505,8 @@ End Function
             # Access's own Save prompt, which no decision policy answers.
             for module_name in ('modTestAssert', 'modTestPolicyFixture'):
                 app.DoCmd.Save(5, module_name)
+            if SEAM_MODE == 'merge':
+                app.CurrentDb().CreateQueryDef('qUP005MergeFixture', 'SELECT 1 AS n;')
             item, found = seam_case('seam_export_baseline', 'FullExport', ('block',), 0, 'complete')
             failures += found
             baseline = source_files(source)
@@ -536,15 +541,16 @@ End Function
             # availability from frmVCSMain, which sets it on load, so close a hidden
             # copy an earlier operation left loaded.
             app.DoCmd.Close(2, 'frmVCSMain')
-            # A merge imports only changed files, so change one module's source.
-            changed = next(source.rglob('modTestPolicyFixture.bas'))
+            # A merge imports only changed files. A saved query gives the regular
+            # merge loop a valid object to process in this disposable database.
+            changed = next(source.rglob('qUP005MergeFixture.sql'))
             original = changed.read_bytes()
-            changed.write_bytes(original + b"' Seam merge marker\r\n")
+            changed.write_bytes(b'SELECT 2 AS n;\r\n')
             try:
                 item, found = seam_case('seam_merge_loop', 'MergeBuild', ('block',), 1)
             finally:
                 changed.write_bytes(original)
-            found += [] if stage(item, 'Merging ').startswith('Merging modules') else ['merge stopped in its file loop']
+            found += [] if stage(item, 'Merging ').startswith('Merging queries') else ['merge stopped in its file loop']
             failures += found
             # ExportByType and ImportByType: a cancel and an accepted request after Begin,
             # outside the runner's root, in this library host.
@@ -557,6 +563,22 @@ End Function
                     checks[key] = value[0] if isinstance(value, tuple) else value
                     if checks[key] != 'OK':
                         failures.append(key + ': ' + str(checks[key]))
+            # A prior critical import failure must not be hidden by the next
+            # queued cancel poll. Leave this destructive case last in its host.
+            changed = next(source.rglob('modTestPolicyFixture.bas'))
+            original = changed.read_bytes()
+            source_name = b'Attribute VB_Name = "modTestPolicyFixture"'
+            if source_name not in original:
+                raise AssertionError('merge failure fixture lost its source name')
+            changed.write_bytes(original.replace(source_name,
+                b'Attribute VB_Name = "modUP005WrongName"', 1))
+            try:
+                item, found = seam_case('merge_error_before_cancel', 'MergeBuild', ('block',), 1, 'error')
+            finally:
+                changed.write_bytes(original)
+            found += [] if 'Imported module not found after import' in item.get('log_excerpt', '') else [
+                'deliberate module import error reached the log']
+            failures += found
             save_live()
             print('scoped_sync', checks, flush=True)
             save_live()

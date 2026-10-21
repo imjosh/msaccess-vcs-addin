@@ -267,6 +267,11 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
         ClearOrphanedSourceFiles cCategory
         Perf.CategoryEnd 0
         ' Handle critical error or cancel during scan
+        If Operation.ErrorLevel = eelCritical Then
+            Log.Add vbNullString
+            Perf.OperationEnd   ' Scan DB Objects
+            GoTo CleanUp
+        End If
         Operation.CheckCancelRequest
         If Operation.ErrorLevel = eelCritical Then
             Log.Add vbNullString
@@ -344,8 +349,9 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
                     cDbObject.Export
                 End If
 
-                ' Bail out if we hit a critical error or a cancel request.
+                ' A failed export must keep its failure before a pending cancel is polled.
                 CatchAny eelError, T("Error exporting {0}", var0:=cDbObject.Name), ModuleName & ".ExportSource", True, True
+                If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
                 Operation.CheckCancelRequest
                 If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
 

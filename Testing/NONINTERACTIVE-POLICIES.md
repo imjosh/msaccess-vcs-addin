@@ -106,9 +106,11 @@ and a poll after a last check just before midnight. Its `seam_*` cases arm
 request. They stop the test loop, the export scan and object loops, the merge loop,
 and the regular and fast build loops. Each needs one `cancelled` terminal and a
 ready root. Export and test cases also have an unarmed run that completes.
-An unarmed build or merge of this checker host stops after importing its own
-module, so those cases check where the cancel stopped. Build and merge seams
-run in separate disposable hosts because a cancelled build changes its host.
+The merge seam changes a saved query, then checks cancellation in the regular
+file loop with no earlier critical error. A final case changes a module's
+source name to cause an import failure before the armed cancel checkpoint; it
+requires an error terminal. The build seams check both loops in a separate
+disposable host because a cancelled build changes its host.
 The refusal driver retains an active owner while other requests are refused.
 Require unchanged owner state, zero refusal terminal attempts,
 and exactly one owner completion. These drivers retain disposable user databases.
