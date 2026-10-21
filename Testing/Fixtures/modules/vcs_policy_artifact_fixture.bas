@@ -78,6 +78,7 @@ Public Function F1CanonicalizeButtonPicture(ByVal strExpectedHost As String, _
     ByVal strPictureFile As String, ByVal strProofFile As String, _
     Optional ByVal strMaskFile As String) As Boolean
 
+    Const msoBarPopup As Long = 5 ' MsoBarPosition; the disposable host has no Office reference
     Dim objFSO As Object
     Dim objPicture As Object
     Dim objProbeBar As Object
