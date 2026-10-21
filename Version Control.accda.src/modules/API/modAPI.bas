@@ -544,7 +544,9 @@ Public Function APIAsync(strCallbackInfo As String, strMethod As String, _
                 APIAsync = strRefusal
                 GoTo CleanUp
             End If
-            strQueue = SetTimer("APIAsyncOperation", strMethod, ConvertToJson(colArgs), , , strCallbackInfo, cRequest.ToJson)
+            ' Queue this call's own envelope, never the one in force on this thread.
+            strQueue = SetTimer("APIAsyncOperation", strMethod, ConvertToJson(colArgs), , , strCallbackInfo, cRequest.ToJson, , _
+                IIf(blnAdmitted, strSessionEnvelope, vbNullString))
             If Not TimerRequestSucceeded(strQueue) Then
                 APIAsync = strQueue
                 GoTo CleanUp

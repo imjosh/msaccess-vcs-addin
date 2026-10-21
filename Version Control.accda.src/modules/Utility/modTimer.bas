@@ -116,15 +116,17 @@ End Sub
 ' Date      : 10/16/2026
 ' Purpose   : Reserve and install a new callback only after root/token admission.
 '           : strOpToken carries root ownership to the continuation; pass the token
-'           : of the lease that was detached for this handoff. Returns JSON; a refusal
-'           : writes nothing.
+'           : of the lease that was detached for this handoff. strCompatibilityEnvelope
+'           : is the session/1 envelope the request itself was admitted with (empty for
+'           : a legacy call); it is saved with the request and checked again when the
+'           : timer dispatches it. Returns JSON; a refusal writes nothing.
 '---------------------------------------------------------------------------------------
 '
 Public Function SetTimer(strOperation As String, _
     Optional strParam1 As String, Optional strParam2 As String, _
     Optional strOpToken As String, Optional sngSeconds As Single = 0.5, _
     Optional strCallbackInfo As String, Optional strRequestJson As String, _
-    Optional blnReserveOnly As Boolean = False) As String
+    Optional blnReserveOnly As Boolean = False, Optional strCompatibilityEnvelope As String) As String
 
     Dim strReservation As String
     InitializeRequestErrors "SetTimer"
@@ -160,6 +162,7 @@ Public Function SetTimer(strOperation As String, _
     SaveSetting PROJECT_NAME, "Timer", "OpToken", strOpToken
     SaveSetting PROJECT_NAME, "Timer", "CallbackInfo", strCallbackInfo
     SaveSetting PROJECT_NAME, "Timer", "RequestJson", strRequestJson
+    SaveSetting PROJECT_NAME, "Timer", "CompatibilityEnvelope", strCompatibilityEnvelope
     SaveSetting PROJECT_NAME, "Timer", "TimerID", "0"
     If blnReserveOnly Then
         SetTimer = "{""success"":true}"
@@ -266,7 +269,7 @@ Private Sub ClearTimerRequest(ByVal strReservation As String)
     If Len(strReservation) = 0 Then Exit Sub
     If GetSetting(PROJECT_NAME, "Timer", "Reservation") <> strReservation Then Exit Sub
     For Each varKey In Array("Operation", "Param1", "Param2", "OpToken", "CallbackInfo", "RequestJson", _
-        REG_TIMER_ARMED_TICK, REG_TIMER_ARMED_INTERVAL, REG_TIMER_OWNER_PROCESS, "Reservation")
+        "CompatibilityEnvelope", REG_TIMER_ARMED_TICK, REG_TIMER_ARMED_INTERVAL, REG_TIMER_OWNER_PROCESS, "Reservation")
         SaveSetting PROJECT_NAME, "Timer", CStr(varKey), vbNullString
     Next varKey
     SaveSetting PROJECT_NAME, "Timer", "TimerID", "0"
@@ -439,6 +442,7 @@ Private Sub DispatchTimerRequest(ByVal strExpectedReservation As String)
     Dim strToken As String
     Dim strCallback As String
     Dim strRequest As String
+    Dim strAdmission As String
     Dim strReservation As String
     Dim strQueueResult As String
     Dim cRequest As clsOperationRequest
@@ -455,6 +459,7 @@ Private Sub DispatchTimerRequest(ByVal strExpectedReservation As String)
     strToken = GetSetting(PROJECT_NAME, "Timer", "OpToken")
     strCallback = GetSetting(PROJECT_NAME, "Timer", "CallbackInfo")
     strRequest = GetSetting(PROJECT_NAME, "Timer", "RequestJson")
+    strAdmission = GetSetting(PROJECT_NAME, "Timer", "CompatibilityEnvelope")
     strReservation = GetSetting(PROJECT_NAME, "Timer", "Reservation")
     ' Consume before running, in case the operation sets another timer.
     KillTimer
@@ -478,7 +483,7 @@ Private Sub DispatchTimerRequest(ByVal strExpectedReservation As String)
         Case "MergeResume"
             RunBuildFromContinuation strToken, strParam1, False, Val(strParam2), vbNullString, True
         Case "APIAsyncOperation"
-            HandleAPIAsyncOperation strParam1, strParam2, strRequest
+            HandleAPIAsyncOperation strParam1, strParam2, strRequest, strAdmission
         Case "QuitForRebuild"
             If Not Operation.RootLeaseIsActive(strToken) Then GoTo Finished
             Application.Quit acQuitSaveAll
@@ -532,9 +537,12 @@ End Sub
 ' Author    : Codex
 ' Date      : 10/16/2026
 ' Purpose   : Recheck queued admission and emit refusals through the queued request owner.
+'           : A request admitted under a session runs under it again, or is refused if
+'           : the session is gone. A legacy request (no envelope) runs without one.
 '---------------------------------------------------------------------------------------
 '
-Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As String, ByVal strRequest As String)
+Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As String, _
+    ByVal strRequest As String, Optional ByVal strAdmission As String)
     Dim cRequest As New clsOperationRequest
     Dim cEmitter As New clsMCP
     Dim cOwnerEmitter As clsMCP
@@ -543,6 +551,7 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
     Dim dResult As Object
     Dim strRefusal As String
     Dim strError As String
+    Dim blnEntered As Boolean
 
     ' Re-admission failures must not log into another operation.
     InitializeRequestErrors "HandleAPIAsyncOperation"
@@ -553,6 +562,14 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
     On Error GoTo Failed
     cRequest.FromJson strRequest
     cEmitter.RegisterCallback cRequest.CallbackInfo
+    If Len(strAdmission) > 0 Then
+        strRefusal = EnterCompatibilitySession(strAdmission)
+        If Len(strRefusal) > 0 Then
+            PostCompatibilityRefusal cRequest.CallbackInfo, strRefusal
+            GoTo CleanUp
+        End If
+        blnEntered = True
+    End If
     ' A dispatch already on this thread is the precise reason, as in DispatchOperationRequest.
     If APIDispatchBusy Then
         strRefusal = RefusalJson("api_busy", T("Another API command is still running."), False)
@@ -565,6 +582,7 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
         GoTo CleanUp
     End If
     Set colArgs = ParseJson(strArgs)
+    If blnEntered Then CountCompatibilityDispatch
     Set cOwnerEmitter = MCP
     varResult = DispatchOperationRequest(cRequest, strMethod, colArgs)
     If cOwnerEmitter.TerminalPosted Then GoTo CleanUp
@@ -586,6 +604,7 @@ Public Sub HandleAPIAsyncOperation(ByVal strMethod As String, ByVal strArgs As S
     End If
     cEmitter.PostCallback strType, -1, -1, vbNullString, dResult
 CleanUp:
+    If blnEntered Then LeaveCompatibilitySession
     RestoreErrorBreaks
     Exit Sub
 Failed:
@@ -593,6 +612,7 @@ Failed:
     ' Clear before restoring: PostCallback runs LogUnhandledErrors, which must not
     ' find this error once breaks are allowed again.
     Err.Clear
+    If blnEntered Then LeaveCompatibilitySession
     RestoreErrorBreaks
     If cEmitter.TerminalPosted Then Exit Sub
     If Not cOwnerEmitter Is Nothing Then
