@@ -32,6 +32,10 @@ close/reopen and disposal recipe. Normal and batch fixtures have distinct names
 and remain in the host until disposal. This does not establish a repair of
 production module deletion.
 
+For the BOM-free UTF-8 writer regression and native SVG and gettext caller checks,
+see [Verify BOM-free UTF-8 file output](../Testing/UTF8-WRITER.md). The native
+caller checks require Windows, Access, and pywin32.
+
 ### Which project a run executes in
 
 A run spans two VBA projects, and almost every surprise in the harness traces back
