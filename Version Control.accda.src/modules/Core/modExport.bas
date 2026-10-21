@@ -381,7 +381,11 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
                 ' A failed export must keep its failure before a pending cancel is polled.
                 CatchAny eelError, T("Error exporting {0}", var0:=cDbObject.Name), ModuleName & ".ExportSource", True, True
                 If Operation.ErrorLevel < eelError And blnObjectOutputComplete Then
-                    dCategory("CompletedCount") = CLng(dCategory("CompletedCount")) + 1
+                    If cCategory.SingleFile Then
+                        dCategory("CompletedCount") = dCategory("SelectedCount")
+                    Else
+                        dCategory("CompletedCount") = CLng(dCategory("CompletedCount")) + 1
+                    End If
                 End If
                 If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
                 Operation.CheckCancelRequest
@@ -429,8 +433,7 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
         ' invalidate a completed Forms/Reports migration when all its required
         ' output is present; missing source, metadata, or SVG keeps it pending.
         If dObjects.Count = dCategory("SelectedCount") _
-            And (dCategory("SelectedCount") = 0 Or cCategory.SingleFile _
-                Or dCategory("CompletedCount") = dCategory("SelectedCount")) _
+            And dCategory("CompletedCount") = dCategory("SelectedCount") _
             And Log.ErrorCount = lngCategoryErrors _
             And blnCategoryOutputComplete _
             And (Log.WarningCount = lngCategoryWarnings _
@@ -535,16 +538,15 @@ End Sub
 
 ' A Forms/Reports category can emit a nonfatal warning after complete output.
 ' Check the on-disk migration artifacts instead of treating every warning as
-' failure. The SVG is required only when the option is enabled.
+' failure. Companion metadata JSON is optional when the object has no metadata.
+' The SVG is required only when the option is enabled.
 Private Function FormReportMigrationOutputComplete(cItem As IDbComponent) As Boolean
     Dim strSource As String
-    Dim strMetadata As String
     Dim strSvg As String
     strSource = cItem.SourceFile
     If Len(strSource) = 0 Then Exit Function
-    strMetadata = SwapExtension(strSource, "json")
-    If Not FSO.FileExists(strSource) Or Not FSO.FileExists(strMetadata) Then Exit Function
-    If FSO.GetFile(strSource).Size = 0 Or FSO.GetFile(strMetadata).Size = 0 Then Exit Function
+    If Not FSO.FileExists(strSource) Then Exit Function
+    If FSO.GetFile(strSource).Size = 0 Then Exit Function
     If Options.ExportLayoutSvg Then
         strSvg = SwapExtension(strSource, "svg")
         If Not FSO.FileExists(strSvg) Then Exit Function

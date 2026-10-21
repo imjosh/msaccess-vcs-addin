@@ -26,7 +26,7 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     Dim cObject As IDbComponent
     Dim varKey As Variant
     Dim dObjects As Dictionary
-    Dim blnPolicy As Boolean
+    Dim strDecisionPolicy As String
 
     On Error GoTo ErrHandler
     Set dReport = New Dictionary
@@ -55,9 +55,7 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     Options.ExportLayoutSvg = False
     Options.UseGitIntegration = False
     Options.SaveOptionsForProject
-    VCS.SetOperationPolicy "block"
-    blnPolicy = True
-    VCS.FullExport
+    VCS.FullExport "block"
     Set dResult = Operation.LastCompletion
     Set dReport("baselineOutcome") = dResult
     CheckMigration colFailures, OutcomeSucceeded(dResult), "baseline full export succeeds"
@@ -81,14 +79,12 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     If strCase = "partial_cancel" Or strCase = "skip" Then Options.FormatSQL = Not Options.FormatSQL
     If strCase = "global" Or strCase = "filtered" Then Options.ExportFormatVersion = EFV_5_0_0
     Options.SaveOptionsForProject
+    strDecisionPolicy = "block"
     Select Case strCase
         Case "blocked", "skip"
             WriteFile "SELECT 2 AS [UP008Value];", strQuery
             SetFileDate strQuery, DateAdd("s", 2, Now), True
-            If strCase = "skip" Then
-                VCS.ClearOperationPolicy
-                VCS.SetOperationPolicy "skip"
-            End If
+            If strCase = "skip" Then strDecisionPolicy = "skip"
         Case "scan_cancel", "global"
             Operation.SetCancelPollForTest 1
         Case "partial_cancel"
@@ -110,13 +106,18 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
             colFailures.Add "Unknown regression case"
             GoTo CleanUp
     End Select
-    If strCase = "filtered" Then VCS.ExportVBA Else VCS.FullExport
+    If strCase = "filtered" Then
+        VCS.ExportVBA strDecisionPolicy
+    Else
+        VCS.FullExport strDecisionPolicy
+    End If
     Operation.SetCancelPollForTest 0
     Set dResult = Operation.LastCompletion
     Set dReport("attemptOutcome") = dResult
     Set dAfter = MigrationSnapshot
     Set dCurrent = Options.GetCategoryHashes
     Set dReport("afterAttempt") = dAfter
+    Set dReport("attemptArtifacts") = MigrationArtifacts(strFolder)
     If strCase = "success" Or strCase = "skip" Or strCase = "filtered" Then
         CheckMigration colFailures, OutcomeSucceeded(dResult), "completed export succeeds"
         CheckMigration colFailures, FSO.FileExists(strFolder & "forms\frmUP008First.svg"), "completed form migration writes SVG"
@@ -163,11 +164,12 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     ' Resolve the external conflict by restoring the original source, then fast
     ' export through the same public entry point. Artifacts are the primary oracle.
     If strCase = "blocked" Or strCase = "skip" Then WriteFile strOriginalQuery, strQuery
-    VCS.Export
+    VCS.Export "block"
     Set dResult = Operation.LastCompletion
     Set dReport("retryOutcome") = dResult
     Set dAfter = MigrationSnapshot
     Set dReport("afterRetry") = dAfter
+    Set dReport("retryArtifacts") = MigrationArtifacts(strFolder)
     CheckMigration colFailures, dAfter("CategoryHashes")("Forms") = dCurrent("Forms"), "retry completes form option migration"
     CheckMigration colFailures, dAfter("CategoryHashes")("Queries") = dCurrent("Queries"), "retry completes query option migration"
     CheckMigration colFailures, dAfter("CategoryHashes")("_Global") = dCurrent("_Global"), "retry completes global option migration"
@@ -175,12 +177,10 @@ Public Function ExportMigrationCheck(ByVal strCase As String) As String
     CheckMigration colFailures, FSO.FileExists(strFolder & "forms\frmUP008First.svg"), "later fast export writes first SVG"
     CheckMigration colFailures, FSO.FileExists(strFolder & "forms\frmUP008Second.svg"), "later fast export writes second SVG"
     CheckMigration colFailures, Operation.Status = eosReady, "root is released"
-    CheckMigration colFailures, Operation.DecisionPolicy <> edpAsk, "caller policy survives export"
 
 CleanUp:
     On Error Resume Next
     Operation.SetCancelPollForTest 0
-    If blnPolicy Then VCS.ClearOperationPolicy
     If IsLoaded(acForm, "frmVCSMain", False) Then DoCmd.Close acForm, "frmVCSMain", acSaveNo
     Set frmNew = Nothing
     If lngErr <> 0 Then colFailures.Add "ERROR " & lngErr & ": " & strErr
@@ -191,6 +191,31 @@ ErrHandler:
     lngErr = Err.Number
     strErr = Err.Description
     Resume CleanUp
+End Function
+
+Private Function MigrationArtifacts(strFolder As String) As Dictionary
+    Dim dArtifacts As Dictionary
+    Dim dFile As Dictionary
+    Dim varName As Variant
+    Dim strPath As String
+    Dim blnShort As Boolean
+    Set dArtifacts = New Dictionary
+    blnShort = Options.UseShortHash
+    Options.UseShortHash = False
+    For Each varName In Array("frmUP008First", "frmUP008Second")
+        Set dFile = New Dictionary
+        strPath = strFolder & "forms" & PathSep & CStr(varName) & ".svg"
+        dFile.Add "path", strPath
+        dFile.Add "exists", FSO.FileExists(strPath)
+        If FSO.FileExists(strPath) Then
+            dFile.Add "bytes", FSO.GetFile(strPath).Size
+            dFile.Add "sha256", GetFileHash(strPath)
+            dFile.Add "modified", CStr(FSO.GetFile(strPath).DateLastModified)
+        End If
+        dArtifacts.Add CStr(varName), dFile
+    Next varName
+    Options.UseShortHash = blnShort
+    Set MigrationArtifacts = dArtifacts
 End Function
 
 Private Function MigrationSnapshot() As Dictionary

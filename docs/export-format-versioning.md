@@ -61,8 +61,9 @@ category once. The export persists the new hash only after the selected work
 for that category completes. A blocked conflict, skipped object, cancellation,
 error, or missing required form/report artifact leaves the category pending for
 a later public fast export. A warning after complete form/report output does not
-keep that category pending when its source, metadata, and enabled SVG sidecar
-are present. The global hash and whole-export dates advance only when their
+keep that category pending when its source and enabled SVG sidecar are present.
+An absent metadata JSON is valid when the object has no metadata to export.
+The global hash and whole-export dates advance only when their
 scopes complete; a filtered export does not claim whole-project completion.
 
 1. Add or increment the category entry in `GetExporterRevisions()` (key =
