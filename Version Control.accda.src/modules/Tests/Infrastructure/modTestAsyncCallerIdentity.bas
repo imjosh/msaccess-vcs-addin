@@ -229,7 +229,10 @@ Public Sub TestRefusedLaunchPreservesRunningOwner()
     Else
         TestAssert dResult("launch").Exists("error_pattern"), "launch refused before dispatch"
         If dResult("launch").Exists("error_pattern") Then
-            TestAssert dResult("launch")("error_pattern") = ERR_OPERATION_ALREADY_RUNNING, "stable busy pattern"
+            ' A run started through the API refuses the nested call as api_busy;
+            ' one started elsewhere refuses it at admission.
+            TestAssert dResult("launch")("error_pattern") = "api_busy" Or _
+                dResult("launch")("error_pattern") = ERR_OPERATION_ALREADY_RUNNING, "stable busy pattern"
         End If
     End If
     TestAssert Not dResult("cancelled"), "cancelling the refused caller cannot cancel the owner"
