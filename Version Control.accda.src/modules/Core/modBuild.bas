@@ -1515,7 +1515,7 @@ CleanUp:
     ' never reaches the report and the cost of writing the whole file is invisible.
     If blnNoIndex Then
         VCSIndex.Disabled = False
-    ElseIf Not VCSIndex.Conflicts.UserCanceled And Not Operation.DecisionBlocked _
+    ElseIf blnClosed And Not VCSIndex.Conflicts.UserCanceled And Not Operation.DecisionBlocked _
         And (Not blnPolicy Or CBool(dTransferResult("transferred"))) Then
         ' Save index file (don't change export date for single item export).
         ' Skipped if the user canceled a conflict dialog so the same conflicts

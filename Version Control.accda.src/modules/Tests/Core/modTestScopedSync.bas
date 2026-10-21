@@ -468,3 +468,58 @@ Private Sub CheckNativeCloseState(ByRef strFailed As String, strCase As String, 
     Check strFailed, IsLoaded(acForm, strForm), strCase & " leaves the affected form open"
 
 End Sub
+
+
+' Run outside the suite root, with this project loaded as a library in a disposable
+' user database. The caller seeds frmNativeCloseProbe and its source/index first,
+' then compares source/index bytes and nanosecond timestamps around this call.
+Public Function IndexedSingleObjectCloseCheck(ByVal strSource As String, _
+    ByVal blnExport As Boolean, ByVal blnNativeCancel As Boolean) As String
+    Const PROBE_FORM As String = "frmNativeCloseProbe"
+    Dim cComponent As IDbComponent
+    Dim dResult As Dictionary
+    Dim strLog As String
+    Dim blnCanceled As Boolean
+    Dim intMode As eInteractionMode
+    Dim blnForce As Boolean
+    Dim lngError As Long
+    Dim strError As String
+    On Error GoTo ErrHandler
+    If Operation.IsActive Then
+        IndexedSingleObjectCloseCheck = "Not run: an operation is already active."
+        Exit Function
+    End If
+    If StrComp(CurrentProject.FullName, CodeProject.FullName, vbTextCompare) = 0 Then
+        IndexedSingleObjectCloseCheck = "Not run: use a disposable user database."
+        Exit Function
+    End If
+    intMode = Operation.InteractionMode
+    blnForce = Operation.ForceUnattended
+    Operation.ForceUnattended = True
+    Operation.InteractionMode = eimSilent
+    If Not Operation.Begin(IIf(blnExport, eotExport, eotMerge)) Then
+        IndexedSingleObjectCloseCheck = "Not run: operation admission refused."
+        GoTo CleanUp
+    End If
+    If blnNativeCancel Then SetCloseOutcomeForTest ecoCanceled Else SetCloseOutcomeForTest ecoFailed
+    If blnExport Then
+        modExport.ExportSingleObject CurrentProject.AllForms(PROBE_FORM), , False, dResult
+        IndexedSingleObjectCloseCheck = FinishSingleObjectExport(Operation, Log.SavedLogFilePath, dResult)
+    Else
+        Set cComponent = GetComponentClass(edbForm)
+        LoadSingleObject cComponent, PROBE_FORM, strSource, False, strLog, dResult, blnCanceled
+        IndexedSingleObjectCloseCheck = FinishSingleObjectImport(Operation, strLog, Log.GetErrorJournalSince(0), dResult, blnCanceled)
+    End If
+CleanUp:
+    On Error Resume Next
+    SetCloseOutcomeForTest ecoReal
+    If Operation.IsActive Then Operation.Finish eorFailed
+    Operation.InteractionMode = intMode
+    Operation.ForceUnattended = blnForce
+    If lngError <> 0 Then IndexedSingleObjectCloseCheck = "ERROR: " & lngError & ": " & strError
+    Exit Function
+ErrHandler:
+    lngError = Err.Number
+    strError = Err.Description
+    Resume CleanUp
+End Function
