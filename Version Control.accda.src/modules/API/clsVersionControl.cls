@@ -4438,6 +4438,49 @@ Public Function DismissAddinDialog(ByVal strName As String, Optional ByVal strAc
 End Function
 
 
+' Run a VBA function for an admitted session caller. CallVBA returns the value, or a
+' JSON refusal on failure. CallVBAResult returns a tagged array, so a returned value
+' can never be mistaken for a failure.
+Public Function CallVBA(ByVal strFunction As String, ByVal strArguments As String) As Variant
+    Dim varValue As Variant, lngNumber As Long, strMessage As String
+    If TryCallVBA(strFunction, strArguments, varValue, lngNumber, strMessage) Then
+        CallVBA = varValue
+    Else
+        CallVBA = RefusalJson("api_error", strMessage, False)
+    End If
+End Function
+
+Public Function CallVBAResult(ByVal strFunction As String, ByVal strArguments As String) As Variant
+    Dim varValue As Variant, lngNumber As Long, strMessage As String
+    If TryCallVBA(strFunction, strArguments, varValue, lngNumber, strMessage) Then
+        CallVBAResult = Array("msaccess-vcs.call-vba-result/1", "returned", varValue)
+    Else
+        CallVBAResult = Array("msaccess-vcs.call-vba-result/1", "failed", lngNumber, strMessage)
+    End If
+End Function
+
+Private Function TryCallVBA(ByVal strFunction As String, ByVal strArguments As String, _
+    ByRef varValue As Variant, ByRef lngNumber As Long, ByRef strMessage As String) As Boolean
+    Dim arguments As Collection
+    If DebugMode(True) Then On Error GoTo 0 Else On Error GoTo Failed
+    Set arguments = ParseJson(strArguments)
+    Select Case arguments.Count
+        Case 0: varValue = Application.Run(strFunction)
+        Case 1: varValue = Application.Run(strFunction, arguments(1))
+        Case 2: varValue = Application.Run(strFunction, arguments(1), arguments(2))
+        Case 3: varValue = Application.Run(strFunction, arguments(1), arguments(2), arguments(3))
+        Case Else
+            strMessage = T("At most three arguments are supported.")
+            Exit Function
+    End Select
+    TryCallVBA = True
+    Exit Function
+Failed:
+    lngNumber = Err.Number
+    strMessage = Err.Description
+End Function
+
+
 '---------------------------------------------------------------------------------------
 ' Procedure : Class_Initialize
 ' Author    : Adam Waller
