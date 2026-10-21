@@ -340,6 +340,8 @@ End Function
 '           :   Reports = 2      9/16/2026  Preserve legacy-only conditional formatting (issue #779)
 '           :   Forms = 4        10/15/2026 Regenerate SVGs after BOM-free UTF-8 writer repair
 '           :   Reports = 3      10/15/2026 Regenerate SVGs after BOM-free UTF-8 writer repair
+'           :   Forms = 5        10/21/2026 Recover incomplete export migrations and SVG sidecars
+'           :   Reports = 4      10/21/2026 Recover incomplete export migrations and SVG sidecars
 '           :   Tables = 1       8/21/2026  Fixed DECIMAL(p,s) in optional .sql sidecar (issue #756)
 '---------------------------------------------------------------------------------------
 '
@@ -348,8 +350,8 @@ Public Function GetExporterRevisions() As Dictionary
     Dim d As Dictionary
     Set d = New Dictionary
     d.Add "CommandBars", 1
-    d.Add "Forms", 4
-    d.Add "Reports", 3
+    d.Add "Forms", 5
+    d.Add "Reports", 4
     d.Add "Tables", 1
     Set GetExporterRevisions = d
 

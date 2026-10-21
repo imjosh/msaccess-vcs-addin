@@ -36,6 +36,14 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
     Dim lngCount As Long
     Dim lngCurrent As Long
     Dim strTempFile As String
+    Dim dCompletedHashes As Dictionary
+    Dim lngCompletedCategories As Long
+    Dim lngCategoryErrors As Long
+    Dim lngCategoryWarnings As Long
+    Dim lngWarningsBeforePostChecks As Long
+    Dim blnCategoryOutputComplete As Boolean
+    Dim blnObjectOutputComplete As Boolean
+    Dim blnExportCompleted As Boolean
 
     ' Use inline error handling functions to trap and log errors.
     If DebugMode(True) Then On Error GoTo 0 Else On Error Resume Next
@@ -89,6 +97,7 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
 
     Set dCurrentHashes = Options.GetCategoryHashes
     Set dStoredHashes = VCSIndex.CategoryHashes
+    Set dCompletedHashes = CloneDictionary(dStoredHashes)
     Set dStaleCategories = New Dictionary
 
     ' Check global options (ExportFormatVersion, AccessVersion)
@@ -261,6 +270,9 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
                 Options.ShowDebug
         End If
         dCategory.Add "Objects", dObjects
+        dCategory.Add "FullExport", blnFullForCategory
+        dCategory.Add "SelectedCount", dObjects.Count
+        dCategory.Add "CompletedCount", 0&
         dCategories.Add cCategory.Category, dCategory
         VCSIndex.CheckExportConflicts dObjects
         ' Clear any orphaned files in this category
@@ -307,6 +319,11 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
         Set dCategory = dCategories(varCatKey)
         Set cCategory = dCategory("Class")
         Set dObjects = dCategory("Objects")
+        blnFullForCategory = dCategory("FullExport")
+        lngCategoryErrors = Log.ErrorCount
+        lngCategoryWarnings = Log.WarningCount
+        lngWarningsBeforePostChecks = Log.WarningCount
+        blnCategoryOutputComplete = True
 
         ' Only show category details when it contains objects
         lngCount = dObjects.Count
@@ -335,22 +352,37 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
                 Log.Add "  " & cDbObject.Name, Options.ShowDebug
                 Log.Progress lngCurrent, lngCount, cDbObject.Name
                 Operation.Pulse
+                blnObjectOutputComplete = True
 
                 ' If we have already exported this object while scanning for changes, use that copy.
                 strTempFile = Replace(cDbObject.SourceFile, Options.GetExportFolder, VCSIndex.GetTempExportFolder)
-                If FSO.FileExists(strTempFile) Then
+                If FSO.FileExists(strTempFile) And Not blnFullForCategory Then
                     ' Move the temp file(s) over to the source export folder.
                     cDbObject.MoveSource FSO.GetParentFolderName(strTempFile) & PathSep, _
                         FSO.GetParentFolderName(cDbObject.SourceFile) & PathSep
                     ' Update the index with the values from the alternate export
                     VCSIndex.UpdateFromAltExport cDbObject
                 Else
-                    ' Export a fresh copy
+                    ' A full/category migration must run the exporter. The alternate
+                    ' conflict copy omits derived artifacts such as layout SVGs.
+                    If blnFullForCategory And Options.ExportLayoutSvg _
+                        And (cCategory.ComponentType = edbForm Or cCategory.ComponentType = edbReport) Then
+                        ' A previous sidecar cannot prove that this migration wrote one.
+                        If FSO.FileExists(SwapExtension(cDbObject.SourceFile, "svg")) Then _
+                            DeleteFile SwapExtension(cDbObject.SourceFile, "svg")
+                    End If
                     cDbObject.Export
+                End If
+                If cCategory.ComponentType = edbForm Or cCategory.ComponentType = edbReport Then
+                    blnObjectOutputComplete = FormReportMigrationOutputComplete(cDbObject)
+                    If Not blnObjectOutputComplete Then blnCategoryOutputComplete = False
                 End If
 
                 ' A failed export must keep its failure before a pending cancel is polled.
                 CatchAny eelError, T("Error exporting {0}", var0:=cDbObject.Name), ModuleName & ".ExportSource", True, True
+                If Operation.ErrorLevel < eelError And blnObjectOutputComplete Then
+                    dCategory("CompletedCount") = CLng(dCategory("CompletedCount")) + 1
+                End If
                 If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
                 Operation.CheckCancelRequest
                 If Operation.ErrorLevel = eelCritical Then Log.Add vbNullString: GoTo CleanUp
@@ -364,6 +396,7 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
             ' Release the snapshot, removing any folder the cleanup emptied.
             EndDuplicateScanCache
 
+            lngWarningsBeforePostChecks = Log.WarningCount
             Select Case cCategory.ComponentType
                 Case edbModule
                     WarnDuplicateModuleBasenames cCategory.BaseFolder
@@ -392,6 +425,24 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
             End If
         End If
 
+        ' Conflict skips can shrink the selected set. A warning alone does not
+        ' invalidate a completed Forms/Reports migration when all its required
+        ' output is present; missing source, metadata, or SVG keeps it pending.
+        If dObjects.Count = dCategory("SelectedCount") _
+            And (dCategory("SelectedCount") = 0 Or cCategory.SingleFile _
+                Or dCategory("CompletedCount") = dCategory("SelectedCount")) _
+            And Log.ErrorCount = lngCategoryErrors _
+            And blnCategoryOutputComplete _
+            And (Log.WarningCount = lngCategoryWarnings _
+                Or cCategory.ComponentType = edbForm Or cCategory.ComponentType = edbReport) _
+            And Log.WarningCount = lngWarningsBeforePostChecks _
+            And Operation.ErrorLevel < eelError And Not Operation.DecisionBlocked Then
+            lngCompletedCategories = lngCompletedCategories + 1
+            If dCurrentHashes.Exists(CStr(varCatKey)) Then
+                dCompletedHashes(CStr(varCatKey)) = dCurrentHashes(CStr(varCatKey))
+            End If
+        End If
+
     Next varCatKey
 
     ' Ensure that we have created the .gitignore and .gitattributes files in Git environments.
@@ -412,11 +463,28 @@ Public Sub ExportSource(blnFullExport As Boolean, Optional intFilter As eContain
     ' Log any unused .env connection entries (full export only)
     If blnFullExport Then LogUnusedEnvEntries
 
+    CatchAny eelError, T("Error completing export"), ModuleName & ".ExportSource", True, True
+    blnExportCompleted = (Operation.ErrorLevel < eelError _
+        And Not Operation.DecisionBlocked And Not Operation.CancelRequested _
+        And Not Operation.NativeCloseCanceled _
+        And lngCompletedCategories = colCategories.Count)
+
     ' Show final output and save log
     Log.Spacer
     Log.Add T("Done. ({0} seconds)", var0:=Round(Perf.TotalTime, 2)), , False, "green", True
 
 CleanUp:
+
+    ' Keep selected/completed counts in the saved log even after mid-category
+    ' cancellation, so a retry can be checked against actual prior progress.
+    If Not dCategories Is Nothing Then
+        For Each varCatKey In dCategories.Keys
+            Set dCategory = dCategories(varCatKey)
+            Log.Add "Migration progress " & CStr(varCatKey) & ": selected=" & _
+                CStr(dCategory("SelectedCount")) & ", completed=" & _
+                CStr(dCategory("CompletedCount")), False
+        Next varCatKey
+    End If
 
     ' Run any cleanup routines
     EndDuplicateScanCache
@@ -441,14 +509,21 @@ CleanUp:
     ' Restore original fast save option, and save options with project
     Options.SaveOptionsForProject
 
-    ' Save index file (skip if the user canceled a conflict dialog, so the
-    ' on-disk index state is unchanged and the same conflicts will reappear
-    ' on the next export run).
+    ' Persist completed components and category migrations after an abort,
+    ' but claim whole-export completion only after every selected category.
+    ' A canceled conflict dialog preserves the on-disk index unchanged.
     If Not VCSIndex.Conflicts.UserCanceled Then
         With VCSIndex
-            .ExportDate = Now
-            If blnFullExport Then .FullExportDate = Now
-            Set .CategoryHashes = dCurrentHashes
+            If blnExportCompleted Then
+                .ExportDate = Now
+                If intFilter = ecfAllObjects Then
+                    If blnFullExport Then .FullExportDate = Now
+                    If dCurrentHashes.Exists("_Global") Then
+                        dCompletedHashes("_Global") = dCurrentHashes("_Global")
+                    End If
+                End If
+            End If
+            Set .CategoryHashes = dCompletedHashes
             .Save
         End With
     End If
@@ -456,6 +531,27 @@ CleanUp:
     If InteractionIsNonInteractive() Then Operation.SetTransferOutcome VCSIndex.TransferOutcome
 
 End Sub
+
+
+' A Forms/Reports category can emit a nonfatal warning after complete output.
+' Check the on-disk migration artifacts instead of treating every warning as
+' failure. The SVG is required only when the option is enabled.
+Private Function FormReportMigrationOutputComplete(cItem As IDbComponent) As Boolean
+    Dim strSource As String
+    Dim strMetadata As String
+    Dim strSvg As String
+    strSource = cItem.SourceFile
+    If Len(strSource) = 0 Then Exit Function
+    strMetadata = SwapExtension(strSource, "json")
+    If Not FSO.FileExists(strSource) Or Not FSO.FileExists(strMetadata) Then Exit Function
+    If FSO.GetFile(strSource).Size = 0 Or FSO.GetFile(strMetadata).Size = 0 Then Exit Function
+    If Options.ExportLayoutSvg Then
+        strSvg = SwapExtension(strSource, "svg")
+        If Not FSO.FileExists(strSvg) Then Exit Function
+        If FSO.GetFile(strSvg).Size = 0 Then Exit Function
+    End If
+    FormReportMigrationOutputComplete = True
+End Function
 
 
 '---------------------------------------------------------------------------------------

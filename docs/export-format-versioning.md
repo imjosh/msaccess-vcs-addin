@@ -13,8 +13,8 @@ all prior export formats.
 
 ## Where the logic lives
 
-- Export: `modImportExport.ExportSource()`
-- Import: `modImportExport.Build()`
+- Export: `modExport.ExportSource()`
+- Import: `modBuild.Build()`
 - Single-object operations: individual `clsDb*.Export()` and `clsDb*.Import()`
 
 ## Choosing a mechanism
@@ -57,7 +57,13 @@ When a bug fix changes exported output in a way the change index cannot detect
 `GetExporterRevisions()` in `modConstants.bas` instead of adding an export format
 version gate. The revision is folded into that category's `CategoryHashes` entry;
 on the user's next export, the existing stale-category path re-exports that
-category once and persists the new hash.
+category once. The export persists the new hash only after the selected work
+for that category completes. A blocked conflict, skipped object, cancellation,
+error, or missing required form/report artifact leaves the category pending for
+a later public fast export. A warning after complete form/report output does not
+keep that category pending when its source, metadata, and enabled SVG sidecar
+are present. The global hash and whole-export dates advance only when their
+scopes complete; a filtered export does not claim whole-project completion.
 
 1. Add or increment the category entry in `GetExporterRevisions()` (key =
    `IDbComponent.Category` string, e.g. `"CommandBars"`).
