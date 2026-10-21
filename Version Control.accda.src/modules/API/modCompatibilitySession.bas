@@ -204,6 +204,41 @@ Public Function SessionFailure(ByVal reason As String, Optional ByVal version As
     SessionFailure = ConvertToJson(result)
 End Function
 
+' A51: a call without an envelope is a legacy call. It gets only the method and
+' argument surface of upstream 5.1.0 (9dfb6a69), runs with edpAsk and never gets a
+' session. Anything else, including session-owned state such as interaction mode
+' and policy, is refused before dispatch and changes nothing.
+Public Function LegacyCallRefusal(ByVal method As String, ByVal argumentCount As Long, _
+    ByVal asynchronous As Boolean) As String
+    Dim limit As Long
+    Select Case LCase$(method)
+        Case "build", "buildheadless", "mergeheadless", "runvba", "getoption", "registersession", _
+            "endsession", "getlogcontent", "compilevba", "comparesqlbuilderartifacts", "testrunnerdiag", _
+            "exporttestresultsjunit", "exporttestresultshtml"
+            limit = 1
+        Case "rebuildaddin", "exportobject", "importobject", "exportbytype", "importbytype", "executesql", _
+            "setoption", "runroundtriptests", "inspectquerysqlstorage", "handletestassertion"
+            limit = 2
+        Case "validatequerysqlbuilder", "runtests", "runtestsheadless"
+            limit = 3
+        Case "show", "showoptions", "export", "fullexport", "exportvba", "exportselected", "mergebuild", _
+            "buildas", "mergeallsource", "loadselected", "options", "openrepository", "opensourcefolder", _
+            "openexportlog", "openbuildlog", "reloadribbon", "repaircolors", "splitfiles", _
+            "localizelibraryreferences", "activatehook", "standardizelettercasing", "resetvbaprojectstate", _
+            "version", "getvcsversion", "getexportfolder", "isdatabaseopen", "getprojectname", _
+            "isvbacompiled", "runfilteredtests", "opentestrunner", "installtestassertmodule", _
+            "migratedebugassert", "gotolinkadvancedtools", "gotolinkhome", "gotolinkdocumentation", _
+            "gotolinksupport", "gotolinkdownload"
+            limit = 0
+        Case Else
+            LegacyCallRefusal = SessionFailure("envelope_required", , "compatibility_session_required")
+            Exit Function
+    End Select
+    ' 5.1.0 APIAsync passes at most two method arguments.
+    If asynchronous And limit > 2 Then limit = 2
+    If argumentCount > limit Then LegacyCallRefusal = SessionFailure("envelope_required", , "compatibility_session_required")
+End Function
+
 Public Function CompatibilitySessionExpired(ByVal touched As Date, ByVal checkedAt As Date) As Boolean
     ' No session owns policy state (request-policy/1), so every idle session expires.
     CompatibilitySessionExpired = (checkedAt >= DateAdd("n", SESSION_IDLE_MINUTES, touched))
