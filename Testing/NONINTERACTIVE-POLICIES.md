@@ -29,7 +29,7 @@ an older pair does not establish compatibility or conflict protection here.
 
 Before the long suite, demonstrate a successful public request-policy call through
 the intended pair. Keep its arguments, result, source identities, and binary hashes.
-For synchronous MCP dispatch, exercise `APIMCP` with the MCP-supplied public
+For synchronous MCP dispatch, exercise `APIExecuteMCP` with the MCP-supplied public
 operation ID. For asynchronous dispatch, exercise `APIAsync`, including typed
 arguments such as an array of object types, a Boolean, and a trailing policy.
 Require the policy, initiating source, and public ID to survive forwarding.
@@ -66,7 +66,7 @@ python tools/verify-caller-error-translation.py --binary '<closed source-built .
 The request-policy driver checks retired calls, request isolation, targeted
 cancellation, queue admission and execution refusal, stale continuations, public-ID
 reuse, disconnect, expiry, and failed continuation handoffs. It also exercises
-synchronous `APIMCP`, typed `APIAsync` forwarding, and statement calls that ignore
+synchronous `APIExecuteMCP`, typed `APIExecuteAsync` forwarding, and statement calls that ignore
 results. Inspect its receipts rather than treating this list as native evidence.
 
 The workflow driver tests every policy through external API, asynchronous API,

@@ -195,9 +195,9 @@ These calls have no checkpoint that MCP reaches, and they run to the end.
 - `MergeAllSource` and `LoadSelected`.
 - `RebuildAddIn`.
 - `BuildHeadless` and `MergeHeadless`. They run the build loop, but a call
-  through `API` or `APIMCP` registers no MCP callback, so the loop never polls.
+  through `API` or `APIExecuteMCP` registers no MCP callback, so the loop never polls.
   Their result has no cancelled form.
-- Every other synchronous call through `API` or `APIMCP`, for the same reason.
+- Every other synchronous call through `API` or `APIExecuteMCP`, for the same reason.
 
 ### Limits
 

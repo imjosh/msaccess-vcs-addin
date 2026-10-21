@@ -69,7 +69,7 @@ reference through `SharedDb` in `modObjects` for the same reason.
 
 ## MCP/API calls never break into the debugger
 
-All MCP and external API entry points (`modAPI.API`, `modAPI.APIAsync`, `modAPI.APIMCP`,
+All MCP and external API entry points (`modAPI.API`, `modAPI.APIAsync`, `modCompatibilitySession.APIExecuteMCP`,
 and the async timer handler in `modTimer`) open an in-memory **error-break suppression**
 scope via `SuppressErrorBreaks` in `modErrorHandling`. While that scope is active:
 
