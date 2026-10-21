@@ -491,9 +491,12 @@ End Property
 Private Sub PurgeStrings(strObjectPrefix As String, dReferences As Dictionary)
 
     Dim dbs As DAO.Database
+    Dim strCompatibilityData As String
     Dim rst As DAO.Recordset
     Dim strSql As String
 
+    strCompatibilityData = BeginCompatibilityDataWrite()
+    If Len(strCompatibilityData) = 0 Then Exit Sub
     Set dbs = CodeDb
     strSql = "select * from tblStrings where Reference like """ & strObjectPrefix & "*"""
     Set rst = dbs.OpenRecordset(strSql, dbOpenDynaset)
@@ -512,6 +515,10 @@ Private Sub PurgeStrings(strObjectPrefix As String, dReferences As Dictionary)
         Loop
         .Close
     End With
+
+    Set rst = Nothing
+    Set dbs = Nothing
+    EndCompatibilityDataWrite strCompatibilityData
 
 End Sub
 
@@ -543,6 +550,7 @@ Private Function SaveString(strText As String, strReference As String, _
     strContext As String, strComments As String) As Long
 
     Dim dbs As Database
+    Dim strCompatibilityData As String
     Dim rst As Recordset
 
     ' T() is called from inside other procedures that may already have a pending
@@ -553,6 +561,8 @@ Private Function SaveString(strText As String, strReference As String, _
     SuppressErrorBreaks
     On Error Resume Next
 
+    strCompatibilityData = BeginCompatibilityDataWrite()
+    If Len(strCompatibilityData) = 0 Then GoTo CleanUp
     Set dbs = CodeDb
     Set rst = dbs.OpenRecordset("tblStrings")
     If CatchAny(eelNoError, "Unable to open string table", _
@@ -578,6 +588,9 @@ Private Function SaveString(strText As String, strReference As String, _
     End If
 
 CleanUp:
+    Set rst = Nothing
+    Set dbs = Nothing
+    EndCompatibilityDataWrite strCompatibilityData
     RestoreErrorBreaks
 
 End Function
@@ -891,6 +904,7 @@ End Sub
 Private Sub SaveStringEntriesToDatabase(colEntries As Collection)
 
     Dim dbs As Database
+    Dim strCompatibilityData As String
     Dim rst As Recordset
     Dim lngCnt As Long
     Dim dItem As Dictionary
@@ -899,6 +913,8 @@ Private Sub SaveStringEntriesToDatabase(colEntries As Collection)
     ' This might be the add-in file during development, such as when loading
     ' language strings after a fresh build, or it might be at runtime when
     ' syncronizing translation strings. Either way, we want to run in CodeDB.
+    strCompatibilityData = BeginCompatibilityDataWrite()
+    If Len(strCompatibilityData) = 0 Then Exit Sub
     Set dbs = CodeDb
 
     ' Remove all translations, since we are resetting IDs
@@ -932,6 +948,10 @@ Private Sub SaveStringEntriesToDatabase(colEntries As Collection)
         .Close
     End With
 
+    Set rst = Nothing
+    Set dbs = Nothing
+    EndCompatibilityDataWrite strCompatibilityData
+
 End Sub
 
 
@@ -945,6 +965,7 @@ End Sub
 Private Sub SaveTranslationEntriesToDatabase(colEntries As Collection, strLanguage As String)
 
     Dim dbs As Database
+    Dim strCompatibilityData As String
     Dim rst As Recordset
     Dim lngCnt As Long
     Dim dItem As Dictionary
@@ -961,6 +982,8 @@ Private Sub SaveTranslationEntriesToDatabase(colEntries As Collection, strLangua
     End If
 
     ' Reload language
+    strCompatibilityData = BeginCompatibilityDataWrite()
+    If Len(strCompatibilityData) = 0 Then Exit Sub
     Set dbs = CodeDb
     dbs.Execute "delete from tblTranslation where Language='" & strLanguage & "'", dbFailOnError
     Set rst = dbs.OpenRecordset("tblTranslation")
@@ -998,6 +1021,10 @@ Private Sub SaveTranslationEntriesToDatabase(colEntries As Collection, strLangua
         .Close
     End With
 
+    Set rst = Nothing
+    Set dbs = Nothing
+    EndCompatibilityDataWrite strCompatibilityData
+
 End Sub
 
 
@@ -1011,8 +1038,11 @@ End Sub
 Private Sub AddLanguage(strLanguage As String)
 
     Dim dbs As Database
+    Dim strCompatibilityData As String
     Dim rst As Recordset
 
+    strCompatibilityData = BeginCompatibilityDataWrite()
+    If Len(strCompatibilityData) = 0 Then Exit Sub
     Set dbs = CodeDb
 
     ' Clear any existing record
@@ -1027,6 +1057,10 @@ Private Sub AddLanguage(strLanguage As String)
         .Update
         .Close
     End With
+
+    Set rst = Nothing
+    Set dbs = Nothing
+    EndCompatibilityDataWrite strCompatibilityData
 
 End Sub
 
